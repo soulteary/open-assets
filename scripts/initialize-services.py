@@ -1,3 +1,9 @@
+"""Initialize the fixed content/images and storage identities on a fresh stack.
+
+This script writes users and named policies; it is not a read-only check or an
+idempotent substitute for repository onboarding. Use repo ensure after setup.
+"""
+
 import shutil
 import pathlib
 import json

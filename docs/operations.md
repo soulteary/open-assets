@@ -1,18 +1,76 @@
 # 运行维护
 
+以下命令在服务器管理员 shell、`/app/open-assets` 目录执行。使用普通运维账号时，为 Docker 命令加 sudo。
+
+## 查看状态和失败
+
 ```sh
-docker compose exec publisher python -m open_assets status
-docker compose exec publisher python -m open_assets publish main-images COMMIT_SHA
-docker compose exec publisher python -m open_assets retry JOB_ID
-docker compose exec publisher python -m open_assets rollback-images main-images COMMIT_SHA
+docker compose ps
+docker compose exec -T publisher python -m open_assets status
+docker compose logs --tail=100 publisher webhook
 ```
 
-publish 创建显式人工任务；自动任务只有目标等于当前 main 才生效。retry 只处理 failed 任务。Worker 重启会恢复 running/images_prepared。全局文件锁保证单写入，首次版本只部署一个 Worker。任务失败仅记录错误类型以避免秘密泄漏，诊断需在私有环境执行。
+status 依次输出任务 ID、仓库 key、SHA 和状态。任务 JSON 位于 `/data/asset-stack/publisher/jobs/`，失败时只保存异常类型，不保存完整请求或秘密。日志为空不代表没有任务，也不代表发布成功。
 
-current 通过同文件系统内软链接替换。回滚校验保存清单和本地字节，不删除附件。回滚不会阻止后续合法 Push 更新；维护期间先停止自动发布。不要手工修改版本目录。
+failed 任务需人工重试：
 
-备份数据、IAM/config、Gitea 数据库和仓库、发布清单及任务、私有凭据与 CA、Traefik ACME。数据库与对象状态需一致性快照，备份存到独立设备并演练恢复。不得将生产归档纳入开源仓库。
+```sh
+docker compose exec -T publisher python -m open_assets retry JOB_ID
+```
 
-无自动历史清理。监控磁盘余量、失败任务、队列、证书有效期和备份年龄。部署前确保容量足够保存 staging、对象、图片和 Git 历史。
+命令只接受完整的失败任务 ID。重复投递相同 Push 不会重置失败任务。running 或 images_prepared 遗留任务会在 Worker 重启后重新处理；自动任务若已不是分支头，则变为 superseded。
 
-`scripts/snapshot.sh` 提供单机一致性快照：暂停应用写入组件，归档应用、数据和指定 Traefik/ACME 目录，校验后恢复。需要计划维护窗口。Traefik 本身继续提供服务；ACME 状态若有并发写入，应单独安排其一致性备份。快照仍在同机时不能防止整机或磁盘损坏，必须另行配置加密异机复制。
+## 手工发布与图片回滚
+
+```sh
+docker compose exec -T publisher python -m open_assets publish main-images FULL_COMMIT_SHA
+docker compose exec -T publisher python -m open_assets rollback-images main-images FULL_COMMIT_SHA
+```
+
+publish 创建人工任务，提交必须在配置分支的历史中，但可以不是最新提交。发布历史 SHA 会重新选择当前图片版本，不应当作无副作用的补查命令。
+
+rollback-images 使用已有本地清单和版本文件，校验后切换 current，并更新当前发布记录；它不创建新的发布任务，不改 Git 分支，不删除或回退 OSS 附件。目标本地版本或清单缺失时不能直接回滚。
+
+计划维护时可停止接收器与 Worker，避免新任务紧接着覆盖回滚：
+
+```sh
+docker compose stop webhook publisher
+# root shell 通过临时运行的同一应用镜像执行回滚：
+docker compose run --rm --no-deps publisher rollback-images main-images FULL_COMMIT_SHA
+docker compose up -d --no-build webhook publisher
+```
+
+停止接收器期间暂停 Push；窗口内失败的 Hook 需重投或按 SHA 补发。重新启动后，已有待处理任务仍会执行，必要时先核对队列。不要直接编辑任务或 current 来跳过这些检查。
+
+## 备份
+
+至少包含：OtterIO 对象及 IAM/config、Gitea 数据库与仓库、发布任务和清单、私有凭据及 CA、Traefik 配置和 ACME 状态。缺少解密或访问凭据的数据副本可能无法恢复。
+
+`scripts/backup.sh` 只打包应用 private、.env 和数据目录，不停止服务，也不包含 Traefik；它不能单独视为在线数据库的一致性备份。
+
+`scripts/snapshot.sh` 停止 webhook、publisher、OC、Gitea 和 OtterIO 后归档应用、数据及指定 Traefik/ACME 目录，再尝试启动固定的服务列表。它不记录这些服务原先是否停止，执行前应确认该行为符合维护计划：
+
+```sh
+TRAEFIK_CONFIG_ROOT=/path/to/traefik-project \
+ACME_ROOT=/path/to/acme \
+BACKUP_ROOT=/data/private-backups/open-assets \
+sh scripts/snapshot.sh
+```
+
+这会造成短暂的 Git、存储和管理服务中断，已有本地图片仍由 Nginx 提供。Traefik 不会被脚本停止；ACME 若可能并发更新，需要另行安排一致性保存，不能把归档校验等同于整个系统的原子快照。
+
+归档读取和 SHA-256 校验只证明文件可读、传输未变。恢复演练还要检查数据库、对象、IAM、证书及 SSH 主机密钥，确认服务能以正确权限读写。备份应加密复制到独立设备；同机目录不能覆盖整机或磁盘故障。项目没有默认安装定时备份和异机复制任务。
+
+## 更新代码或镜像
+
+先记录现有提交和镜像摘要，备份私有配置并查看待更新差异。不要通过重复 prepare-private.py 或 initialize-services.py 更新已有部署，也不要用 docker compose down -v 作为常规更新步骤。
+
+应用源码改动后构建 publisher 镜像，再用同一个镜像重建 publisher/webhook；只修改宿主机管理 CLI 时无需重建运行容器。使用已审阅的固定版本，分别验证发布、读取及管理登录。
+
+OtterIO/OC 升级需要核对配对版本、数据兼容范围和恢复步骤。镜像能启动不等于数据可安全降级。更换服务前保留旧程序和一致性数据副本。
+
+## 容量与证书
+
+检查磁盘空闲、Git 缓存、对象历史、本地完整版本、图片副本和临时目录。发布前的空间检查按 max_bytes 上限预留；临时失败数据不会自动回收。手动清理前核对 current、回滚目标和任务引用，先保留可恢复副本。
+
+公网证书续期由原 Traefik 管理，内部证书需要另行维护。日志、备份、接入记录和已渲染配置均按私有资料保存，不上传公开仓库或工单。

@@ -1,4 +1,9 @@
-"""Host-only privileged administration. Never mount Docker into application containers."""
+"""Reconcile one repository using host-only administrative credentials.
+
+Gitea, IAM and local files have separate commit boundaries. Keep recovery copies
+and converge on rerun rather than deleting remote resources on failure. The
+application containers do not receive this module's host privileges.
+"""
 
 import argparse
 import base64
@@ -35,6 +40,7 @@ def validate_identity(name, key, mount, branch):
 
 
 def desired_config(config, name, key, mount, branch, repository_id):
+    """Append a binding or verify its identity; preserve existing quotas and intent."""
     result = copy.deepcopy(config)
     existing = next((r for r in result["repositories"] if r["key"] == key), None)
     desired = dict(
@@ -82,6 +88,7 @@ def desired_config(config, name, key, mount, branch, repository_id):
 
 
 def extend_policy(policy, bucket, key):
+    """Extend the explicit publisher object scope without rebuilding its policy."""
     result = copy.deepcopy(policy)
     statements = [
         s
@@ -228,6 +235,12 @@ class Manager:
                         )
 
     def ensure(self, name, key, mount, branch):
+        """Reconcile remote resources, then apply local config and URL mappings.
+
+        ready means onboarding completed, not that content has been published.
+        Hooks may exist before the local binding is ready; callers must wait
+        before pushing and redeliver events rejected during maintenance.
+        """
         self.stage = "preflight"
         validate_identity(name, key, mount, branch)
         config_path = self.private / "repositories.yaml"
@@ -250,6 +263,8 @@ class Manager:
                 core.CONFIG = previous_config
         self.check_root_prefix(config, key, mount)
         policy_path = self.private / "oc-cli/publisher.json"
+        # The server policy is authoritative; a stale local copy may omit
+        # permissions added since the previous onboarding.
         live_policy = json.loads(
             self.oc("admin", "policy", "info", "store", "assets-publish")
         )
@@ -324,6 +339,9 @@ class Manager:
         self.apply_policy()
         marker = backup / "result.json"
         previous_result = json.loads(marker.read_text()) if marker.exists() else {}
+        # Editors may replace a bind-mounted file even if its content is equal.
+        # The receipt lets a routine repeat avoid restarting services while an
+        # interrupted/replaced configuration still forces a fresh mount.
         recreate = (
             changed or previous_result.get("config_inode") != config_path.stat().st_ino
         )

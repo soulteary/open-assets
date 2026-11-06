@@ -1,43 +1,172 @@
-# 部署
+# 部署说明
 
-## 私有状态
+本配方针对单台 Linux 服务器，复用一套已经工作的 Traefik。源码、私有配置和数据分别放在 `/app/open-assets`、`/app/open-assets/private` 和 `/data/asset-stack`。节点名固定为 toh1，Compose 项目名固定为 asset-stack。
 
-使用独立路径保存私有运行配置和数据。首次迁移前备份旧 Compose、DNS 凭据和 ACME，校验归档且限制为 0700/0600。不要提交备份、生产日志或已渲染配置。
+准备迁移现有服务时，先备份原 Compose、数据、DNS 凭据和 ACME 状态，并确认恢复方法。下面的初始化步骤只用于空的新部署，不用于覆盖已有运行目录。
 
-`private/repositories.yaml` 来自仓库示例。`private/publisher/` 保存 deploy_key、known_hosts、publisher_access、publisher_secret、ca.crt；`private/storage/` 保存 root_user、root_password。另需 webhook_secret、stargate.env 和 TLS 目录。UID：Publisher/Nginx 20010、Gitea 20001、OtterIO 20002。文件权限必须满足对应进程且不向其他用户开放秘密。
+## 1. 检查环境
 
-内部 CA 分别签发 storage.internal 和 Console 实际主机名证书。OtterIO /tls 使用 public.crt、private.key；OC 使用 console.crt、console.key、ca.crt。不得关闭证书验证。证书续期由运维负责，私有证书到期前重新签发并重启对应组件。
+需要 Docker Engine、Docker Compose 插件、Git、Python 3、PyYAML、bcrypt、OpenSSL 和 OpenSSH 客户端。应用容器使用的 Python 依赖由 Dockerfile 安装，宿主机脚本另外使用系统 Python。
 
-## 镜像与入口
+Ubuntu 可安装宿主机依赖：
 
-OtterIO/OC 示例使用正式发布 manifest 摘要。其他组件首次 pull 后记录并固定实际 RepoDigest；生产不跟随 latest。保留已有 Traefik ACME resolver、账户和 DNS secret，只接入新网络与动态路由。
+```sh
+sudo apt update
+sudo apt install git python3 python3-yaml python3-bcrypt openssl openssh-client
+sudo docker version
+sudo docker compose version
+python3 -c 'import yaml, bcrypt'
+```
 
-Traefik 管理路由必须使用 api@internal 并完整保护 /api 与 /dashboard；不得启用 api.insecure。OC 通过 HTTPS 后端连接，配置 CA 和 serverName。公开对象仅匹配 /attachments/repositories/ 且仅 GET/HEAD。Nginx 只读挂载图片父目录。
+使用数据盘时先完成 /data 挂载；只有系统盘时，先创建专用 /data 目录。初始化脚本创建子目录，但不挂载磁盘。随后查看磁盘、内存和现有网络，确认 172.29.19.0/24 没有冲突：
 
-Stargate 配置 AUTH_HOST、bcrypt PASSWORDS、COOKIE_SECURE=true、精确 CALLBACK_ALLOWED_HOSTS、至少 32 字符 SESSION_EXCHANGE_SECRET、Traefik 固定地址 TRUSTED_PROXIES。不使用父域共享 Cookie。登录入口不要套 ForwardAuth。单实例重启需重新登录。
+```sh
+df -h /data
+free -h
+ip route
+sudo docker network ls
+```
 
-OC native 登录使用启用的独立 IAM 用户，不使用 root 或 service-account。外层 Stargate 不替代 OC 权限。必须验证代理下的登录、Cookie、CSRF、上传、下载及退出登录。
+该网段用于 Traefik 与 Stargate；两者地址在 Compose、路由生成脚本和 Stargate 可信代理配置中相互对应。若有冲突，需一起修改并重新验证，不能只改一处。
 
-## 初始化
+只有 Traefik 接收公网 80/443。Gitea SSH 默认发布 2222，运维 SSH 使用原有端口和来源限制。云安全组与主机防火墙都需按实际用途配置；应用后端端口不直接向公网开放。
 
-先启动 OtterIO 和 Gitea，创建 attachments 桶、仅允许 GetObject 的匿名前缀策略和 Publisher 专用权限。用 OC 管理命令创建 IAM 用户。创建 Gitea 管理员及私有内容仓库，关闭注册，绑定只读 Deploy Key，设置 main 分支保护和签名 Push Hook。填回实际 repository_id 后再启动 Worker。
+## 2. 放置源码并准备私有配置
 
-最后验证证书、公开读取、管理拒绝匿名、SSH Push、签名事件、对象哈希和图片切换。部署时用固定源码版本；不在公共 CI 保存生产 SSH 或云凭据。
+在尚未存在 `/app/open-assets` 的服务器上执行：
 
-## 初始化配方
+```sh
+sudo git clone https://github.com/soulteary/open-assets.git /app/open-assets
+sudo -i
+cd /app/open-assets
+git rev-parse HEAD
+```
 
-`PUBLIC_BASE=lab.dev sudo -E python3 scripts/prepare-private.py` 用于全新部署；它依赖服务器 Python 的 PyYAML/bcrypt，以及 openssl/ssh-keygen/docker。实际 base 只在私有环境传入。该配方目前针对单节点 toh1 和固定 /app/open-assets、/data/asset-stack，执行前审阅路径。已有配置不要重复执行 prepare：它会重写运行配置和重新生成 bcrypt 表达，不是现有部署的配置合并工具。
+后续示例均在这个管理员 shell 中执行。正式部署应记录所用提交；升级时先查看差异，不在运行目录直接覆盖私有文件。
 
-准备后构建镜像，先启动 otterio/gitea/stargate/oc，再执行 `sudo python3 scripts/initialize-services.py` 初始化固定 content/images 仓库和权限。它会使用保存在 private/ 的已有密码设置两个 IAM 用户；已有业务部署不应把该命令当作无副作用的巡检。
+准备自己的公共 DNS 基域，然后生成私有配置：
 
-使用 `scripts/configure-edge.py --domains PRIVATE_DOMAINS_JSON --ca PRIVATE_CA --output DYNAMIC_DIR/open-assets.yaml` 生成路由。输出必须是 .yaml/.yml，Traefik 不会将 .json 后缀作为动态配置加载。脚本假定现有 entrypoint=websecure、resolver=le；其他环境修改后再应用。
+```sh
+PUBLIC_BASE=lab.dev python3 scripts/prepare-private.py
+```
 
-现有 Traefik 需加入 open-assets-edge 和 open-assets-auth，后者固定地址 172.29.19.2。将这些网络写入其 Compose 声明以便重建时保留。保持原 ACME/DNS 挂载。确认 Stargate 健康后启用受保护的 api@internal，不启用 api.insecure。
+这里的 lab.dev 必须替换为自己控制的域名。脚本生成六个主机名并保存到 `private/domains.json`：
 
-三个管理域名的精确 `/_session_exchange` 路由直接交给 Stargate，不加 ForwardAuth。该接口验证一次性票据；其他管理路径全部受保护。缺少该路由会导致主机级 Cookie 登录循环。
+```text
+oss-toh1.<base>
+img-toh1.<base>
+storage-toh1.console.<base>
+traefik-toh1.console.<base>
+auth-toh1.console.<base>
+git-toh1.console.<base>
+```
 
-## 浏览器认证导航落地页
+该脚本会生成密码、Publisher SSH 密钥、内部 CA 和证书，写入 .env、Stargate 配置及初始仓库模板。已有秘密文件通常会被复用，但配置文件会重写，因此不能把它当作幂等的配置更新工具。
 
-将 Stargate 的 `SESSION_EXCHANGE_REDIRECT_PATH` 设为 `/__auth_return`。三个管理域名的该精确路径由独立的 Nginx 内部监听 8081 提供，并保留 `console-auth`。页面只包含固定同源 `/` 导航，不接收 callback/next 等跳转目标，响应 no-store、no-referrer 和严格 CSP。公开图片仍由 8080 提供，8081 不发布宿主机端口。
+创建指向服务器的 DNS 记录。脚本不调用 DNS 服务商 API，也不申请公网证书。公网证书由现有 Traefik 的 resolver 处理；它使用的 DNS 凭据和 ACME 文件仍由原部署管理，不复制到开源仓库。
 
-原因：浏览器会把跨站认证重定向链的 Fetch Metadata 延续到最终 OC 请求，触发 OC 的来源拒绝。一个成功加载的本地 HTML 文档结束该链，再发起同源导航。此方案不改 OC 程序，不删除或伪造 Origin/Sec-Fetch-*，不关闭 CSRF。不要用全局删除请求头替代此落地页。
+检查私有 `.env` 中的域名和镜像引用。示例镜像固定了版本和摘要，不在此步骤改用浮动 latest。检查 UID 是否适合当前数据目录：Gitea 20001、OtterIO 20002、OC 20004、Publisher/Nginx 20010。
+
+## 3. 构建并初始化后端
+
+```sh
+docker compose config --quiet
+docker compose pull otterio oc stargate gitea nginx
+docker compose build publisher
+docker compose up -d --no-build otterio gitea stargate oc
+docker compose ps
+docker compose logs --tail=50 otterio gitea oc
+```
+
+启动不等于初始化完成。等待 Gitea 能处理本机 HTTP 请求、OtterIO 完成 IAM 初始化后再继续：
+
+```sh
+curl --fail http://127.0.0.1:13000/api/healthz
+curl --fail http://127.0.0.1:18080/healthz
+python3 scripts/initialize-services.py
+```
+
+initialize-services.py 创建 content 管理账号、私有 content/images 仓库、只读 Deploy Key 和 Push Hook，记录实际仓库 ID，并初始化 attachments 桶、匿名读取策略和发布/OC 用户。它也从实际 Gitea 数据目录读取 SSH 公钥，写入 Publisher 的 known_hosts。
+
+这是固定配方的首次初始化脚本。它会设置 IAM 用户和替换指定策略，不能在已有业务部署中作为巡检命令重复执行。后续新增仓库用 repo ensure。
+
+生成图片服务配置，再启动发布链路：
+
+```sh
+docker compose run --rm --no-deps \
+  -v "$PWD/private/generated:/generated" publisher render /generated
+docker compose up -d --no-build nginx webhook publisher
+docker compose exec -T nginx nginx -c /etc/nginx/open-assets.conf -t
+```
+
+首次发布前 images current 不存在，图片请求返回 404 是预期行为。不要放一个虚构的成功页面来掩盖未发布状态。
+
+## 4. 将现有 Traefik 接入网络
+
+在 Traefik 所属 Compose 项目中声明两个外部网络，并让 Traefik 加入。保留它原来需要的网络和挂载：
+
+```yaml
+services:
+  traefik:
+    networks:
+      open_assets_edge: {}
+      open_assets_auth:
+        ipv4_address: 172.29.19.2
+
+networks:
+  open_assets_edge:
+    external: true
+    name: open-assets-edge
+  open_assets_auth:
+    external: true
+    name: open-assets-auth
+```
+
+按原 Traefik 项目的部署方式应用变更。不要在 Open Assets 目录启动第二个争用 80/443 的 Traefik。临时 docker network connect 可以用于排查，但正式配置要写回 Compose，避免重建后丢失。
+
+确认原 Traefik 满足以下条件：
+
+- HTTPS entrypoint 名为 websecure，ACME resolver 名为 le；其他名称需先调整 configure-edge.py。
+- file provider 监视一个挂载的动态配置目录，容器能读该目录。
+- 已启用 Dashboard/API，未启用 api.insecure；公网管理请求只通过后面的认证路由访问。
+- DNS provider 凭据、ACME 账户和状态文件继续使用原路径。不要清空状态，也不要让两个实例并发写同一文件。
+
+## 5. 生成路由并核对 HTTPS
+
+在 Open Assets 管理员 shell 中设置现有动态目录的宿主机路径：
+
+```sh
+export TRAEFIK_DYNAMIC_DIR=/path/to/existing/traefik/dynamic
+python3 scripts/configure-edge.py \
+  --domains private/domains.json \
+  --ca private/tls/ca.crt \
+  --output "$TRAEFIK_DYNAMIC_DIR/open-assets.yaml"
+```
+
+替换该路径后再执行。脚本输出 JSON 语法的 YAML 文件，扩展名必须为 .yaml 或 .yml；Traefik 不会按该配方加载 .json 后缀的动态文件。生成文件可能与现有 router/service 名称冲突，应用前检查并处理原配置。
+
+公开图片指向 Nginx 8080，公开对象只匹配 `/attachments/repositories/` 的 GET/HEAD。三个管理入口使用 Stargate ForwardAuth，Gitea、OC 继续保留自身身份验证。
+
+Traefik 到 OC 和 OtterIO 使用内部 HTTPS，校验私有 CA 和主机名。Stargate 会话交换使用精确的 `/_session_exchange` 路由；认证后的 `/__auth_return` 返回固定同源导航文档，避免 OC 拒绝跨站认证重定向链。这两条路由不能改成不受主机名约束的全局规则，不能用删除 Origin 或 Sec-Fetch-* 的方式替代。
+
+从管理电脑访问 private/domains.json 中的实际地址，确认浏览器信任证书；不要跳过浏览器证书警告。登录方法见 [使用指南](usage.md#1-查看地址和登录凭据)。
+
+## 6. 首次发布及验收
+
+按 [使用指南](usage.md#2-配置个人-git-ssh-密钥) 配置个人 SSH 公钥，克隆 content/images，把有效图片放进 public/images，再 Push 到 main。初始化脚本不创建内容提交，也不自动设置分支保护；首次 Push 后按团队要求保护 main 并禁用 force push。
+
+检查以下结果：
+
+- Webhook 投递成功且目标 SHA 有任务，最终状态为 published。
+- 图片固定 URL 与附件 SHA URL 均能下载，文件字节与 Git 一致。
+- 匿名不能列桶、写对象或访问管理 API；管理页面先进入 Stargate。
+- Gitea 自身登录、OC IAM 登录、上传、下载及退出正常。
+- 如果复用旧 Traefik，原有服务和证书续期配置仍能工作。
+
+保留部署提交、镜像摘要、私有配置备份及验证结果。项目已有的 [验收记录](acceptance.md) 描述具体环境和范围，不能替代新环境的检查。
+
+## 证书和后续维护
+
+公网证书由现有 Traefik 续期。prepare-private.py 生成的内部叶证书有效期为 365 天，CA 为 3650 天，项目没有内部证书自动续期任务；到期前需重新签发、核对权限并重启相应服务。
+
+新增仓库见 [接入 CLI](cli.md)，调整发布规则见 [配置说明](configuration.md)，备份及更新见 [运行维护](operations.md)。

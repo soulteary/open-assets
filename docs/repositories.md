@@ -6,7 +6,7 @@
 
 源目录为 public，图片子目录为 images。附件 URL：`https://oss-toh1.lab.dev/attachments/repositories/main-images/releases/<sha>/images/logo.png`；图片 URL：`https://img-toh1.lab.dev/logo.png`。
 
-新增仓库：创建 Gitea 仓库 → 添加只读 Deploy Key → 写入 ID、key、SSH remote、分支、mount_path → validate → render → nginx -t → reload → 配置签名 Push Webhook → 首次 Push。
+新增仓库优先使用 repo ensure；手工接入时，需要分别配置 Gitea 读取权限、发布白名单、S3 对象前缀权限和 Nginx 映射，全部完成后再配置 Hook 并首次 Push。只创建 Gitea 仓库不会触发自动发布。
 
 一个仓库使用 `/`，其他使用 `/project-a/` 等独立前缀。禁止重复或嵌套前缀。根仓库不得占用已保留的前缀。关闭发布不删除已有图片；撤下访问入口需设置 `serve: false` 并单独生成、校验、应用 Nginx 配置。
 

@@ -1,9 +1,30 @@
-# Security
+# 安全说明
 
-Do not commit credentials, production domains, host addresses, private keys, generated runtime configuration, ACME state, logs or backups. Use private files and least-privilege identities. Docker build excludes private state.
+## 数据和权限范围
 
-The internal receiver verifies Gitea HMAC-SHA256 over raw request bytes and enforces an ID/branch allowlist. It never uses remote URLs or commands from payloads. No content-repository scripts execute. Publication endpoints must remain internal.
+`public/` 中的文件按配置发布到公开对象前缀，其中 images 子目录还会由 Nginx 提供。不要把秘密放入该目录，也不要把“没有目录列表”当成文件不可访问。
 
-Known limits: one Worker; file queue on a local POSIX filesystem; no distributed locking; no object garbage collection; image formats validated by extension (not a malware scanner); S3 version publication is not batch-atomic; HTTPS OC reverse-proxy behavior requires deployment-specific acceptance. Administrators of the host or infrastructure configuration are trusted.
+公开示例不包含生产域名、服务器地址、密码、Token、私钥、ACME 状态或运行备份。真实配置保存在 private 和 .env，Docker 构建上下文排除这些文件。导出日志、截图和备份时仍需另行检查，gitignore 不能清除已经提交的历史。
 
-Report vulnerabilities privately through the repository security advisory mechanism. Do not include live secrets in issues.
+接收器验证原始请求体的 Gitea HMAC-SHA256 签名，并匹配仓库 ID、分支和 SHA。它不执行载荷中的命令或使用载荷中的 clone URL。Publisher 从固定 remote 导出 Git blob，不运行内容仓库脚本。签名不提供事件新鲜度证明；重复事件由任务身份去重，自动发布另检查分支头。
+
+接收器和 Publisher 不持有宿主机 Docker 管理权限。宿主机 repo ensure 命令使用管理员凭据协调资源，仅供受信任运维人员运行；有权修改它的代码或私有配置的人属于信任范围。
+
+## 管理入口
+
+Stargate 保护管理网页和 API，Gitea 与 OC 保留自身身份校验。会话交换和固定导航落地页按精确管理主机、精确路径匹配，不把公开图片主机加入回调允许列表。
+
+OC 保留 Origin、Fetch Metadata 和 CSRF 检查。内部 HTTPS 显式信任私有 CA，不使用 insecureSkipVerify。Gitea SSH 不经过 Stargate，需独立管理账号、公钥、主机密钥和网络访问。
+
+## 已知限制
+
+- 文件队列和锁依赖单机 POSIX 文件系统，没有分布式协调。
+- 图片类型按扩展名筛选，不验证文件签名，不提供恶意内容扫描。
+- 文件大小、数量和请求体有配置限制，但不是完整的资源滥用防护。
+- 对象上传和图片切换不是跨系统事务，没有自动清理或补偿删除。
+- 内部证书、定时备份、异机复制和容量告警需要运维另行维护。
+- 已记录的单机与 Chrome 验收不覆盖所有代理、浏览器或依赖版本。
+
+## 报告问题
+
+发现可能泄漏凭据、绕过权限或破坏数据的问题时，使用仓库可用的私下漏洞报告渠道联系维护者。不要在公开 issue 中附带有效密钥、生产配置或未脱敏请求。描述版本、触发条件和最小复现即可，真实秘密不是复现材料。

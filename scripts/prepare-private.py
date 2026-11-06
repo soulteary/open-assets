@@ -1,3 +1,9 @@
+"""Prepare the fixed single-node layout for a new deployment.
+
+This preserves existing secret files but rewrites runtime configuration. It is
+not an upgrade/merge command and must not be rerun to inspect credentials.
+"""
+
 import bcrypt
 import os
 import pathlib as pl

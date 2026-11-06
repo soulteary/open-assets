@@ -1,48 +1,89 @@
 # Open Assets
 
-通过 Gitea Push 发布不可变 S3 附件及固定 URL 图片。支持多仓库白名单、签名事件、持久化队列、内容校验和图片版本回滚。Apache-2.0。
+Open Assets 将 Gitea 仓库中的文件发布到 OtterIO 和 Nginx。开发者通过 SSH Push 更新内容；发布程序导出指定提交的 `public/`，把附件保存到带 commit SHA 的对象路径，再切换图片服务的当前版本。
 
-## 组件
+项目适用于自己维护图片、文档和下载文件的单机环境。它包含发布程序、仓库接入 CLI、Docker Compose 配置，以及接入现有 Traefik 的脚本。许可证为 [Apache-2.0](LICENSE)。
 
-Gitea → 内部签名 Webhook → Publisher → OtterIO 与 Nginx。现有 Traefik 提供 HTTPS，Stargate 保护 Gitea、OC Console 及 Dashboard/API。公开图片和附件不经过认证。
+## 发布后的地址
 
-本项目使用 Python 3.13、Git CLI 和 boto3。Webhook 与 Worker 使用同一个镜像、不同命令和权限。内置接收器保证文件和父目录刷盘后才返回 202；第一版没有依赖外部 webhook 命令执行框架。
+假设仓库 key 为 `main-images`，图片前缀为 `/`，提交包含：
 
-## 日常使用
+```text
+public/
+├── images/2026/11/07/logo.png
+└── documents/manual.pdf
+```
 
-查看密码、配置个人 SSH 密钥、Git Push 发布、生成图片及附件链接，以及新增白名单仓库，见 [实际使用指南](docs/usage.md)。
+图片通过固定地址访问：
 
-新增白名单仓库可直接使用 [自动接入 CLI](docs/cli.md)：
+```text
+https://img-toh1.lab.dev/2026/11/07/logo.png
+```
+
+附件通过版本地址访问：
+
+```text
+https://oss-toh1.lab.dev/attachments/repositories/main-images/releases/<完整SHA>/documents/manual.pdf
+```
+
+图片地址在下一次成功发布后指向新版本，默认缓存 300 秒。附件地址包含完整 SHA，适合在文章或版本说明中引用；项目不会自动删除历史附件。文档中的 `lab.dev` 是占位域名，不能原样用于生产配置。
+
+## 阅读顺序
+
+- 已经部署：从 [实际使用指南](docs/usage.md) 开始，查看登录凭据、设置个人 SSH 密钥、克隆仓库并 Push。
+- 首次部署：先读 [部署说明](docs/deployment.md)，确认固定路径、网络、证书和初始化脚本的适用范围。
+- 接入其他仓库：使用 [仓库接入 CLI](docs/cli.md)。命令协调 Gitea、S3 权限和 Nginx 映射，不会替你提交内容。
+- 调整配置：参考 [配置说明](docs/configuration.md) 和 [仓库与 URL 配置](docs/repositories.md)。
+- 处理失败、回滚或备份：参考 [运行维护](docs/operations.md) 和 [故障排查](docs/troubleshooting.md)。
+- 理解程序行为和验证范围：参考 [发布流程](docs/architecture.md)、[验收记录](docs/acceptance.md) 与 [安全说明](SECURITY.md)。
+
+## 日常操作
+
+以下命令在已经完成初始化的服务器执行：
 
 ```sh
 cd /app/open-assets
-sudo ./scripts/open-assets repo ensure content/project-b --key project-b --mount-path /project-b/
+sudo ./scripts/open-assets repo ensure content/project-b \
+  --key project-b \
+  --mount-path /project-b/
 ```
 
-## 部署
+返回 `status: ready` 后，开发者使用个人 Gitea SSH 密钥克隆仓库，把图片放进 `public/images/`，把其他附件放进 `public/` 下的相应目录，然后提交到配置分支。接入命令创建的是空私有仓库；Publisher 的只读 Deploy Key 不用于开发者 Push。
 
-阅读 [部署](docs/deployment.md)、[仓库配置](docs/repositories.md)、[运行维护](docs/operations.md) 和 [安全边界](SECURITY.md)。先复制 `.env.example` 并在私有目录填写配置。`private/`、`.env` 和数据目录禁止提交。
+查看发布结果：
 
 ```sh
-cp .env.example .env
-mkdir -p private/generated
-# 按部署文档准备 private/ 下凭据、TLS 和 repositories.yaml
-docker compose config --quiet
-docker compose build
-# 新仓库首次启动前生成 Nginx 配置
-docker compose run --rm --no-deps -v ./private/generated:/generated publisher render /generated
-docker compose up -d
+cd /app/open-assets
+sudo docker compose exec -T publisher python -m open_assets status
 ```
 
-现有 Traefik 通过外部网络连接 `open-assets-edge` 与 `open-assets-auth`。公网只开放 80/443、受限运维 SSH 和 Gitea SSH。不要公开 OtterIO/Admin、OC、Webhook 或 Stargate 后端端口。
+只有目标仓库与 SHA 对应的任务显示 `published`，才表示该次发布完成。`git push` 成功和 Webhook 返回 202 都不是发布成功的标志。
 
-## 验证
+## 服务组成
+
+Gitea 向内部 Webhook 接收器发送签名事件；接收器写入文件队列；单个 Publisher 串行处理任务，上传 OtterIO 并准备 Nginx 图片目录。接收器和 Publisher 使用同一个应用镜像，以不同命令和挂载权限运行。
+
+现有 Traefik 提供 HTTPS 和路由。公开图片、附件允许匿名读取；Gitea 网页、OC Console 和 Traefik Dashboard/API 经过 Stargate。Gitea 和 OC 保留各自的应用认证。Git SSH 使用 Gitea 密钥，不经过 HTTP 认证层。
+
+宿主机仓库接入 CLI 使用本机 Docker 和私有管理员配置。应用容器不挂载 Docker socket，也不获得这项管理权限。
+
+## 使用限制
+
+当前配方固定使用节点名 `toh1`、Compose 项目名 `asset-stack`、`/app/open-assets` 和 `/data/asset-stack`。适用范围是单机 Docker Compose、一个 Publisher 和本地 POSIX 文件系统；改变路径、项目名或拓扑前需要检查脚本中的固定值。
+
+发布程序不执行内容仓库脚本，不支持 LFS、submodule、符号链接或隐藏路径。图片按扩展名限制为 PNG/JPEG/GIF/WebP/AVIF/ICO，不检测文件格式或恶意内容。每个版本需包含 `public/images/` 中至少一张图片；其余文件作为附件发布。
+
+失败任务不会自动重试。程序重启会重新处理遗留的 `running` / `images_prepared` 任务，但自动任务若已不是远端分支头，会被标记为 `superseded`。对象上传、图片切换和任务记录之间没有跨系统事务；部分对象可能在任务完成前已能读取。
+
+## 本地检查
+
+发布程序使用 Python 3.13 和 Git；宿主机初始化另需 PyYAML、bcrypt、OpenSSL、OpenSSH 及 Docker Compose。详细依赖和启动顺序见部署文档。
 
 ```sh
-python -m pip install -r requirements.txt
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
 python -m unittest discover -s tests -v
 ```
 
-发布仅导出配置的 `public/`，不执行仓库脚本；`public/images/` 支持 PNG/JPEG/GIF/WebP/AVIF/ICO。附件保留 `repositories/<key>/releases/<sha>/`，图片独立切换每仓库 current。禁止 LFS、submodule、隐藏路径和符号链接。第一版单 Worker 串行执行，不自动清理历史附件。
-
-发布不是跨 S3 与文件系统事务。对象完整校验后才切换图片；中断可恢复。公开版本对象在逐个上传时可能提前可见，成功状态不代表原子批量可见性。
+测试使用临时目录和回环 HTTP 端口，不连接生产服务器。仓库中的 [CI](.github/workflows/test.yml) 另外运行 Ruff 和镜像构建。一次部署的成功记录不代表所有浏览器、硬件或升级路径均已验证。

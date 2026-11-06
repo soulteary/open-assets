@@ -2,7 +2,7 @@
 
 此命令在部署服务器宿主机上执行，自动协调 Gitea 仓库、只读 Deploy Key、签名 Push Webhook、Publisher 的 S3 前缀权限、发布白名单和 Nginx 图片映射。不需要把 Docker socket 或管理员凭据挂到应用容器里。
 
-## 一条命令接入
+## 接入命令
 
 ```sh
 cd /app/open-assets
@@ -21,7 +21,7 @@ sudo ./scripts/open-assets repo ensure content/project-b \
 - `--branch main`：可选，默认 main。命令不自动创建提交、改写分支历史或修改已有分支保护。
 - `--root /app/open-assets`：全局选项，放在 repo 之前，用于指定部署根目录。该目录中的 Compose、private 与 .env 必须属于同一部署。
 
-已有同名私有仓库可直接接入；公开或归档仓库不会被自动转换。已配置 disabled/serve=false 的项不会被命令偷偷重新启用。
+已有同名私有仓库可直接接入；公开或归档仓库不会被自动转换。已配置 disabled/serve=false 的项不会被命令重新启用。
 
 ## 执行前提
 

@@ -45,6 +45,8 @@ for key, service in [
     }
     if key in ["git", "storage", "traefik"]:
         routers[key]["middlewares"] = ["console-auth"]
+# This exact endpoint must reach Stargate before a host-only session exists.
+# Its own ticket validation is the boundary; all other management paths use auth.
 routers["session-exchange"] = {
     "rule": "("
     + " || ".join("Host(`" + dom[k] + "`)" for k in ["git", "storage", "traefik"])
@@ -55,6 +57,8 @@ routers["session-exchange"] = {
     "tls": {"certResolver": "le"},
 }
 services["navigation"] = {"loadBalancer": {"servers": [{"url": "http://nginx:8081"}]}}
+# A local HTML document ends the cross-site redirect chain without changing
+# OC Origin/Fetch Metadata headers. It remains protected by ForwardAuth.
 routers["auth-return"] = {
     "rule": "("
     + " || ".join("Host(`" + dom[k] + "`)" for k in ["git", "storage", "traefik"])

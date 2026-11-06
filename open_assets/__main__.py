@@ -1,3 +1,10 @@
+"""Signed event receiver and single-host Git asset publisher.
+
+The host administration CLI lives in admin.py. This module runs without Docker
+or storage-admin access; publication uses only the configured repository and S3
+identity. Task recovery is replay-based, not a cross-system transaction.
+"""
+
 import argparse
 import contextlib
 import fcntl
@@ -22,6 +29,7 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
 def atomic(path, value):
+    """Replace one JSON record after syncing its bytes and parent directory."""
     path = P(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent)
@@ -42,6 +50,7 @@ def atomic(path, value):
 
 
 def load():
+    """Read and validate the shared configuration; paths are container paths."""
     raw = P(CONFIG).read_bytes()
     c = yaml.safe_load(raw)
     if c.get("schema_version") != 1:
@@ -96,6 +105,7 @@ def git(path, *args):
 
 
 def enqueue(c, key, sha, delivery, kind="auto"):
+    """Deduplicate by repository/SHA/kind without resetting an existing failure."""
     repo(c, key)
     if not SHA.fullmatch(sha) or sha == "0" * 40:
         raise ValueError("invalid commit")
@@ -120,6 +130,7 @@ def enqueue(c, key, sha, delivery, kind="auto"):
 
 @contextlib.contextmanager
 def lock(c, name="worker"):
+    """Use separate queue/worker locks so uploads do not block durable enqueue."""
     p = P(c["state_root"])
     p.mkdir(parents=True, exist_ok=True)
     with (p / (name + ".lock")).open("a") as f:
@@ -151,6 +162,11 @@ def s3client(c):
 
 
 def export(c, r, g, sha, dest):
+    """Read committed blobs directly; do not checkout or execute repository code.
+
+    Image checks use extensions, not file signatures. Other public files are
+    attachments and remain subject to the same path and size limits.
+    """
     entries = git(g, "ls-tree", "-rz", sha, "--", r["source_directory"]).split(b"\0")
     files = []
     total = 0
@@ -218,6 +234,7 @@ def export(c, r, g, sha, dest):
 
 
 def sync_tree(root):
+    """Sync a prepared tree before exposing it through a version-directory rename."""
     for directory, _, files in os.walk(root, topdown=False):
         for name in files:
             with (P(directory) / name).open("rb") as f:
@@ -230,6 +247,7 @@ def sync_tree(root):
 
 
 def switch(base, target):
+    """Replace current on the same filesystem; this does not commit S3 or jobs."""
     tmp = base / (".current-" + uuid.uuid4().hex)
     os.symlink("releases/" + target, tmp)
     os.replace(tmp, base / "current")
@@ -241,6 +259,11 @@ def switch(base, target):
 
 
 def publish(c, j):
+    """Replay a publication, checking existing immutable bytes before activation.
+
+    A failure may leave uploaded objects or staging data. Never compensate by
+    deleting them: a preceding attempt may already have made them readable.
+    """
     r = repo(c, j["key"])
     state = P(c["state_root"])
     g = state / "git" / r["key"]
@@ -274,6 +297,7 @@ def publish(c, j):
             data = (staging / item["path"]).read_bytes()
             key = prefix + item["path"]
             try:
+                # ETag is not a content hash for all S3 upload modes. Compare bytes.
                 existing = s.get_object(Bucket=c["bucket"], Key=key)["Body"].read()
             except s.exceptions.NoSuchKey:
                 existing = None
@@ -307,7 +331,7 @@ def publish(c, j):
         else:
             sync_tree(staging)
             os.rename(staging, final)
-        # Image tree is a subset of the attachment tree.
+        # Keep the complete public snapshot and a separate image-serving subset.
         image_final = base / "releases" / ("images-" + j["sha"])
         if not (final / "images").is_dir():
             raise ValueError("missing images directory")
@@ -320,7 +344,8 @@ def publish(c, j):
                         os.fsync(syncfile.fileno())
             sync_tree(image_tmp)
             os.rename(image_tmp, image_final)
-        # Fetch once more before activation so events arriving during upload cannot roll back newer main.
+        # Recheck before activation. A Push can still race after this check;
+        # Git head and the filesystem link do not share a commit boundary.
         git(
             g,
             "fetch",
@@ -360,6 +385,7 @@ def publish(c, j):
 
 
 def work_once(c):
+    """Resume interrupted nonterminal work; failed jobs require an explicit retry."""
     with lock(c):
         jobs = P(c["state_root"]) / "jobs"
         jobs.mkdir(parents=True, exist_ok=True)
@@ -379,6 +405,7 @@ def work_once(c):
 
 
 def render(c, directory):
+    """Write a candidate Nginx file; the caller owns validation and reload."""
     directory = P(directory)
     directory.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -411,6 +438,8 @@ def render(c, directory):
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
+    """Internal Gitea endpoint; a 202 response confirms enqueue, not publication."""
+
     def log_message(self, *args):
         pass
 
@@ -425,6 +454,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             size = int(self.headers.get("Content-Length", "0"))
             if self.path != "/hooks/publish-assets" or not 0 < size <= 1048576:
                 raise ValueError()
+            # Signatures cover original bytes; parse JSON only after verification.
             body = self.rfile.read(size)
             secret = P(os.environ["WEBHOOK_SECRET_FILE"]).read_bytes().strip()
             expected = hmac.new(secret, body, hashlib.sha256).hexdigest()
@@ -435,6 +465,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if self.headers.get("X-Gitea-Event") != "push":
                 raise ValueError()
             payload = json.loads(body)
+            # Identity comes from the ID allowlist, never payload clone URLs.
             r = next(
                 r
                 for r in c["repositories"]
@@ -449,6 +480,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     payload["after"],
                     self.headers.get("X-Gitea-Delivery", ""),
                 )
+            # enqueue() has fsynced the task and directory before acknowledging.
             self.send_response(202)
             self.end_headers()
             self.wfile.write(json.dumps({"job": jid}).encode())
