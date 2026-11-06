@@ -19,4 +19,20 @@ Passed:
 - Application snapshot database integrity and encrypted off-host archive readability.
 - Second version publication, image rollback and roll-forward, recovery of a persisted running job after Worker restart, retained historical object URL.
 
-Limits: HTTP/API acceptance is not a browser visual or accessibility audit. Tests do not certify all OC upload/CSRF/browser combinations, power-loss durability of the underlying disk, arbitrary migrations or distributed deployments. Off-host backup destination is an operator responsibility.
+Limits: The initial HTTP/API acceptance was supplemented by the Chrome UI checks below. Tests do not certify accessibility or all OC upload/CSRF/browser combinations, power-loss durability of the underlying disk, arbitrary migrations or distributed deployments. Off-host backup destination is an operator responsibility.
+
+## Chrome browser acceptance — 2026-11-07
+
+Actual Chrome extension-driven UI checks completed:
+
+- Unauthenticated management navigation reaches Stargate; password login reaches the requested service. Gitea's own login succeeds and displays both configured content repositories.
+- Traefik Dashboard renders entrypoints, certificates, routers and services; the final topology reports no disabled/error routers or services.
+- OC renders native IAM login, overview, bucket directory, object browser and upload dialog. Native IAM login succeeds.
+- Real browser upload from an independent temporary file succeeds, including an object key containing Chinese, a space, `+` and `%`. Download through OC saves the expected filename. Original and downloaded 84-byte files compare equal with SHA-256 `18e1796fb1b2f89f2e84ab2d02587da142470f5126c66151cbb7b5239ac10ba1`.
+- OC logout clears its UI session; refresh remains at IAM login. Direct navigation to the old download URL is denied by OC's origin guard.
+
+Browser-discovered fix: OC rejected the authentication redirect chain with `invalid_origin`. A fixed, authenticated `/__auth_return` document now ends that chain before same-origin navigation to `/`. OC Origin, Fetch Metadata and CSRF protections are unchanged; no custom OC binary is used.
+
+Tool/environment observations: Chrome's upload interface required temporary file-URL permission, explicitly approved and manually enabled by the operator, then manually restored off. An initial Documents-path transfer was interrupted before a PUT reached the server; independent temporary-file retries succeeded. The failed task expired without reporting success. OC opens downloads in a new tab, so waiting for the original tab's download event timed out; the actual downloaded file was verified on disk. These are recorded separately from application acceptance.
+
+Scope remains Chrome on macOS. Other browser engines, mobile layouts, accessibility compliance and large concurrent browser transfers are not certified by these checks. Screenshots with production hostnames stay outside the public repository.

@@ -152,6 +152,7 @@ h = bcrypt.hashpw(sec("stargate_password").encode(), bcrypt.gensalt()).decode()
             "PORT=8080",
             "PASSWORDS=" + repr("bcrypt:" + h),
             "COOKIE_SECURE=true",
+            "SESSION_EXCHANGE_REDIRECT_PATH=/__auth_return",
             "CALLBACK_ALLOWED_HOSTS="
             + ",".join(dom[k] for k in ["storage", "traefik", "git"]),
             "SESSION_EXCHANGE_SECRET=" + sec("session_secret"),

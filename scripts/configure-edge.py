@@ -54,6 +54,17 @@ routers["session-exchange"] = {
     "priority": 1000,
     "tls": {"certResolver": "le"},
 }
+services["navigation"] = {"loadBalancer": {"servers": [{"url": "http://nginx:8081"}]}}
+routers["auth-return"] = {
+    "rule": "("
+    + " || ".join("Host(`" + dom[k] + "`)" for k in ["git", "storage", "traefik"])
+    + ") && Path(`/__auth_return`)",
+    "entryPoints": ["websecure"],
+    "service": "navigation",
+    "middlewares": ["console-auth"],
+    "priority": 900,
+    "tls": {"certResolver": "le"},
+}
 config = {
     "http": {
         "routers": routers,

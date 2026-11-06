@@ -35,3 +35,9 @@ OC native 登录使用启用的独立 IAM 用户，不使用 root 或 service-ac
 现有 Traefik 需加入 open-assets-edge 和 open-assets-auth，后者固定地址 172.29.19.2。将这些网络写入其 Compose 声明以便重建时保留。保持原 ACME/DNS 挂载。确认 Stargate 健康后启用受保护的 api@internal，不启用 api.insecure。
 
 三个管理域名的精确 `/_session_exchange` 路由直接交给 Stargate，不加 ForwardAuth。该接口验证一次性票据；其他管理路径全部受保护。缺少该路由会导致主机级 Cookie 登录循环。
+
+## 浏览器认证导航落地页
+
+将 Stargate 的 `SESSION_EXCHANGE_REDIRECT_PATH` 设为 `/__auth_return`。三个管理域名的该精确路径由独立的 Nginx 内部监听 8081 提供，并保留 `console-auth`。页面只包含固定同源 `/` 导航，不接收 callback/next 等跳转目标，响应 no-store、no-referrer 和严格 CSP。公开图片仍由 8080 提供，8081 不发布宿主机端口。
+
+原因：浏览器会把跨站认证重定向链的 Fetch Metadata 延续到最终 OC 请求，触发 OC 的来源拒绝。一个成功加载的本地 HTML 文档结束该链，再发起同源导航。此方案不改 OC 程序，不删除或伪造 Origin/Sec-Fetch-*，不关闭 CSRF。不要用全局删除请求头替代此落地页。

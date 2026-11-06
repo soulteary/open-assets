@@ -163,5 +163,43 @@ class Webhook(unittest.TestCase):
                 m.CONFIG = old
 
 
+class AuthenticationNavigation(unittest.TestCase):
+    def test_return_route_remains_authenticated_and_host_scoped(self):
+        import subprocess
+        import sys
+
+        with tempfile.TemporaryDirectory() as t:
+            p = pathlib.Path(t)
+            domains = {
+                k: f"{k}-toh1.console.lab.dev"
+                for k in ["git", "storage", "traefik", "auth"]
+            }
+            domains.update(img="img-toh1.lab.dev", oss="oss-toh1.lab.dev")
+            (p / "domains.json").write_text(json.dumps(domains))
+            (p / "ca.pem").write_text("test-ca")
+            subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/configure-edge.py",
+                    "--domains",
+                    str(p / "domains.json"),
+                    "--ca",
+                    str(p / "ca.pem"),
+                    "--output",
+                    str(p / "routes.yaml"),
+                ],
+                check=True,
+            )
+            routes = json.loads((p / "routes.yaml").read_text())["http"]["routers"]
+            landing = routes["auth-return"]
+            self.assertEqual(landing["middlewares"], ["console-auth"])
+            self.assertIn("Path(`/__auth_return`)", landing["rule"])
+            for k in ["git", "storage", "traefik"]:
+                self.assertIn(f"Host(`{domains[k]}`)", landing["rule"])
+            for k in ["img", "oss", "auth"]:
+                self.assertNotIn(domains[k], landing["rule"])
+            self.assertNotIn("headers", json.dumps(routes))
+
+
 if __name__ == "__main__":
     unittest.main()
