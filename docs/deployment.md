@@ -170,3 +170,7 @@ Traefik 到 OC 和 OtterIO 使用内部 HTTPS，校验私有 CA 和主机名。S
 公网证书由现有 Traefik 续期。prepare-private.py 生成的内部叶证书有效期为 365 天，CA 为 3650 天，项目没有内部证书自动续期任务；到期前需重新签发、核对权限并重启相应服务。
 
 新增仓库见 [接入 CLI](cli.md)，调整发布规则见 [配置说明](configuration.md)，备份及更新见 [运行维护](operations.md)。
+
+## 在隔离环境验证文档
+
+需要复查首次部署时，使用独立 Docker daemon，不复制原有 private 或数据。仓库提供 [从零部署脚本](../tests/e2e/README.md)，会执行初始化、两次 CLI 接入及真实 Push 发布。脚本拒绝已有配置、数据或容器，默认不执行；它不是现有服务器的重装命令。实测环境和未覆盖范围见 [隔离部署记录](fresh-install.md)。

@@ -49,3 +49,7 @@ Scope remains Chrome on macOS. Other browser engines, mobile layouts, accessibil
 - A real SSH Push through the generated Hook reached published; both the public image and immutable attachment bytes matched the Git content.
 
 The CLI is host-only and privileged; it does not grant application containers Docker access. Cross-system changes are resumable, not transactional. Private before-state and completion records stay outside the repository. The existing published assets continue serving during publisher/receiver configuration application.
+
+## Isolated fresh installation — 2026-11-07
+
+Two independent DinD instances completed the documented cold-start sequence. The second ran the guarded fresh-stack.sh from an empty daemon/configuration/data state and exited 0. Initialization, first/repeated onboarding, no restart on repeat, conflict rejection, real SSH Push in two repositories, published state, private-CA HTTPS byte comparisons, encoded image paths, Range and management authentication passed. No production host or credentials were used. See [environment and scope](fresh-install.md) and [reproduction](../tests/e2e/README.md). No application behavior change was needed; the suite now includes eighteen ordinary regression tests, including default refusal of the destructive-fixture runner.
