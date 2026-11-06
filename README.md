@@ -8,6 +8,10 @@ Gitea → 内部签名 Webhook → Publisher → OtterIO 与 Nginx。现有 Trae
 
 本项目使用 Python 3.13、Git CLI 和 boto3。Webhook 与 Worker 使用同一个镜像、不同命令和权限。内置接收器保证文件和父目录刷盘后才返回 202；第一版没有依赖外部 webhook 命令执行框架。
 
+## 日常使用
+
+查看密码、配置个人 SSH 密钥、Git Push 发布、生成图片及附件链接，以及新增白名单仓库，见 [实际使用指南](docs/usage.md)。
+
 ## 部署
 
 阅读 [部署](docs/deployment.md)、[仓库配置](docs/repositories.md)、[运行维护](docs/operations.md) 和 [安全边界](SECURITY.md)。先复制 `.env.example` 并在私有目录填写配置。`private/`、`.env` 和数据目录禁止提交。
