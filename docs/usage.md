@@ -190,6 +190,15 @@ PY
 
 ## 6. 新增白名单仓库
 
+推荐使用 [仓库自动接入 CLI](cli.md)：在服务器运行以下命令即可协调仓库、只读 Deploy Key、Webhook、S3 前缀权限和 Nginx 映射，支持重复执行。
+
+```sh
+cd /app/open-assets
+sudo ./scripts/open-assets repo ensure content/project-b --key project-b --mount-path /project-b/
+```
+
+返回 ready 后再提交内容；下文是对应的手工流程，用于排查或特殊部署。不要在 CLI 执行过程中同时手工修改配置。
+
 以下以 `content/project-b`、稳定 key `project-b`、图片前缀 `/project-b/` 为例。新增必须同时完成 Git 读取权限、发布白名单、S3 写权限和 Nginx URL 映射，仅创建 Gitea 仓库不会自动发布。
 
 ### 6.1 创建仓库并授权只读拉取

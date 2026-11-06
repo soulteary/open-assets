@@ -12,6 +12,13 @@ Gitea → 内部签名 Webhook → Publisher → OtterIO 与 Nginx。现有 Trae
 
 查看密码、配置个人 SSH 密钥、Git Push 发布、生成图片及附件链接，以及新增白名单仓库，见 [实际使用指南](docs/usage.md)。
 
+新增白名单仓库可直接使用 [自动接入 CLI](docs/cli.md)：
+
+```sh
+cd /app/open-assets
+sudo ./scripts/open-assets repo ensure content/project-b --key project-b --mount-path /project-b/
+```
+
 ## 部署
 
 阅读 [部署](docs/deployment.md)、[仓库配置](docs/repositories.md)、[运行维护](docs/operations.md) 和 [安全边界](SECURITY.md)。先复制 `.env.example` 并在私有目录填写配置。`private/`、`.env` 和数据目录禁止提交。

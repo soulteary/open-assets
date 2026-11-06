@@ -1,6 +1,6 @@
 # 仓库与 URL 配置
 
-逐步操作命令见 [实际使用指南](usage.md#6-新增白名单仓库)。
+推荐使用 [可重复执行的自动接入 CLI](cli.md)。逐步操作命令见 [实际使用指南](usage.md#6-新增白名单仓库)。
 
 配置见 `config/repositories.example.yaml`。稳定 key 与 Gitea repository_id 共同绑定发布身份；名称用于阅读，remote 由管理员固定。仅接受配置分支 Push，禁用项拒绝入队和执行。
 

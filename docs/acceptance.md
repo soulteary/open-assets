@@ -36,3 +36,14 @@ Browser-discovered fix: OC rejected the authentication redirect chain with `inva
 Tool/environment observations: Chrome's upload interface required temporary file-URL permission, explicitly approved and manually enabled by the operator, then manually restored off. An initial Documents-path transfer was interrupted before a PUT reached the server; independent temporary-file retries succeeded. The failed task expired without reporting success. OC opens downloads in a new tab, so waiting for the original tab's download event timed out; the actual downloaded file was verified on disk. These are recorded separately from application acceptance.
 
 Scope remains Chrome on macOS. Other browser engines, mobile layouts, accessibility compliance and large concurrent browser transfers are not certified by these checks. Screenshots with production hostnames stay outside the public repository.
+
+## Repository onboarding CLI — 2026-11-07
+
+- Sixteen automated tests pass, including resource reuse, no restart on routine repeat, stable-key/prefix conflicts, public-repository/write-key rejection, duplicate-Hook rejection, policy failure retry and invalid-Nginx recovery.
+- Single-host acceptance used a new private `content/cli-acceptance` repository: first ensure created/bound the repository, one read-only Deploy Key and one signed Hook, extended its S3 object prefix and applied its Nginx mapping.
+- Repeated ensure kept the same repository ID and exactly one matching Key/Hook, one policy resource and one whitelist entry; services_recreated was false after the initial application.
+- A conflicting root-prefix request was rejected before any corresponding Gitea repository existed.
+- Disabling the test Hook and repeating ensure restored it without creating duplicates. Existing main-images/project-a S3 permissions remained present.
+- A real SSH Push through the generated Hook reached published; both the public image and immutable attachment bytes matched the Git content.
+
+The CLI is host-only and privileged; it does not grant application containers Docker access. Cross-system changes are resumable, not transactional. Private before-state and completion records stay outside the repository. The existing published assets continue serving during publisher/receiver configuration application.
