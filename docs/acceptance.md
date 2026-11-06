@@ -13,6 +13,10 @@ Passed:
 - Valid public HTTPS certificates on all six service hosts.
 - Anonymous management requests redirected to authentication; host-only authentication cookies.
 - Authenticated Traefik JSON API, OC native IAM login and bucket listing; Gitea outer login.
+- OC create-only upload through the proxy, missing-CSRF rejection and logout revocation.
+- Authentication outage closes management while public images remain available.
+- Original DNS credential bytes and all prior certificate identities retained.
+- Application snapshot database integrity and encrypted off-host archive readability.
 - Second version publication, image rollback and roll-forward, recovery of a persisted running job after Worker restart, retained historical object URL.
 
 Limits: HTTP/API acceptance is not a browser visual or accessibility audit. Tests do not certify all OC upload/CSRF/browser combinations, power-loss durability of the underlying disk, arbitrary migrations or distributed deployments. Off-host backup destination is an operator responsibility.
