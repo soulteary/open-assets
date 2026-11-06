@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+private/
+secrets/
+state/
+__pycache__/
+*.pyc
+.venv/
+coverage.xml

@@ -1,0 +1,7 @@
+.git
+.env*
+private
+secrets
+state
+__pycache__
+.venv

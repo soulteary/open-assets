@@ -1,0 +1,17 @@
+schema_version: 1
+state_root: /state
+images_root: /images
+bucket: attachments
+endpoint: http://otterio:9000
+repositories:
+  - key: main-images
+    repository_id: 1
+    name: content/images
+    remote: ssh://git@gitea:2222/content/images.git
+    branch: main
+    enabled: true
+    source_directory: public
+    mount_path: /
+    max_files: 10000
+    max_bytes: 1073741824
+    max_file_bytes: 104857600
