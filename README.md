@@ -91,7 +91,7 @@ sudo docker compose exec -T publisher python -m open_assets status
 
 失败任务不会自动重试。程序重启会重新处理遗留的 `running` / `images_prepared` 任务，但自动任务若已不是远端分支头，会被标记为 `superseded`。对象上传、图片切换和任务记录之间没有跨系统事务；部分对象可能在任务完成前已能读取。
 
-当前实现仍有回滚副本校验、损坏任务隔离、容量管理和默认管理权限等风险，具体触发条件与建议见 [风险评估](docs/risks.md)。
+回滚副本校验和异常任务隔离已完成；容量管理、默认管理权限及跨系统一致性仍有边界，具体状态与建议见 [风险评估](docs/risks.md)。
 
 ## 本地检查
 

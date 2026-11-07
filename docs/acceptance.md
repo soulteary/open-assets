@@ -89,3 +89,16 @@ All nine service containers were recreated with explicit Docker local logging (1
 ## Protected-page gzip and optional probe display — 2026-11-07
 
 Traefik dynamically loaded gzip after ForwardAuth for the four management routes and authenticated return document. Real authenticated requests negotiated gzip with Vary: Accept-Encoding, and decompressed HTML/JSON passed validation: Gitea 5925/15860 bytes, OC 9590/37736, Traefik API 1243/6792, Info status 1742/5505 (compressed/decoded, one response each). Anonymous redirects, login, public image/object bytes and Range checks passed; all nine containers remained healthy. Info now omits the third status item and separator when no additional probe is configured. Eight relevant regression tests, Ruff and JavaScript syntax checks passed.
+
+## Checked image rollback and malformed-task isolation — 2026-11-07
+
+These fixes close the two issues that remained open in the earlier stage records above.
+
+- The old production image reproduced both faults inside a disposable container using only temporary data: rollback activated an incorrect image copy, and malformed JSON aborted queue processing.
+- The candidate then passed all 42 tests in an independent container with network disabled, a read-only root, a temporary writable filesystem and no production credentials/data mounts. Eight recovery tests cover missing/corrupt/extra/linked serving files, malformed manifests, activation failures before/after link replacement, invalid task fields/identity, oversized/nonregular JSON records and continued processing when quarantine fails. The isolated publication fixture uses real Git commits/export and a fake S3 store; it is not a complete cold-stack Gitea/S3 test.
+- The previous application image and a readable, hashed source/private/publisher/image snapshot were retained before deployment. Only Webhook and Publisher were recreated; other application containers and the existing Traefik remained running.
+- Live acceptance used the existing dedicated performance-check repository. A controlled malformed task was preserved byte-for-byte in quarantine while a real SSH Push, signed Gitea Hook and actual S3 publication completed normally.
+- A damaged inactive image copy and a temporarily missing inactive image directory both caused rollback refusal; the current image bytes and published record remained at the new version. Test changes were restored. Valid rollback and roll-forward passed public byte checks; the historical immutable attachment remained readable. The temporary personal Push key was revoked.
+- Public image/object bytes, Range, four management authentication flows, gzip and fresh Info data passed regression checks. All nine containers were healthy.
+
+The application does not automatically repair damaged versions or replay quarantined records. Disk/power failure, concurrent trusted administrators, cross-system commit windows, unbounded historical retention and external alerting remain outside these fixes. See [operations](operations.md) and the updated [risk record](risks.md).

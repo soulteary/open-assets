@@ -13,10 +13,13 @@ import hmac
 import http.server
 import json
 import mimetypes
+import math
 import os
 import pathlib
 import re
 import shutil
+import stat
+import sys
 import subprocess
 import tempfile
 import threading
@@ -259,6 +262,105 @@ def switch(base, target):
         os.close(d)
 
 
+def verify_tree(root, files):
+    """Verify the exact serving tree, refusing links and unlisted files."""
+    if not stat.S_ISDIR(root.lstat().st_mode):
+        raise ValueError("version root is not a directory")
+    expected = {}
+    for item in files:
+        name = item["path"]
+        path = P(name)
+        if (
+            not isinstance(name, str)
+            or path.is_absolute()
+            or not path.parts
+            or any(part in (".", "..") or part.startswith(".") for part in path.parts)
+            or path.as_posix() != name
+            or name in expected
+            or type(item["size"]) is not int
+            or item["size"] < 0
+            or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])
+        ):
+            raise ValueError("invalid manifest entry")
+        expected[name] = item
+    actual = set()
+    for directory, directories, names in os.walk(root, followlinks=False):
+        for name in directories:
+            if not stat.S_ISDIR((P(directory) / name).lstat().st_mode):
+                raise ValueError("linked version directory")
+        for name in names:
+            path = P(directory) / name
+            relative = path.relative_to(root).as_posix()
+            if relative not in expected or not stat.S_ISREG(path.lstat().st_mode):
+                raise ValueError("unexpected version entry")
+            item = expected[relative]
+            if path.stat().st_size != item["size"]:
+                raise ValueError("version size mismatch")
+            digest = hashlib.sha256()
+            with path.open("rb") as stream:
+                for block in iter(lambda: stream.read(1048576), b""):
+                    digest.update(block)
+            if digest.hexdigest() != item["sha256"]:
+                raise ValueError("version bytes mismatch")
+            actual.add(relative)
+    if actual != set(expected):
+        raise ValueError("missing version file")
+
+
+def image_files(files):
+    images = [
+        dict(item, path=item["path"][7:])
+        for item in files
+        if item["path"].startswith("images/")
+    ]
+    if not images:
+        raise ValueError("missing images")
+    return images
+
+
+def activate_images(base, target, files):
+    """Verify before and after switching; restore the exact prior link on error."""
+    verify_tree(base / "releases" / target, files)
+    current = base / "current"
+    previous = os.readlink(current) if current.is_symlink() else None
+    if current.exists() and previous is None:
+        raise ValueError("current is not a symlink")
+    try:
+        switch(base, target)
+        if os.readlink(current) != "releases/" + target:
+            raise ValueError("activation target changed")
+        # Resolve only the deliberate current link; tree contents must be regular.
+        verify_tree(current.resolve(strict=True), files)
+    except Exception:
+        if previous is None:
+            current.unlink(missing_ok=True)
+        else:
+            tmp = base / (".restore-" + uuid.uuid4().hex)
+            os.symlink(previous, tmp)
+            os.replace(tmp, current)
+        fd = os.open(base, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        raise
+
+
+def rollback_images(c, key, sha):
+    repo(c, key)
+    if not SHA.fullmatch(sha):
+        raise ValueError("invalid SHA")
+    with lock(c):
+        state = P(c["state_root"])
+        manifest = json.loads((state / "manifests" / key / (sha + ".json")).read_text())
+        if manifest.get("key") != key or manifest.get("sha") != sha:
+            raise ValueError("manifest identity mismatch")
+        base = P(c["images_root"]) / "repos" / key
+        verify_tree(base / "releases" / sha, manifest["files"])
+        activate_images(base, "images-" + sha, image_files(manifest["files"]))
+        atomic(state / "published" / key, manifest)
+
+
 def publish(c, j):
     """Replay a publication, checking existing immutable bytes before activation.
 
@@ -365,19 +467,7 @@ def publish(c, j):
         )
         j.update(status="images_prepared", previous=previous)
         atomic(state / "jobs" / (j["id"] + ".json"), j)
-        switch(base, "images-" + j["sha"])
-        # Validate activated bytes through the same path Nginx mounts.
-        for item in files:
-            if (
-                item["path"].startswith("images/")
-                and hashlib.sha256(
-                    (base / "current" / item["path"][7:]).read_bytes()
-                ).hexdigest()
-                != item["sha256"]
-            ):
-                if previous:
-                    switch(base, P(previous).name)
-                raise ValueError("activation verification failed")
+        activate_images(base, "images-" + j["sha"], image_files(files))
         j["status"] = "published"
         j["finished"] = time.time()
         atomic(state / "published" / r["key"], manifest)
@@ -385,28 +475,127 @@ def publish(c, j):
         shutil.rmtree(staging, ignore_errors=True)
 
 
+def read_job(path):
+    """Bound reads before parsing; broken records must not block valid jobs."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError("nonregular job")
+        raw = stream.read(65537)
+    if len(raw) > 65536:
+        raise ValueError("oversized job")
+    j = json.loads(raw)
+    if not isinstance(j, dict):
+        raise ValueError("invalid job object")
+    if (
+        not isinstance(j.get("key"), str)
+        or not re.fullmatch(r"[a-z][a-z0-9-]{0,47}", j["key"])
+        or not isinstance(j.get("sha"), str)
+        or not SHA.fullmatch(j["sha"])
+        or j["sha"] == "0" * 40
+        or j.get("kind") not in ("auto", "manual")
+        or j.get("status")
+        not in (
+            "pending",
+            "running",
+            "images_prepared",
+            "published",
+            "failed",
+            "superseded",
+        )
+        or type(j.get("created")) not in (int, float)
+        or j["created"] > 1e12
+        or not math.isfinite(j["created"])
+        or j["created"] < 0
+        or not isinstance(j.get("delivery"), str)
+        or len(j["delivery"]) > 128
+        or not isinstance(j.get("config"), str)
+        or not j["config"]
+    ):
+        raise ValueError("invalid job structure")
+    identity = hashlib.sha256(
+        (j["key"] + ":" + j["sha"] + ":" + j["kind"]).encode()
+    ).hexdigest()
+    if j.get("id") != identity or path.name != identity + ".json":
+        raise ValueError("job identity mismatch")
+    return j
+
+
+def queue_notice(event, error):
+    # No task payload, paths, remote URL or exception text enters container logs.
+    print(
+        json.dumps(dict(event=event, error=type(error).__name__)),
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def quarantine_job(c, path, error):
+    folder = P(c["state_root"]) / "quarantine" / uuid.uuid4().hex
+    folder.mkdir(parents=True, mode=0o700)
+    os.replace(path, folder / "record")
+    atomic(
+        folder / "reason.json",
+        dict(
+            original_name=path.name,
+            quarantined_at=time.time(),
+            error=type(error).__name__,
+        ),
+    )
+    fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    queue_notice("job-quarantined", error)
+
+
 def work_once(c, heartbeat=None):
-    """Resume interrupted nonterminal work; failed jobs require an explicit retry."""
+    """Isolate invalid records; keep failure/retry semantics for valid jobs."""
     with lock(c):
         jobs = P(c["state_root"]) / "jobs"
         jobs.mkdir(parents=True, exist_ok=True)
-        for p in sorted(
-            jobs.glob("*.json"), key=lambda p: json.loads(p.read_text())["created"]
-        ):
-            j = json.loads(p.read_text())
-            if j["status"] not in ["pending", "running", "images_prepared"]:
-                continue
-            j["status"] = "running"
-            atomic(p, j)
-            if heartbeat is not None:
-                heartbeat.update(job_started_at=time.time(), progress_at=time.time())
+        ready = []
+        for path in jobs.glob("*.json"):
             try:
-                publish(c, j)
-            except Exception as e:
-                j.update(status="failed", error=type(e).__name__)
-            atomic(p, j)
-            if heartbeat is not None:
-                heartbeat.update(job_started_at=None, progress_at=time.time())
+                j = read_job(path)
+            except FileNotFoundError:
+                continue
+            except (
+                ValueError,
+                TypeError,
+                KeyError,
+                UnicodeError,
+                OSError,
+                RecursionError,
+            ) as error:
+                try:
+                    quarantine_job(c, path, error)
+                except OSError as failure:
+                    queue_notice("job-quarantine-failed", failure)
+                continue
+            if j["status"] in ("pending", "running", "images_prepared"):
+                ready.append((path, j))
+        for path, j in sorted(
+            ready, key=lambda item: (item[1]["created"], item[0].name)
+        ):
+            try:
+                j["status"] = "running"
+                atomic(path, j)
+                if heartbeat is not None:
+                    heartbeat.update(
+                        job_started_at=time.time(), progress_at=time.time()
+                    )
+                try:
+                    publish(c, j)
+                except Exception as error:
+                    j.update(status="failed", error=type(error).__name__)
+                atomic(path, j)
+            except OSError as error:
+                queue_notice("job-state-write-failed", error)
+            finally:
+                if heartbeat is not None:
+                    heartbeat.update(job_started_at=None, progress_at=time.time())
 
 
 def render(c, directory):
@@ -536,10 +725,16 @@ def main():
 
         threading.Thread(target=beat, daemon=True).start()
         try:
+            delay = 2
             while True:
                 heartbeat["progress_at"] = time.time()
-                work_once(load(), heartbeat)
-                time.sleep(2)
+                try:
+                    work_once(load(), heartbeat)
+                    delay = 2
+                except OSError as error:
+                    queue_notice("queue-io-failed", error)
+                    delay = min(delay * 2, 60)
+                time.sleep(delay)
         finally:
             stop.set()
     elif o.command == "once":
@@ -558,28 +753,21 @@ def main():
             j["status"] = "pending"
             atomic(p, j)
     elif o.command == "rollback-images":
-        key, sha = o.args
-        repo(c, key)
-        if not SHA.fullmatch(sha):
-            raise ValueError("invalid SHA")
-        with lock(c):
-            manifest = json.loads(
-                (P(c["state_root"]) / "manifests" / key / (sha + ".json")).read_text()
-            )
-            base = P(c["images_root"]) / "repos" / key
-            for f in manifest["files"]:
-                if (
-                    hashlib.sha256(
-                        (base / "releases" / sha / f["path"]).read_bytes()
-                    ).hexdigest()
-                    != f["sha256"]
-                ):
-                    raise ValueError("rollback bytes mismatch")
-            switch(base, "images-" + sha)
-            atomic(P(c["state_root"]) / "published" / key, manifest)
+        rollback_images(c, *o.args)
     else:
         for p in (P(c["state_root"]) / "jobs").glob("*.json"):
-            j = json.loads(p.read_text())
+            try:
+                j = read_job(p)
+            except (
+                OSError,
+                ValueError,
+                TypeError,
+                KeyError,
+                UnicodeError,
+                RecursionError,
+            ) as error:
+                queue_notice("invalid-job-record", error)
+                continue
             print(j["id"], j["key"], j["sha"], j["status"])
 
 
