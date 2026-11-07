@@ -91,3 +91,7 @@ sudo docker compose exec -T publisher python -m open_assets publish project-b FU
 ## 对象清理账号
 
 完成初始化后，执行 sudo scripts/open-assets objects setup 可创建或收敛专用清理身份。重复执行保留凭据，仅为显式启用且声明独占写入的仓库授予删除权限。仓库或开关变化后需重新执行；Publisher 不增加 DeleteObject。完整步骤见[对象保留](object-retention.md)。
+
+## 恢复已清理对象
+
+在 Publisher 中执行 python -m open_assets restore-objects <仓库key> <完整SHA>，从固定 Git 分支历史重建并核验对象。它同步执行，不依赖任务重放；获取不到 Worker 锁时返回 busy 和退出码 2。命令及前提见[对象恢复](object-restore.md)。

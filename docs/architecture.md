@@ -77,3 +77,5 @@ Nginx 只读挂载 images 父目录，按仓库前缀读取 current。图片切�
 对象清理由 maintenance profile 的短时 object-cleaner 执行，复用 Worker/Queue 锁和保护引用，使用专用 S3 身份及只读图片挂载。默认定时预览，删除需独立显式启用；收据保存在发布状态下 object-retention/<key>/<sha>.json。已删对象版本的本地回滚被阻止，正常重新发布核验对象后写 restored 标记。详见[对象保留](object-retention.md)。
 
 对象清理进程另写每仓库 object-retention-results 摘要，独立保留完整预览与完整执行。主机采集只读这些摘要和当前策略，输出固定原因码、计数与时间；对象规划仍由低频维护任务完成，不进入 HTTP 请求或普通采集路径。
+
+对象恢复是同步维护 CLI，持有 Worker 锁，从固定分支历史导出并与原清单匹配，补齐对象后完整读回复核；完成后更新恢复标记和清单使用时间。它不经过发布队列，也不改变任务身份、归档或当前入口。Worker 在维护锁忙时跳过该轮，维持心跳；恢复状态独立保存到 object-restores/<key>/<sha>.json。

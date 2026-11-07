@@ -44,3 +44,7 @@ objects.py 只用于专用临时网络中的 OtterIO，目标固定为 http://ob
 ## 对象历史清理
 
 object-retention.py 需要 OPEN_ASSETS_OBJECT_RETENTION_TEST=1，仅使用 http://objects-fixture:9000 和 retention-fixture 桶。提供临时 root 与受限清理账号的凭据文件；清理账号只授权该测试桶的 assets/releases 前缀，按 object_retention_setup.iam_policy 生成。脚本验证默认预览、显式应用、重复执行、保护对象内容和越权拒绝，并实测错误 If-Match 的行为。测试时间只通过内部函数参数注入，CLI 没有绕过年龄的选项。所有对象删除仅作用于可销毁的测试实例。
+
+## 对象恢复
+
+object-restore.py 需要 OPEN_ASSETS_OBJECT_RESTORE_TEST=1，固定目标为 http://objects-fixture:9000 和 restore-fixture 桶。使用临时 root 准备并删除测试对象，另给恢复账号 ListBucket/GetObject/PutObject，明确不授予 DeleteObject。脚本用真实 Git 历史与 OtterIO 验证已完成/归档任务不阻止恢复，原任务字节和图片入口不变，以及重复执行、上传中断重试和同字节元数据修复。测试只连接可销毁实例，不挂载生产发布状态。

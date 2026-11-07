@@ -144,16 +144,16 @@ def enqueue(c, key, sha, delivery, kind="auto"):
 
 
 @contextlib.contextmanager
-def lock(c, name="worker"):
+def lock(c, name="worker", blocking=True):
     """Use separate queue/worker locks so uploads do not block durable enqueue."""
     p = P(c["state_root"])
     p.mkdir(parents=True, exist_ok=True)
     with (p / (name + ".lock")).open("a") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
+        fcntl.flock(f, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
         yield
 
 
-def s3client(c):
+def s3client(c, bounded=False):
     import boto3
     from botocore.config import Config
 
@@ -172,11 +172,20 @@ def s3client(c):
             s3={"addressing_style": "path"},
             request_checksum_calculation="when_required",
             response_checksum_validation="when_required",
+            **(
+                dict(
+                    connect_timeout=5,
+                    read_timeout=15,
+                    retries={"total_max_attempts": 1},
+                )
+                if bounded
+                else {}
+            ),
         ),
     )
 
 
-def export(c, r, g, sha, dest):
+def export(c, r, g, sha, dest, check=None):
     """Read committed blobs directly; do not checkout or execute repository code.
 
     Image checks use extensions, not file signatures. Other public files are
@@ -189,6 +198,8 @@ def export(c, r, g, sha, dest):
         x["mount_path"].strip("/") for x in c["repositories"] if x["mount_path"] != "/"
     }
     for entry in entries:
+        if check is not None:
+            check()
         if not entry:
             continue
         meta, name = entry.split(b"\t", 1)
@@ -575,7 +586,11 @@ def quarantine_job(c, path, error):
 
 def work_once(c, heartbeat=None):
     """Isolate invalid records; keep failure/retry semantics for valid jobs."""
-    with lock(c):
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(lock(c, blocking=False))
+        except BlockingIOError:
+            return  # A live maintenance holder must not stall the loop heartbeat.
         jobs = P(c["state_root"]) / "jobs"
         jobs.mkdir(parents=True, exist_ok=True)
         ready = []
@@ -720,6 +735,7 @@ def main():
             "worker",
             "once",
             "publish",
+            "restore-objects",
             "retry",
             "rollback-images",
             "status",
@@ -727,7 +743,16 @@ def main():
     )
     a.add_argument("args", nargs="*")
     o = a.parse_args()
-    c = load()
+    try:
+        c = load()
+    except Exception as error:
+        if o.command == "restore-objects":
+            print(
+                json.dumps(dict(status="failed", error=type(error).__name__)),
+                file=sys.stderr,
+            )
+            raise SystemExit(1) from None
+        raise
     if o.command == "validate":
         print("configuration valid")
     elif o.command == "render":
@@ -765,6 +790,24 @@ def main():
     elif o.command == "publish":
         with lock(c, "queue"):
             print(enqueue(c, *o.args, "manual", kind="manual"))
+    elif o.command == "restore-objects":
+        if len(o.args) != 2:
+            a.error("restore-objects requires a repository key and full commit SHA")
+        from .object_restore import run as restore_objects
+
+        try:
+            report = restore_objects(c, *o.args)
+        except (Exception, KeyboardInterrupt) as error:
+            print(
+                json.dumps(dict(status="failed", error=type(error).__name__)),
+                file=sys.stderr,
+            )
+            raise SystemExit(
+                130 if isinstance(error, KeyboardInterrupt) else 1
+            ) from None
+        print(json.dumps(report))
+        if report["status"] == "busy":
+            raise SystemExit(2)
     elif o.command == "retry":
         if not re.fullmatch("[0-9a-f]{64}", o.args[0]):
             raise ValueError("invalid job ID")
