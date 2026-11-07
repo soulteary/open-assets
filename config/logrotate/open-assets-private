@@ -1,0 +1,13 @@
+# Only deployment/build text logs; never rotate database or queue *.log files.
+/app/open-assets/private/updates/*/*.log {
+    daily
+    maxsize 10M
+    rotate 7
+    maxage 14
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    su root root
+}

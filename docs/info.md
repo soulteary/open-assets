@@ -47,3 +47,5 @@ journalctl -u open-assets-info.service --since '10 minutes ago' --no-pager
 内部证书长期有效不等于可以忽略私钥保护；到期提示也不替代异机告警。原始性能采样、私有快照与带实际地址的截图不要提交 GitHub。
 
 Docker 重启计数来自 Docker `RestartCount`，不包含所有手工或宿主机修复程序发起的重启。自动修复另有受限的操作记录，不能只靠该计数判断是否修复过。
+
+组件状态按“运行 / 健康 / 探测”展示：运行状态来自 Docker State，健康来自 Docker Healthcheck，探测是宿主机采集器额外执行的请求或心跳检查。`—` 表示未配置额外探测，不等于失败。目前 Traefik 使用容器内 `traefik healthcheck`，没有额外 HTTP 探针，因此正常显示为 `running / healthy / —`；其他组件显示 `ok` 是其额外探测通过。这些检查均不保证所有公开路由或发布结果正确。

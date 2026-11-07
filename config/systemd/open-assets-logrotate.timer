@@ -1,0 +1,10 @@
+[Unit]
+Description=Check Open Assets private log rotation hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

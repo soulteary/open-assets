@@ -81,3 +81,7 @@ The existing server was upgraded before publishing the source changes. Versions 
 - Thirty-four automated tests, Ruff and JavaScript syntax checks passed. Fresh initialization of configuration and ten-year certificates also passed in an isolated private mount namespace. This revision did not repeat the full cold-container DinD suite; historical results above apply to their original revisions.
 
 Automatic recovery restarts eligible persistently unhealthy containers within documented budgets. It does not repair corrupted data, malformed queue entries, low disk space or incorrect configuration. Previously documented rollback-copy and malformed-task risks remain open. See [health operations](health.md) and [risks](risks.md).
+
+## Compressed log retention — 2026-11-07
+
+All nine service containers were recreated with explicit Docker local logging (10m, three files, compression enabled) and returned healthy. Public bytes/Range and management authentication regression checks passed. Host journald limits and an hourly, scoped private text-log rotation timer were installed; isolated fixtures verified Docker retention and logrotate gzip content. Database queue logs, certificates, credentials and backups were excluded. Configuration and retention limits are documented in [logging](logging.md).

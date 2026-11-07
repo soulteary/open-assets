@@ -1,0 +1,14 @@
+[Unit]
+Description=Rotate Open Assets private deployment logs
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/logrotate --state /var/lib/open-assets-logrotate/status /etc/open-assets-logrotate.conf
+StateDirectory=open-assets-logrotate
+UMask=0077
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/app/open-assets/private/updates
