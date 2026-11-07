@@ -237,3 +237,29 @@ API 仅展示仓库 key、计数、大小、时间、固定状态/原因和策�
 ## 如何阅读说明与提示
 
 各详情先说明结论与下一步，统计口径放在“统计口径与操作边界”中展开。tab 栏上方汇总值得复核的记录/采样，点击直接进入对应面板；拒绝命令、旧数据或历史失败不等于当前所有服务故障。几个最近记录可能来自不同提交，具体排查使用 CLI 的 key/SHA 筛选。阶段名称提供中文含义，原始状态字段不改写。未来超过五分钟或非法时间的主机快照会被拒绝，不能一直显示为刚更新。使用流程与仍有的边界见[操作速查](operator.md)和[易用性检查](usability.md)。
+
+## Git 缓存与全局队列
+
+“Git 与队列”Tab 展示发布端各白名单仓库的 Git 缓存逻辑字节、每仓库预算和使用率，以及全局 Git 缓存、活动记录、合计记录和队列预留字节。全局缓存包含未配置仓库留下的目录，不等于各展示行之和，也不包含 Gitea 源仓库。队列统计复用准入函数：活动目录包括已完成任务，合计还包含归档与隔离文件；隔离原因文件单独计数。实际逻辑字节和按每文件至少 64 KiB 计算的预留字节分别显示，阈值依据预留值，不能与 `du` 的分配块占用直接比较。
+
+用量默认每 900 秒测量一次；systemd 每分钟检查是否需要刷新，间隔内直接复用缓存。总扫描时间限制 60 秒，目录项受 `resource_limits.scan_entries` 限制。采集以非阻塞方式申请 worker、queue 锁：有任务或维护操作占锁时跳过，保留上次完整值，下轮重试；取得锁后的测量期间，新发布和入队可能短暂等待。不要把它设置成高频压测探针。缓存过期、失败和锁忙都会标记为待复查，不以零替代。预算或仓库列表变化后，旧缓存不再作为当前统计，需要重新采集。
+
+宿主机读取固定缓存 `${DATA_ROOT}/info/resource-cache.json`，不让每 30 秒的主机快照或浏览器请求遍历状态目录。HTTP 容器仍只读最终 snapshot，不持有状态目录、Docker socket 或凭据。采集服务不调用 Git、S3 或容器管理 API，也不修改发布状态、版本和预算。
+
+以 root 安装，默认路径如下；自定义安装应同步修改 service 的工作目录、条件和读写路径：
+
+```sh
+cd /app/open-assets
+sudo install -m 0644 config/systemd/open-assets-resources.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo python3 -m open_assets.resource_info --root /app/open-assets --force
+sudo systemctl enable --now open-assets-resources.timer
+sudo systemctl start open-assets-info.service
+sudo systemctl status open-assets-resources.timer --no-pager
+```
+
+服务启动前需先运行 Publisher，使共享锁文件就绪。维护前停止 timer 和已运行的 service，维护标记只阻止下一次启动。采集失败可用 `journalctl -u open-assets-resources.service` 排查；普通刷新不绕过间隔，`--force` 只绕过间隔，不绕过锁和扫描限制。
+
+`.env` 可设置 `INFO_RESOURCE_INTERVAL_SECONDS=900`（60–86400 秒）与 `INFO_RESOURCE_WARN_PERCENT=80`（1–99）。到达提示百分比会显示接近上限，达到 100% 显示达到或超过预算；这些都是采样时的用量。它们不更改准入限制，也不发送外部告警，不自动清理、重试、扩容或切换版本。合计满额时，仅把任务从活动目录归档并不能释放合计额度。预算配置及处置步骤见[资源预算](resource-limits.md)。
+
+“最近超限”分别保存最近一次队列和 Git 的固定原因代码、时间和仓库 key；历史记录不是当前仍超限的证明。来源是本功能启用后被程序明确捕获的 `ResourceLimit`，不回溯扫描旧任务，也不能解释内核直接杀进程、Git 非零退出或记录落盘失败。原始异常、请求、remote、路径、域名和秘密不进入事件文件；两个固定槽位不会随失败次数增长。事件文件为 `${DATA_ROOT}/publisher/resource-limit-events.json`，应纳入私有备份。每次主机快照只限量读取该小文件，因此事件更新可早于下一次容量测量。没有记录不等于从未超限；损坏或无法读取时会明确提示原因未知。

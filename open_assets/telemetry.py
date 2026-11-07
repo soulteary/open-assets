@@ -380,6 +380,10 @@ def collect(root, refresh_storage=False):
     from .audit_info import summary as audit_summary
 
     result["restoration_audits"] = audit_summary(root, data_root)
+    from .resource_info import summary as resource_summary
+
+    result["resources"] = resource_summary(root, data_root)
+    result["resources"]["service"] = cleanup_service("open-assets-resources.service")
     result["capacity"] = capacity(disks, result["storage"], env, image_disk_index)
     result["collection_seconds"] = round(time.monotonic() - started, 3)
     performance = root / "private/performance/latest-summary.json"

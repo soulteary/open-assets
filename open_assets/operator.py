@@ -32,6 +32,7 @@ TIMERS = (
     "repair",
     "logrotate",
     "audits",
+    "resources",
 )
 
 

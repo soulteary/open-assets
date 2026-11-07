@@ -43,7 +43,7 @@ def policy(c):
     return result
 
 
-def usage(root, limit):
+def usage(root, limit, check=None):
     """Count logical bytes without following symlinks or opening file contents."""
     total = count = 0
     stack = [Path(root)]
@@ -51,8 +51,12 @@ def usage(root, limit):
         path = stack.pop()
         if not path.exists() and not path.is_symlink():
             continue
+        if not stat.S_ISDIR(path.lstat().st_mode):
+            raise ResourceLimit("unsafe_resource_entry")
         with os.scandir(path) as entries:
             for entry in entries:
+                if check:
+                    check()
                 count += 1
                 if count > limit:
                     raise ResourceLimit("scan_entries")
@@ -69,23 +73,25 @@ def usage(root, limit):
     return total, count
 
 
-def admit_queue(c):
-    """Reserve 64 KiB per record, including archived/quarantined records.
-
-    Caller holds the queue lock. No existing task is deleted to admit another.
-    Counting quarantine metadata too intentionally errs toward refusing work.
-    """
+def queue_usage(c, check=None):
+    """Use the same conservative accounting for admission and observation."""
     p = policy(c)
     root = Path(c["state_root"])
-    total = reserved = active = scanned = 0
+    total = reserved = active = scanned = actual = 0
+    locations = {}
     for name in ("jobs", "job-archive", "quarantine"):
+        locations[name] = 0
         folder = root / name
-        if not folder.exists():
+        if not folder.exists() and not folder.is_symlink():
             continue
+        if not stat.S_ISDIR(folder.lstat().st_mode):
+            raise ResourceLimit("scan_entries")
         stack = [folder]
         while stack:
             with os.scandir(stack.pop()) as entries:
                 for entry in entries:
+                    if check:
+                        check()
                     scanned += 1
                     if scanned > p["scan_entries"]:
                         raise ResourceLimit("scan_entries")
@@ -96,8 +102,26 @@ def admit_queue(c):
                         # Bad links/FIFOs are counted without following or opening
                         # them. Worker quarantine can then isolate them normally.
                         total += 1
+                        locations[name] += 1
+                        actual += info.st_size
                         active += name == "jobs"
                         reserved += max(65536, info.st_size)
+    return dict(
+        active_records=active,
+        total_records=total,
+        reserved_bytes=reserved,
+        bytes=actual,
+        locations=locations,
+    )
+
+
+def admit_queue(c):
+    """Caller holds queue lock; never delete existing records to admit work."""
+    p = policy(c)
+    value = queue_usage(c)
+    active, total, reserved = (
+        value[k] for k in ("active_records", "total_records", "reserved_bytes")
+    )
     if active + 1 > p["queue_active_records"]:
         raise ResourceLimit("queue_active_records")
     if total + 1 > p["queue_total_records"]:

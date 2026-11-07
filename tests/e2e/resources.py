@@ -43,7 +43,7 @@ with tempfile.TemporaryDirectory() as directory:
     git("-c", "commit.gpgsign=false", "commit", "-m", "fixture")
     sha = git("rev-parse", "HEAD").decode().strip()
     config = dict(
-        state_root=str(root / "state"),
+        state_root=str(root / "publisher"),
         images_root=str(images),
         endpoint="http://objects-fixture:9000",
         bucket="resource-fixture",
@@ -76,7 +76,7 @@ with tempfile.TemporaryDirectory() as directory:
         with patch.object(subprocess, "Popen", traced_popen):
             try:
                 core.work_once(config)
-                job = core.read_job(root / "state/jobs" / (job_id + ".json"))
+                job = core.read_job(root / "publisher/jobs" / (job_id + ".json"))
                 assert job["status"] == "published", (
                     job.get("error"),
                     job.get("resource_limit"),
@@ -86,13 +86,15 @@ with tempfile.TemporaryDirectory() as directory:
                 print(diagnostic.read(65536).decode(errors="replace"), file=sys.stderr)
                 raise
     assert (
-        core.read_job(root / "state/jobs" / (job_id + ".json"))["status"] == "published"
+        core.read_job(root / "publisher/jobs" / (job_id + ".json"))["status"]
+        == "published"
     )
     # A distinct manual task verifies already-present objects without replacing them.
     manual = core.enqueue(config, "assets", sha, "fixture", kind="manual")
     core.work_once(config)
     assert (
-        core.read_job(root / "state/jobs" / (manual + ".json"))["status"] == "published"
+        core.read_job(root / "publisher/jobs" / (manual + ".json"))["status"]
+        == "published"
     )
     assert core.enqueue(config, "assets", sha, "duplicate") == job_id
     try:
@@ -109,6 +111,35 @@ with tempfile.TemporaryDirectory() as directory:
         item,
     )
     assert (images / "repos/assets/current/pic.png").read_bytes() == b"fixture-image"
+    # Real measured state feeds the cached Info path; HTTP refresh never scans.
+    import yaml
+    from open_assets import resource_info
+    from open_assets.storage_info import write_cache
+
+    (root / "private").mkdir()
+    (root / "private/repositories.yaml").write_text(
+        yaml.safe_dump(dict(config, schema_version=1, state_root="/state"))
+    )
+    (root / ".env").write_text("DATA_ROOT=" + str(root) + "\n")
+    cached = resource_info.collect(config, {})
+    assert cached["status"] == "ok"
+    write_cache(root / "info/resource-cache.json", cached)
+    with (
+        patch.object(
+            resources, "usage", side_effect=AssertionError("unexpected rescan")
+        ),
+        patch.object(
+            resources,
+            "queue_usage",
+            side_effect=AssertionError("unexpected queue scan"),
+        ),
+    ):
+        assert resource_info.collect(config, cached) == cached
+        snapshot = resource_info.summary(root, root)
+        assert snapshot["status"] == "ok" and snapshot["queue"]["active_records"] == 2
+        assert snapshot["git_bytes"] >= size
+        assert snapshot["events"]["queue"]["code"] == "queue_active_records"
+        assert any(row["level"] == "critical" for row in snapshot["alerts"])
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
     assert peak < size, "publisher peak RSS reached the single-file size"
     print(
@@ -116,6 +147,9 @@ with tempfile.TemporaryDirectory() as directory:
             dict(
                 file_bytes=size,
                 publisher_peak_rss_bytes=peak,
+                resource_cache_no_rescan=True,
+                git_cache_bytes=snapshot["git_bytes"],
+                queue_records=snapshot["queue"]["total_records"],
                 initial_publish=True,
                 immutable_replay=True,
                 streamed_readback=True,

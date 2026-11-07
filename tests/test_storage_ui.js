@@ -210,7 +210,7 @@ test('tabs support mouse and keyboard selection and preserve state across refres
   assert.ok(html.indexOf('磁盘与文件系统')<html.indexOf('role="tablist"'));assert.ok(html.indexOf('证书有效期')<html.indexOf('role="tablist"'));
   assert.equal(detailPanels(ui).filter(id=>ui.get(id).hidden===false).length,1);
 });
-function detailPanels(){return ['storage','policy','restore','check','audit','operations'].map(k=>'panel-'+k);}
+function detailPanels(){return ['storage','resources','policy','restore','check','audit','operations'].map(k=>'panel-'+k);}
 test('audit cached locations and protection reasons stay separate from actual archival results', () => {
   const ui=setup(),data=fixture();
   data.restoration_audits={status:'ok',repositories:[{key:'assets',status:'ok',stale:false,measured_at:1,online:{records:20,bytes:4096,disk_bytes:8192},archive:{records:7,bytes:1024,disk_bytes:4096},retired:{records:1,bytes:0,disk_bytes:4096},candidate_records:3,candidate_bytes:128,eligible_records:5,invalid_records:1,protection_counts:{unfinished:2,'keep-last':20,'unresolved-source':1},archival:{status:'ok',attempt:{status:'failed',started_at:1,finished_at:2,candidate_records:3,archived_records:1,protected_records:22,keep_last:1,min_age_days:0,max_records:3,partial_possible:true,failure_reason:'io'},last_complete:{finished_at:1,archived_records:2}}}]};
@@ -240,4 +240,26 @@ test('tab fragments survive reload and use only local navigation', () => {
   ui.context.history={replaceState(_state,_title,value){calls.push(value);ui.context.location.hash=value;}};
   ui.context.initializeDetailTabs();assert.equal(ui.get('panel-check').hidden,false);
   ui.get('tab-audit').fire('click');assert.equal(ui.context.location.hash,'#audit');assert.deepEqual(calls,['#audit']);
+});
+
+test('Git and queue budgets warn without confusing old samples or historical refusals', () => {
+  const ui=setup(),data=fixture(),now=Date.now()/1000;
+  data.resources={status:'ok',stale:false,measured_at:now,interval_seconds:900,warning_percent:80,
+    budget:{git_repository_bytes:100,git_total_bytes:200,queue_active_records:10,queue_total_records:20,queue_reserved_bytes:655360},
+    queue:{active_records:9,total_records:10,reserved_bytes:655360,bytes:1234,locations:{jobs:9,'job-archive':1,quarantine:0}},
+    git_bytes:80,repositories:[{key:'assets',bytes:80}],alerts:[{code:'queue_reserved_bytes',level:'critical'}],
+    event_status:'ok',events:{queue:{code:'queue_active_records',at:now,key:'assets'}}};
+  ui.context.render(data);
+  assert.match(ui.get('resource-global').textContent,/已达到或超过预算/);
+  assert.match(ui.get('resource-repositories').textContent,/80.0%/);
+  assert.match(ui.get('resource-events').textContent,/历史/);
+  assert.match(ui.get('resource-events').textContent,/活动队列数量/);
+  ui.get('tab-resources').fire('click');assert.equal(ui.get('panel-resources').hidden,false);
+  data.resources.status='busy';ui.context.render(data);
+  assert.match(ui.get('resource-notice').textContent,/锁忙/);
+  assert.match(ui.get('resource-global').textContent,/旧采样/);
+  data.resources={status:'unavailable',events:{},event_status:'unavailable'};ui.context.render(data);
+  assert.match(ui.get('resource-notice').textContent,/不能按零占用判断/);
+  assert.match(ui.get('resource-events').textContent,/不可用/);
+  assert.equal(ui.get('resource-repositories').textContent,'');
 });

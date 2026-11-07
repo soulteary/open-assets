@@ -258,7 +258,14 @@ def restore_locked(config, repository, sha, report, s3, budget):
     budget.check()
     from .resources import fetch
 
-    fetch(config, repository, git_dir, check=budget.check)
+    try:
+        fetch(config, repository, git_dir, check=budget.check)
+    except Exception as error:
+        from .resource_events import record
+
+        with core.lock(config, "queue"):
+            record(config, error, key)
+        raise
     budget.check()
     if core.git(git_dir, "cat-file", "-t", sha, c=config).strip() != b"commit":
         raise ValueError("restoration target must be a commit")

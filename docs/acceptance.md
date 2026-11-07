@@ -2,6 +2,18 @@
 
 This file records checks performed at each implementation stage. Counts and component versions belong to their respective stage; documentation-only revisions do not imply a new production acceptance run.
 
+## Cached Git and queue dashboard — 2026-11-08
+
+- 223 Python tests pass in a network-isolated Linux container; 22 UI tests and Ruff checks pass. New coverage includes shared admission accounting, empty state, failure/busy/stale preservation, changed budgets, malformed cache/events, unsafe entries, time/scan limits, fixed-slot event retention and reads that forbid directory traversal.
+- Real disposable Git/OtterIO publication produces a 100,720,619-byte Git cache and two queue records. Cached Info summaries report these values, the captured queue refusal and full-budget alerts. Repeated collection within the interval and summary reads succeed with all resource traversal functions disabled. The 96 MiB publication/immutable replay/streamed verification and the complete restore/audit suite also pass; original jobs remain unchanged.
+- Native isolated Chrome checks the new resource Tab, 80%/full-budget notices, historical reason text, folded help, fragment navigation, mouse/keyboard selection and mobile containment. Switching tabs causes no extra API request. No production browser profile or hostname is used in those screenshots.
+- Deployment backs up application/Publisher/Info state and recreates only Publisher, Webhook and Info. Private configuration, credentials, CA, routing and the other five application container identities are retained. The new resources timer checks refresh eligibility every minute, with a 900-second default measurement interval.
+- Live signed SSH Push, checked rollback/roll-forward, historical attachments and public image/attachment byte and Range checks pass. A forced collector succeeds under the same read-only systemd filesystem restrictions; the installed service and unified doctor also succeed.
+- Authenticated live Info resource data matches the cached host summary for every configured repository. Repeated API/summary reads leave the measurement cache and published references unchanged; anonymous page/API/script access still requires Stargate. All four management authentication paths and the fresh Info snapshot pass.
+- Final checks confirm nine healthy containers and eight active timers. Public source/runtime hashes and privacy checks pass; runtime evidence and screenshots stay outside the public repository.
+
+Counters describe the last completed measurement, not a live quota reservation. Sampling takes shared locks briefly and skips when already busy; old values remain explicitly marked. Recent refusal slots start with this feature and are not a complete historical audit or evidence that a previously recorded limit still applies. Installation, timing, thresholds and operational limits are in [Info documentation](info.md#git-缓存与全局队列).
+
 ## Publication resource budgets — 2026-11-08
 
 - 215 Python tests pass in a network-isolated Linux container with a read-only root and 256 MiB memory limit; 21 UI tests and Ruff checks also pass. Coverage includes concurrent queue admission, deduplication at capacity, archived/quarantined record budgets, HTTP 503 with Retry-After, Git output/time limits and an actual refused transfer retaining the prior source ref.

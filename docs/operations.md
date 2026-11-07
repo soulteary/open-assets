@@ -100,3 +100,5 @@ Worker 对每份任务最多读取 64 KiB，拒绝符号链接、非普通文件
 本地副本也已清理时，使用 restore-objects KEY SHA --with-local；恢复后默认保持 current。需要切换时可组合 --with-local --rollback，在同一维护锁内校验对象与双副本后激活。中断或失败按恢复报告分别核对 S3、本地安装和 current/published，不把部分完成当作事务回滚。
 
 恢复审计容量采集由 `open-assets-audits.timer` 执行。升级或恢复 Publisher 状态前，把该 timer/service 也纳入停止范围；维护标记只防止新的服务启动，不终止已在运行的采集。归档后如需立即更新看板，先运行 `python3 -m open_assets.audit_info --root /app/open-assets --force`，再启动 Info 主机采样服务；默认刷新不会绕过统计间隔。实际归档摘要和 audit-cache.json 也应纳入私有备份。
+
+Git/队列测量由 `open-assets-resources.timer` 驱动，维护时同时停止该 timer 和正在运行的 service。默认缓存 15 分钟，`--force` 不绕过锁；安装和阈值见 [Info](info.md#git-缓存与全局队列)。备份包含 `info/resource-cache.json` 与 `publisher/resource-limit-events.json`；缓存可重建，事件文件只保存本功能启用后的最近原因。

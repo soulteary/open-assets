@@ -32,6 +32,25 @@ function capacityText(alert, data) {
   };
   return messages[alert.code] || '容量数据不可用，请检查采集状态';
 }
+const resourceLabels = {git_repository_bytes:'仓库 Git 缓存容量',git_total_bytes:'全局 Git 缓存容量',git_fetch_bytes:'单次 Git 拉取增长',git_min_free_bytes:'Git 磁盘可用空间',git_timeout_seconds:'Git 命令时限',git_process_memory_bytes:'Git 进程地址空间',git_output_bytes:'Git 元数据输出',scan_entries:'预算扫描目录项',unsafe_resource_entry:'Git 缓存存在不安全条目',queue_active_records:'活动队列数量',queue_total_records:'队列合计数量',queue_reserved_bytes:'队列预留字节'};
+function renderResources(data) {
+  const source=data.resources||{}, notice=byId('resource-notice'), global=byId('resource-global'), rows=byId('resource-repositories'), events=byId('resource-events');
+  global.replaceChildren();rows.replaceChildren();events.replaceChildren();
+  const valid=source.queue&&source.budget&&source.measured_at, old=data.stale||source.stale||source.status!=='ok'||source.service?.status==='failed';
+  notice.className=old||(source.alerts||[]).length?'warning':'muted';
+  notice.textContent=valid?'采样于 '+date(source.measured_at)+' · 间隔 '+source.interval_seconds+' 秒 · 提示阈值 '+source.warning_percent+'%'+(old?' · 旧数据 / 待复查；'+(source.service?.status==='failed'?'定时采集服务失败':({busy:'发布或队列锁忙',unavailable:'最近采集失败'})[source.status]||'采样已过期'):' · 当前采样有效'):'资源统计不可用，不能按零占用判断；请检查采集定时器。';
+  if(valid){
+    const q=source.queue,b=source.budget;
+    for(const [label,used,budget,format] of [['活动记录',q.active_records,b.queue_active_records,String],['合计文件记录',q.total_records,b.queue_total_records,String],['队列预留',q.reserved_bytes,b.queue_reserved_bytes,bytes],['Git 缓存合计',source.git_bytes,b.git_total_bytes,bytes]])global.append(item(label,'预算 '+format(budget)+' · 使用率 '+pct(used/budget*100),format(used),used*100>=budget*source.warning_percent));
+    global.append(el('p','队列实际逻辑字节 '+bytes(q.bytes)+' · 活动 '+q.locations.jobs+' / 归档 '+q.locations['job-archive']+' / 隔离 '+q.locations.quarantine,'muted'));
+    for(const alert of source.alerts||[])global.append(el('p',(alert.key?alert.key+'：':'')+(resourceLabels[alert.code]||'资源预算')+(alert.level==='critical'?'已达到或超过预算':'接近预算')+(old?'（旧采样，仅供复核）':''),'warning'));
+    for(const row of source.repositories||[]){const tr=el('tr');tr.append(storageCell(row.key),storageCell(bytes(row.bytes)),storageCell(bytes(b.git_repository_bytes)+' / '+pct(row.bytes/b.git_repository_bytes*100)));if(row.bytes*100>=b.git_repository_bytes*source.warning_percent||old)tr.className='warning';rows.append(tr);}
+  }
+  events.append(el('h3','最近超限记录（历史）'));
+  if(source.event_status==='unavailable')events.append(el('p','超限记录不可用，不能确认最近原因。','warning'));
+  else if(!Object.keys(source.events||{}).length)events.append(el('p','暂无已记录的超限事件；不能据此证明从未超限。','muted'));
+  for(const kind of ['queue','git']){const e=source.events?.[kind];if(e)events.append(el('p',(kind==='queue'?'队列':'Git')+'：'+(resourceLabels[e.code]||'未知限制')+' · '+date(e.at)+(e.key?' · '+e.key:'')+'；请结合当前采样复核。'));}
+}
 function renderStorage(data) {
   const notice = byId('capacity-notice'); notice.replaceChildren();
   let level = data.stale ? 'unknown' : data.capacity?.level || 'unknown';
@@ -100,9 +119,9 @@ function retentionHistory(row, name, label) {
   if (!value) return label + '：暂无完整记录';
   return label + '：' + date(value.finished_at) + (name === 'last_apply' ? ' · 已确认删除 ' + value.removed_versions + ' 版 / ' + value.removed_objects + ' 个 / ' + bytes(value.removed_bytes) : ' · 仅预览') + ' · ' + (retentionReasons[value.reason] || '状态待核对') + (value.policy_changed ? '（配置已变更）' : value.stale ? '（历史记录，已过期）' : '');
 }
-const detailTabs = ['storage','policy','restore','check','audit','operations'];
+const detailTabs = ['storage','resources','policy','restore','check','audit','operations'];
 let activeDetailTab = 'storage';
-const detailTabLabels = {storage:'仓库容量',policy:'对象保留',restore:'恢复结果',check:'状态核对',audit:'结案与审计',operations:'运维记录'};
+const detailTabLabels = {storage:'仓库容量',resources:'Git 与队列',policy:'对象保留',restore:'恢复结果',check:'状态核对',audit:'结案与审计',operations:'运维记录'};
 const phaseLabel = value => ({validate:'前提检查',git:'读取 Git',export:'导出内容','local-preflight':'本地预检查',preflight:'对象预检查',upload:'上传对象',verify:'对象读回校验','local-install':'本地副本安装',activate:'切换引用',complete:'流程结束',objects:'对象核对',full:'完整副本核对',images:'图片副本核对',references:'引用核对',barrier:'清理屏障核对'})[value] || '未识别阶段';
 function selectDetailTab(key, focus = false) {
   if (!detailTabs.includes(key)) return;
@@ -132,6 +151,7 @@ function renderDetailAttention(data) {
   const issues={};
   const any=(name,predicate)=>(data[name]?.repositories||[]).some(predicate);
   if(data.storage?.status!=='ok'||any('storage',r=>r.measurement_stale||r.measurement_status!=='ok'||r.partial_versions||r.unusual_entries)||any('object_storage',r=>r.stale||r.status!=='ok'))issues.storage='本地或对象统计待更新，或存在未配对/异常条目';
+  if(data.resources?.status!=='ok'||data.resources?.stale||(data.resources?.alerts||[]).length||data.resources?.event_status==='unavailable'||data.resources?.service?.status==='failed')issues.resources='Git 或队列接近预算，或采样需要复核';
   if(data.object_retention?.status!=='ok'||any('object_retention',r=>r.result_status==='unavailable'||['failed','busy','running'].includes(r.attempt?.status)||r.last_plan?.stale||(r.invalid_fields||[]).length))issues.policy='对象规划有失败、跳过、未完成或过期记录';
   if(data.restorations?.status!=='ok'||any('restorations',r=>r.result_status==='unavailable'||(r.attempt&&(r.attempt.status!=='complete'||r.attempt.uncertain||r.attempt.scope_changed))))issues.restore='存在恢复未完成、不确定或无法读取的结果';
   if(data.restoration_checks?.status!=='ok'||any('restoration_checks',r=>r.result_status==='unavailable'||(r.attempt&&(r.attempt.status!=='complete'||r.attempt.diagnosis!=='verified'||['source_uncertain','stale','source_changed','scope_changed','manifest_changed','references_changed','observation_unavailable'].some(k=>r.attempt[k])))))issues.check='核对有问题、原报告仍不确定或结果需重新确认';
@@ -268,6 +288,7 @@ function render(data) {
   byId('freshness').textContent = (data.stale ? '采集已过期 · ' : '更新于 ') + date(data.collected_at) + ' · ' + data.age_seconds + ' 秒前';
   byId('freshness').className = data.stale ? 'warning' : '';
   renderStorage(data);
+  renderResources(data);
   renderObjectRetention(data);
   renderRestorations(data);
   renderRestoreChecks(data);
@@ -310,7 +331,7 @@ function render(data) {
 }
 async function update() {
   try { const r = await fetch('/api/status', {cache: 'no-store'}); if (!r.ok) throw new Error(); render(await r.json()); byId('error').hidden = true; }
-  catch { byId('audit-notice').textContent = '审计容量与归档结果无法刷新，下表可能是旧数据。'; byId('audit-notice').className = 'warning'; byId('restore-close-notice').textContent = '结案结果无法刷新，下表可能是旧数据。'; byId('restore-close-notice').className = 'warning'; byId('restore-check-notice').textContent = '核对结果无法刷新，下表可能是旧数据。'; byId('restore-check-notice').className = 'warning'; byId('restore-notice').textContent = '恢复报告无法刷新，下表可能是旧结果，请复核采样时间。'; byId('restore-notice').className = 'warning'; byId('object-retention-notice').textContent = '对象保留数据无法刷新，下表保留旧结果，请复核采样时间。'; byId('object-retention-notice').className = 'warning'; byId('error').hidden = false; byId('error').textContent = '无法读取最新状态，请检查登录会话与采集定时器。下方可能是上次成功读取的数据。'; const notice = byId('capacity-notice'); notice.className = 'capacity-notice capacity-unknown'; notice.replaceChildren(el('strong', '容量状态待确认'), el('p', '无法取得最新状态，下方保留上次采样，不能作为实时容量依据。')); }
+  catch { byId('resource-notice').textContent='资源数据无法刷新，下方可能是旧数据。';byId('resource-notice').className='warning'; byId('audit-notice').textContent = '审计容量与归档结果无法刷新，下表可能是旧数据。'; byId('audit-notice').className = 'warning'; byId('restore-close-notice').textContent = '结案结果无法刷新，下表可能是旧数据。'; byId('restore-close-notice').className = 'warning'; byId('restore-check-notice').textContent = '核对结果无法刷新，下表可能是旧数据。'; byId('restore-check-notice').className = 'warning'; byId('restore-notice').textContent = '恢复报告无法刷新，下表可能是旧结果，请复核采样时间。'; byId('restore-notice').className = 'warning'; byId('object-retention-notice').textContent = '对象保留数据无法刷新，下表保留旧结果，请复核采样时间。'; byId('object-retention-notice').className = 'warning'; byId('error').hidden = false; byId('error').textContent = '无法读取最新状态，请检查登录会话与采集定时器。下方可能是上次成功读取的数据。'; const notice = byId('capacity-notice'); notice.className = 'capacity-notice capacity-unknown'; notice.replaceChildren(el('strong', '容量状态待确认'), el('p', '无法取得最新状态，下方保留上次采样，不能作为实时容量依据。')); }
 }
 initializeDetailTabs();
 update(); setInterval(update, 30000);

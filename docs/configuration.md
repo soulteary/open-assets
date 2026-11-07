@@ -86,3 +86,5 @@ OtterIO 对象容量使用独立 open-assets-objects.timer：固定 15 分钟缓
 object_retention 为独立对象保留策略，支持全局默认和仓库覆盖。默认 enabled=false、exclusive_writer=false，不继承本地 retention.enabled。清理预算、专用 IAM、预览与执行步骤见[对象保留](object-retention.md)。
 
 恢复审计容量使用独立 `open-assets-audits.timer`，默认 15 分钟缓存，30 秒主机采集只读取过滤缓存及实际归档摘要。无需新增 S3 权限或容器；安装、手工强制采样、口径与上限见 [Info 审计统计](info.md#审计容量缓存与实际归档结果)。
+
+Git/队列的低频缓存由 `open-assets-resources.timer` 驱动；采集间隔与提示百分比位于 `.env`，准入预算仍位于 `private/repositories.yaml`。安装与字段含义见 [Info](info.md#git-缓存与全局队列)。

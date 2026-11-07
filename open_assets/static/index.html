@@ -20,6 +20,7 @@
   <p class="muted details-guide">主机快照约 30 秒更新；仓库、对象和审计各有独立采样时间。下方默认显示最近记录，几个面板可能对应不同提交。</p>
   <div class="details-tabs" role="tablist" aria-label="仓库与运维详情">
     <button type="button" role="tab" id="tab-storage" aria-controls="panel-storage" aria-selected="false" tabindex="-1">仓库容量</button>
+    <button type="button" role="tab" id="tab-resources" aria-controls="panel-resources" aria-selected="false" tabindex="-1">Git 与队列</button>
     <button type="button" role="tab" id="tab-policy" aria-controls="panel-policy" aria-selected="false" tabindex="-1">对象保留</button>
     <button type="button" role="tab" id="tab-restore" aria-controls="panel-restore" aria-selected="false" tabindex="-1">恢复结果</button>
     <button type="button" role="tab" id="tab-check" aria-controls="panel-check" aria-selected="false" tabindex="-1">状态核对</button>
@@ -28,6 +29,9 @@
   </div>
   <div id="panel-storage" role="tabpanel" aria-labelledby="tab-storage" tabindex="0">
   <section id="storage-section"><div class="section-head"><h2>仓库容量与保留</h2><span>本地容量 · OtterIO 对象缓存</span></div><p class="section-summary">先看本地占用和采样时间，再查看保留策略。对象逻辑大小与本地磁盘占用不能直接相加。</p><details class="section-help"><summary>统计口径与操作边界</summary><p class="muted">占用含本地版本、暂存、Git 缓存与清单，按文件系统分配块估算；本地占用不含共享任务归档、OSS、备份和 Docker 日志。OtterIO 按仓库前缀低频采集，展示对象数量与逻辑大小；上传中的部分版本也会计入，分页结果并非同一时刻的快照。</p></details><p class="action-note">空间告警先检查磁盘与发布预留；历史清理先预览，再决定是否应用。</p><p id="cleanup-notice" role="status" class="muted"></p><div class="table-wrap"><table class="storage-table"><thead><tr><th>仓库</th><th>本地版本</th><th>本地占用</th><th>OtterIO 对象</th><th>本地保留策略</th><th>本地最近完整清理</th></tr></thead><tbody id="repositories"></tbody></table></div></section>
+  </div>
+  <div id="panel-resources" role="tabpanel" aria-labelledby="tab-resources" tabindex="0">
+  <section><div class="section-head"><h2>Git 缓存与全局队列</h2><span>定时缓存 · 只读</span></div><p class="section-summary">查看发布端 Git 历史缓存与队列准入余量；达到提示阈值时先检查增长原因。</p><details class="section-help"><summary>统计口径与操作边界</summary><p>Git 为逻辑文件字节，合计包含未配置仓库的残留缓存；不含 Gitea 源仓库。队列合计包含活动、归档和隔离文件；每个文件至少预留 64 KiB，并非实际磁盘占用。达到阈值只提示，不自动删除、重试或提高预算。采样锁忙时保留旧值；最近超限是历史记录，不代表当前仍超限，也不覆盖进程被内核直接终止的情况。</p></details><p id="resource-notice" role="status" class="muted"></p><div id="resource-global"></div><div class="table-wrap"><table><thead><tr><th>仓库</th><th>Git 缓存</th><th>仓库预算 / 使用率</th></tr></thead><tbody id="resource-repositories"></tbody></table></div><div id="resource-events"></div><p class="action-note">核对配置与定时器：sudo systemctl status open-assets-resources.timer；预算配置见 private/repositories.yaml 的 resource_limits。归档不释放队列合计额度。</p></section>
   </div>
   <div id="panel-policy" role="tabpanel" aria-labelledby="tab-policy" tabindex="0">
   <section><div class="section-head"><h2>OtterIO 对象保留</h2><span>只读规划快照 · 预览与实际执行分开记录</span></div><p class="section-summary">预览只列候选；实际删除需要策略、专用权限和显式执行。最近失败不能由旧的完整结果覆盖。</p><details class="section-help"><summary>统计口径与操作边界</summary><p class="muted">待清理数量与容量来自最近完整规划，实际执行记录中的规划数为删除前快照，并非实时剩余量。大小均为逻辑字节；保护原因可重叠计数。配置变更、在途任务和采样间隔都会影响实际候选，执行时会重新计算。页面不提供清理操作。</p></details><p class="action-note">参数或保护引用变化后重新预览；归档容量请到“结案与审计”查看。</p><p id="object-retention-notice" role="status" class="muted"></p><div class="table-wrap"><table class="object-retention-table"><thead><tr><th>仓库</th><th>对象保留策略</th><th>待清理（规划快照）</th><th>最近尝试 / 跳过原因</th><th>最近完整结果</th></tr></thead><tbody id="object-retention-repositories"></tbody></table></div></section>

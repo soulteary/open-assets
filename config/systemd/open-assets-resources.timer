@@ -1,0 +1,11 @@
+[Unit]
+Description=Check cached Git and queue measurement refresh every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=1min
+AccuracySec=10s
+Unit=open-assets-resources.service
+
+[Install]
+WantedBy=timers.target

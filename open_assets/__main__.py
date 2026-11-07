@@ -146,7 +146,13 @@ def _enqueue(c, key, sha, delivery, kind="auto"):
     ):
         from .resources import admit_queue
 
-        admit_queue(c)
+        try:
+            admit_queue(c)
+        except Exception as error:
+            from .resource_events import record
+
+            record(c, error, key, category="queue")
+            raise
         atomic(
             path,
             dict(
@@ -698,6 +704,10 @@ def work_once(c, heartbeat=None):
 
                     if isinstance(error, ResourceLimit):
                         j["resource_limit"] = str(error)
+                        from .resource_events import record
+
+                        with lock(c, "queue"):
+                            record(c, error, j["key"])
                 atomic(path, j)
             except OSError as error:
                 queue_notice("job-state-write-failed", error)
@@ -864,6 +874,9 @@ def execute(a, o):
     elif o.command == "serve":
         http.server.ThreadingHTTPServer(("0.0.0.0", 9000), Handler).serve_forever()
     elif o.command == "worker":
+        # Create the shared lock even before the first event is admitted.
+        with lock(c, "queue"):
+            pass
         heartbeat = dict(
             updated_at=time.time(), progress_at=time.time(), job_started_at=None
         )
