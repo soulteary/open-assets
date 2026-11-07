@@ -13,6 +13,8 @@ from botocore.exceptions import ClientError
 from open_assets import object_restore as restore
 from open_assets import restore_check as check
 from open_assets import restore_check_info as check_info
+from open_assets import restore_close as close
+from open_assets import restore_close_info as close_info
 from open_assets import __main__ as core
 
 assert os.environ.get("OPEN_ASSETS_OBJECT_RESTORE_TEST") == "1"
@@ -128,6 +130,19 @@ try:
         diagnosed["diagnosis"] == "issues"
         and diagnosed["checks"]["barrier"]["status"] == "blocked"
     )
+    source_before_close = restore.report_path(
+        config, "assets", fixture.sha
+    ).read_bytes()
+    receipt_before_close = fixture.marker.read_bytes()
+    refused = close.run(
+        config, "assets", fixture.sha, "Fixture partial upload must not close", writer
+    )
+    assert refused["status"] == "refused" and refused["reason"] == "check-failed"
+    assert (
+        restore.report_path(config, "assets", fixture.sha).read_bytes()
+        == source_before_close
+    )
+    assert fixture.marker.read_bytes() == receipt_before_close
     resumed = restore.run(config, "assets", fixture.sha, writer)
     assert resumed["uploaded_objects"] == len(fixture.manifests[0]["files"]) - 1
     key = fixture.prefix() + "images/pic.png"
@@ -186,6 +201,21 @@ try:
         and observed["attempt"]["diagnosis"] == "verified"
     )
     assert not observed["attempt"].get("observation_unavailable")
+    closed = close.run(
+        config, "assets", fixture.sha, "Fixture operator keeps existing current", writer
+    )
+    assert closed["status"] == "closed" and not closed["current_is_target"]
+    assert restore.report_path(config, "assets", fixture.sha).read_bytes() == evidence
+    fixture.assert_current()
+    audit = fixture.state / "restore-closures/assets" / closed["audit_id"]
+    audit_bytes = {p.name: p.read_bytes() for p in audit.iterdir()}
+    assert audit_bytes["source.json"] == evidence
+    closed_row = close_info.summary(host, host / "data")["repositories"][0]
+    assert (
+        closed_row["result_status"] == "ok"
+        and closed_row["attempt"]["status"] == "closed"
+    )
+    assert not closed_row["attempt"].get("observation_unavailable")
     activated = restore.run(
         config, "assets", fixture.sha, writer, with_local=True, rollback=True
     )
@@ -206,8 +236,14 @@ try:
         and diagnosed["current_is_target"]
         and diagnosed["published_is_target"]
     )
+    closed_row = close_info.summary(host, host / "data")["repositories"][0]
+    assert (
+        closed_row["attempt"]["source_changed"]
+        and closed_row["attempt"]["references_changed"]
+    )
+    assert audit_bytes == {p.name: p.read_bytes() for p in audit.iterdir()}
     print(
-        "Isolated restore: S3 bytes, metadata, retry and no-delete identity verified; both local copies rebuilt and repeated without activation; explicit rollback activated verified version; filtered Info success/partial-failure/local/activation observations verified; read-only diagnostic checks and Info snapshots verified; jobs unchanged"
+        "Isolated restore: S3 bytes, metadata, retry and no-delete identity verified; both local copies rebuilt and repeated without activation; explicit rollback activated verified version; filtered Info success/partial-failure/local/activation observations verified; read-only diagnostic checks and Info snapshots verified; explicit closure/audit preservation/changed-source Info verified; jobs unchanged"
     )
 finally:
     fixture.doCleanups()

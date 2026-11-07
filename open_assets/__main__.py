@@ -779,6 +779,7 @@ def main():
             "publish",
             "restore-objects",
             "check-restore",
+            "close-restore",
             "retry",
             "rollback-images",
             "status",
@@ -795,7 +796,12 @@ def main():
         action="store_true",
         help="explicitly activate a fully restored version; requires --with-local",
     )
+    a.add_argument("--reason", help="private audit reason for close-restore")
     o = a.parse_args()
+    if o.command == "close-restore" and o.reason is None:
+        a.error("close-restore requires --reason")
+    if o.reason is not None and o.command != "close-restore":
+        a.error("--reason requires close-restore")
     if (o.with_local or o.rollback) and o.command != "restore-objects":
         a.error("restoration flags require restore-objects")
     if o.rollback and not o.with_local:
@@ -803,7 +809,7 @@ def main():
     try:
         c = load()
     except Exception as error:
-        if o.command in ("restore-objects", "check-restore"):
+        if o.command in ("restore-objects", "check-restore", "close-restore"):
             print(
                 json.dumps(dict(status="failed", error=type(error).__name__)),
                 file=sys.stderr,
@@ -867,13 +873,18 @@ def main():
         print(json.dumps(report))
         if report["status"] == "busy":
             raise SystemExit(2)
-    elif o.command == "check-restore":
+    elif o.command in ("check-restore", "close-restore"):
         if len(o.args) != 2:
-            a.error("check-restore requires a repository key and full commit SHA")
-        from .restore_check import run as check_restore
-
+            a.error(o.command + " requires a repository key and full commit SHA")
         try:
-            report = check_restore(c, *o.args)
+            if o.command == "close-restore":
+                from .restore_close import run as close_restore
+
+                report = close_restore(c, *o.args, reason=o.reason)
+            else:
+                from .restore_check import run as check_restore
+
+                report = check_restore(c, *o.args)
         except (Exception, KeyboardInterrupt) as error:
             print(
                 json.dumps(dict(status="failed", error=type(error).__name__)),
@@ -883,7 +894,7 @@ def main():
         print(json.dumps(report))
         if report["status"] == "busy":
             raise SystemExit(2)
-        if report.get("diagnosis") != "verified":
+        if report.get("diagnosis") != "verified" and report["status"] != "closed":
             raise SystemExit(1)
     elif o.command == "retry":
         if not re.fullmatch("[0-9a-f]{64}", o.args[0]):

@@ -125,3 +125,5 @@ restore-objects 追加 --with-local 可从 Git 重建已清理的 public 和图�
 Info 看板提供[各仓库最近恢复结果](docs/info.md#最近恢复结果)：对象与本地副本校验、显式回滚结果，以及失败、未结案和状态不确定提示。
 
 恢复未结案或状态不确定时，可使用[恢复状态核对 CLI](docs/restore-check.md)重新检查对象、本地副本与 current/published；核对默认不修复、不切换，Info 展示独立结果与时效提示。
+
+需要人工确认恢复已处理时，使用[显式结案 CLI](docs/restore-close.md)：同锁重新核对通过后记录结案，保留原始报告和审计，不自动切换版本或解除清理屏障；Info 单独展示结案结果。

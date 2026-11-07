@@ -171,3 +171,19 @@ test('unavailable and interrupted check reports do not imply successful reconcil
   assert.match(text,/尚无核对记录/);assert.match(text,/不能确认结果/);assert.match(text,/核对未结案/);assert.match(text,/无法比较当前报告/);assert.doesNotMatch(text,/核对通过/);
   ui.context.fetch=async()=>{throw Error('offline')};await ui.context.update();assert.match(ui.get('restore-check-notice').textContent,/无法刷新/);
 });
+
+test('closure results keep original uncertainty and current selection explicit', () => {
+  const ui=setup(),data=fixture();
+  const a={status:'closed',reason:'verified',started_at:1,finished_at:2,source_status:'failed',source_uncertain:true,current_is_target:false,published_is_target:false};
+  data.restoration_closures={status:'ok',repositories:[{key:'assets',result_status:'ok',attempt:a}]};ui.context.render(data);
+  let text=ui.get('restore-close-repositories').textContent;
+  assert.match(text,/已显式结案（当时）/);assert.match(text,/原报告的不确定状态保持原样/);assert.match(text,/保留其他当前版本/);assert.match(text,/未自动切换版本或解除屏障/);
+  a.source_changed=true;a.references_changed=true;ui.context.render(data);text=ui.get('restore-close-repositories').textContent;
+  assert.match(text,/此结案不涵盖新尝试/);assert.match(text,/结案是历史记录/);
+  Object.assign(a,{status:'refused',reason:'check-failed'});ui.context.render(data);assert.match(ui.get('restore-close-repositories').textContent,/结案被拒绝/);assert.match(ui.get('restore-close-repositories').textContent,/重新核对未通过/);
+});
+test('uncompleted and unreadable closure audits do not fall back to success', async () => {
+  const ui=setup(),data=fixture();data.restoration_closures={status:'ok',repositories:[{key:'never',result_status:'never'},{key:'bad',result_status:'unavailable'},{key:'interrupted',result_status:'ok',attempt:{status:'running',started_at:1}}]};ui.context.render(data);
+  const text=ui.get('restore-close-repositories').textContent;assert.match(text,/尚无结案记录/);assert.match(text,/不能确认结果/);assert.match(text,/不能视为结案/);assert.doesNotMatch(text,/已显式结案/);
+  ui.context.fetch=async()=>{throw Error('offline')};await ui.context.update();assert.match(ui.get('restore-close-notice').textContent,/无法刷新/);
+});

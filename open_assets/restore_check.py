@@ -211,40 +211,47 @@ def run(config, key, sha, s3=None):
             stack.enter_context(core.lock(config, blocking=False))
         except BlockingIOError:
             return dict(status="busy", key=key, sha=sha)
-        path = report_path(config, key, sha)
-        restore.directories(path.parent.parent, path.parent)
-        report = dict(
-            schema_version=1,
-            key=key,
-            sha=sha,
-            status="running",
-            phase="validate",
-            started_at=time.time(),
-            scope_digest=bucket_scope(config),
-            diagnosis="unresolved",
-            verified_objects=0,
-            checks={
-                name: dict(status="unavailable", reason="not-checked")
-                for name in CHECKS
-            },
+        return run_locked(config, key, sha, s3, budget)
+
+
+def run_locked(config, key, sha, s3=None, budget=None):
+    """Caller holds Worker lock; retain the normal diagnostic report."""
+    from . import __main__ as core
+
+    budget = budget or restore.Budget()
+    path = report_path(config, key, sha)
+    restore.directories(path.parent.parent, path.parent)
+    report = dict(
+        schema_version=1,
+        key=key,
+        sha=sha,
+        status="running",
+        phase="validate",
+        started_at=time.time(),
+        scope_digest=bucket_scope(config),
+        diagnosis="unresolved",
+        verified_objects=0,
+        checks={
+            name: dict(status="unavailable", reason="not-checked") for name in CHECKS
+        },
+    )
+    core.atomic(path, report)
+    try:
+        inspect(
+            config,
+            key,
+            sha,
+            report,
+            s3 or core.s3client(config, bounded=True),
+            budget,
         )
-        core.atomic(path, report)
-        try:
-            inspect(
-                config,
-                key,
-                sha,
-                report,
-                s3 or core.s3client(config, bounded=True),
-                budget,
-            )
-            report.update(status="complete", phase="complete")
-        except (Exception, KeyboardInterrupt) as error:
-            report.update(
-                status="failed",
-                diagnosis="unresolved",
-                failure_reason=reason(error),
-            )
-        report["finished_at"] = time.time()
-        core.atomic(path, report)
-        return report
+        report.update(status="complete", phase="complete")
+    except (Exception, KeyboardInterrupt) as error:
+        report.update(
+            status="failed",
+            diagnosis="unresolved",
+            failure_reason=reason(error),
+        )
+    report["finished_at"] = time.time()
+    core.atomic(path, report)
+    return report

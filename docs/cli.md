@@ -101,3 +101,7 @@ sudo docker compose exec -T publisher python -m open_assets publish project-b FU
 ## 核对恢复状态
 
 `python -m open_assets check-restore <仓库key> <完整SHA>` 只读核对对象、本地两份副本、current/published 与清理屏障，并保存独立诊断报告。默认不修复、不切换，也不结案原恢复。完整前提、结果与退出码见[恢复状态核对](restore-check.md)。
+
+## 显式结案恢复
+
+`python -m open_assets close-restore <仓库key> <完整SHA> --reason '人工复核原因'` 在同一维护锁内重新核对，通过后单独记录结案。原恢复必须未结案或状态不确定，且 current/published 必须存在并一致；不切换版本、不解除清理屏障、不改写原报告。前提、退出码和私有审计说明见[恢复结案](restore-close.md)。
