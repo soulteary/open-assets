@@ -16,7 +16,7 @@ NODE_NAME=beijing-1 PUBLIC_BASE=example.org python3 scripts/prepare-private.py
 
 `NODE_NAME` 默认 `node-name`，接受 1–48 位小写字母、数字和连字符，首尾必须是字母或数字。`PUBLIC_BASE` 必须显式传入，使用自己控制的小写 DNS 域名，不带协议、端口、路径或末尾的点。国际化域名请先转换为 ASCII/Punycode。
 
-脚本生成 `img-<节点名>.<基域>`、`oss-<节点名>.<基域>` 和四个 `<服务>-<节点名>.console.<基域>` 管理域名，再把 `NODE_NAME`、`PUBLIC_BASE` 和解析后的 `STORAGE_DOMAIN`、`GIT_DOMAIN` 写入 `.env`。凭据、内部证书、Stargate 和 Traefik 路由使用同一组生成结果。
+脚本生成 `img-<节点名>.<基域>`、`oss-<节点名>.<基域>` 和五个 `<服务>-<节点名>.console.<基域>` 管理域名（storage、git、auth、traefik、info），再把 `NODE_NAME`、`PUBLIC_BASE` 和解析后的 `STORAGE_DOMAIN`、`GIT_DOMAIN` 写入 `.env`。凭据、内部证书、Stargate 和 Traefik 路由使用同一组生成结果。
 
 这里的 `.env` 是初始化输出，不会在脚本启动时自动读回作为输入。重新执行初始化仍会重写配置；不要用它修改正在运行的服务。
 
@@ -29,7 +29,7 @@ python3 scripts/deployment_config.py \
 docker compose config --quiet
 ```
 
-检查器不输出域名或秘密，不修改文件。它核对六个运行域名及两个 Compose 域名是否与节点元数据一致，不检查 DNS、证书有效期或服务健康。
+检查器不输出域名或秘密，不修改文件。它核对七个运行域名及两个 Compose 域名是否与节点元数据一致，不检查 DNS、证书有效期或服务健康。
 
 只改 `.env` 中的 `NODE_NAME` 或 `PUBLIC_BASE` 不会更新 `private/domains.json`、Stargate 回调、内部证书或 Traefik 动态路由。迁移节点域名需要分别安排 DNS、证书、Gitea ROOT_URL/SSH 地址、OC public URL、Stargate 回调和入口路由，并处理旧链接；当前没有自动迁移命令。不要通过重跑初始化替代迁移。
 

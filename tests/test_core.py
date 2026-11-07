@@ -94,11 +94,12 @@ class GitExport(unittest.TestCase):
 
 class Webhook(unittest.TestCase):
     def test_signature_and_durable_enqueue(self):
-        import threading
-        import urllib.request
-        import urllib.error
-        import hmac
         import hashlib
+        import hmac
+        import threading
+        import urllib.error
+        import urllib.request
+
         import yaml
 
         with tempfile.TemporaryDirectory() as t:
@@ -172,7 +173,7 @@ class AuthenticationNavigation(unittest.TestCase):
             p = pathlib.Path(t)
             domains = {
                 k: f"{k}-node-name.console.lab.dev"
-                for k in ["git", "storage", "traefik", "auth"]
+                for k in ["git", "storage", "traefik", "auth", "info"]
             }
             domains.update(img="img-node-name.lab.dev", oss="oss-node-name.lab.dev")
             (p / "domains.json").write_text(json.dumps(domains))
@@ -191,10 +192,11 @@ class AuthenticationNavigation(unittest.TestCase):
                 check=True,
             )
             routes = json.loads((p / "routes.yaml").read_text())["http"]["routers"]
+            self.assertEqual(routes["info"]["middlewares"], ["console-auth"])
             landing = routes["auth-return"]
             self.assertEqual(landing["middlewares"], ["console-auth"])
             self.assertIn("Path(`/__auth_return`)", landing["rule"])
-            for k in ["git", "storage", "traefik"]:
+            for k in ["git", "storage", "traefik", "info"]:
                 self.assertIn(f"Host(`{domains[k]}`)", landing["rule"])
             for k in ["img", "oss", "auth"]:
                 self.assertNotIn(domains[k], landing["rule"])

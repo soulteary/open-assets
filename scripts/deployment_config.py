@@ -2,12 +2,12 @@
 
 import argparse
 import json
-from pathlib import Path
 import re
+from pathlib import Path
 
 DEFAULT_NODE_NAME = "node-name"
-ROLES = ("oss", "img", "storage", "git", "auth", "traefik")
-MANAGEMENT_ROLES = {"storage", "git", "auth", "traefik"}
+ROLES = ("oss", "img", "storage", "git", "auth", "traefik", "info")
+MANAGEMENT_ROLES = {"storage", "git", "auth", "traefik", "info"}
 
 
 def build_domains(node_name, public_base):
@@ -90,7 +90,7 @@ def main():
             1,
             "Naming check failed; inspect the private configuration locally. No files changed.\n",
         )
-    print("Node naming matches all six runtime domains; no files changed")
+    print("Node naming matches all configured runtime domains; no files changed")
 
 
 if __name__ == "__main__":

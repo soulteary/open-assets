@@ -1,0 +1,18 @@
+[Unit]
+Description=Open Assets bounded container health repair
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/app/open-assets
+ExecStart=/usr/bin/python3 -m open_assets.repair --root /app/open-assets --apply
+Environment=DOCKER_CONFIG=/tmp/open-assets-docker
+UMask=0077
+TimeoutStartSec=90
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/data/asset-stack/repair

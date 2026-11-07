@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 import yaml
@@ -384,7 +385,7 @@ def publish(c, j):
         shutil.rmtree(staging, ignore_errors=True)
 
 
-def work_once(c):
+def work_once(c, heartbeat=None):
     """Resume interrupted nonterminal work; failed jobs require an explicit retry."""
     with lock(c):
         jobs = P(c["state_root"]) / "jobs"
@@ -397,11 +398,15 @@ def work_once(c):
                 continue
             j["status"] = "running"
             atomic(p, j)
+            if heartbeat is not None:
+                heartbeat.update(job_started_at=time.time(), progress_at=time.time())
             try:
                 publish(c, j)
             except Exception as e:
                 j.update(status="failed", error=type(e).__name__)
             atomic(p, j)
+            if heartbeat is not None:
+                heartbeat.update(job_started_at=None, progress_at=time.time())
 
 
 def render(c, directory):
@@ -518,9 +523,25 @@ def main():
     elif o.command == "serve":
         http.server.ThreadingHTTPServer(("0.0.0.0", 9000), Handler).serve_forever()
     elif o.command == "worker":
-        while True:
-            work_once(load())
-            time.sleep(2)
+        heartbeat = dict(
+            updated_at=time.time(), progress_at=time.time(), job_started_at=None
+        )
+        stop = threading.Event()
+
+        def beat():
+            while not stop.is_set():
+                heartbeat["updated_at"] = time.time()
+                atomic(P(c["state_root"]) / "worker-heartbeat.json", dict(heartbeat))
+                stop.wait(10)
+
+        threading.Thread(target=beat, daemon=True).start()
+        try:
+            while True:
+                heartbeat["progress_at"] = time.time()
+                work_once(load(), heartbeat)
+                time.sleep(2)
+        finally:
+            stop.set()
     elif o.command == "once":
         work_once(c)
     elif o.command == "publish":

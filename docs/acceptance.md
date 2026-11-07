@@ -4,7 +4,7 @@ This file records checks performed at each implementation stage. Counts and comp
 
 Platform: Ubuntu Linux amd64, single host, Docker Compose. Public examples use lab.dev; production identifiers and credentials are excluded.
 
-Verified versions: OtterIO RELEASE.2026-10-28T07-52-43Z; OC RELEASE.2026-10-28T07-34-44Z; Stargate 1.2.7; Gitea 28.0.0-rootless; Traefik 3.7.13; Nginx 1.28. Component image digests are pinned in the example environment file; existing Traefik retains its prior image.
+Initial deployment versions: OtterIO RELEASE.2026-10-28T07-52-43Z; OC RELEASE.2026-10-28T07-34-44Z; Stargate 1.2.7; Gitea 28.0.0-rootless; Traefik 3.7.13; Nginx 1.28. The current example environment has since been updated; the upgrade section below records the later baseline.
 
 Passed:
 
@@ -65,3 +65,19 @@ The naming change was installed and verified on the existing server before publi
 - Twenty-two ordinary automated tests, Ruff checks and shell syntax validation passed. The updated GIF and current text examples use generic node names.
 
 These checks cover naming initialization and regression of the existing deployment. They do not repeat the full fresh-stack Git Push suite or Chrome upload/download/logout checks for this revision. Two separate temporary-directory reproductions confirmed the rollback-copy and malformed-task issues documented in [the risk assessment](risks.md); those issues remain open.
+
+## Software, TLS, Info and health recovery — 2026-11-07
+
+The existing server was upgraded before publishing the source changes. Versions and release rationale are recorded in [upgrade notes](upgrade.md); measurements and limits are in [performance](performance.md).
+
+- Stargate 1.3.1, Gitea 28.3.0-rootless, Traefik 3.7.17 and Nginx 1.30.6-alpine were installed with pinned image digests. OtterIO/OC remain at their latest verified compatible release pair. Disabled Warden/Herald services were not introduced.
+- Existing Traefik configuration, ACME state and DNS credentials were backed up before changes. Required application/auth networks now survive Traefik recreation.
+- Certs Maker 3.8.2 generated independent storage and console CAs and leaves, each valid for 3650 days. Chain, hostname, key pair and validity checks passed; clients continue verifying TLS.
+- All nine containers have passing Docker health checks. Host timers collect read-only status and perform bounded, scoped recovery. A controlled Info-only SIGSTOP fault went from unhealthy to healthy in 77.94 seconds. Docker lifecycle events and repair records confirmed recovery; public images stayed available. Docker RestartCount did not increase for this host-initiated restart and is not a complete repair counter.
+- Real SSH Push through the signed Webhook reached published in 3.722 seconds. New current image bytes changed, while the preceding immutable attachment stayed readable. Repeated repository onboarding reused resources without routine service recreation.
+- Gitea private egress now permits the fixed Webhook IP on a dedicated internal network rather than all private destinations. OC IAM login, CSRF rejection, upload, public-byte comparison and logout/revocation passed HTTP/API checks.
+- Anonymous requests to all four management services redirected to Stargate; authenticated requests passed. Chrome login reached Info and rendered component health, a full-width disk section and separate internal/public certificate columns. The authentication status link displays status; it does not provide logout UI. Screenshots remain private.
+- Bounded loopback reads completed 3989 requests without errors. These are short, capped local tests, not WAN capacity measurements.
+- Thirty-four automated tests, Ruff and JavaScript syntax checks passed. Fresh initialization of configuration and ten-year certificates also passed in an isolated private mount namespace. This revision did not repeat the full cold-container DinD suite; historical results above apply to their original revisions.
+
+Automatic recovery restarts eligible persistently unhealthy containers within documented budgets. It does not repair corrupted data, malformed queue entries, low disk space or incorrect configuration. Previously documented rollback-copy and malformed-task risks remain open. See [health operations](health.md) and [risks](risks.md).

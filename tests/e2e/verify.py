@@ -81,7 +81,7 @@ def test_edge(manager, domains):
         "-CA",
         str(ROOT / "private/tls/ca.crt"),
         "-CAkey",
-        str(ROOT / "private/tls/ca.key"),
+        str(ROOT / "private/tls/issuers/storage/root.key"),
         "-CAcreateserial",
         "-days",
         "2",
@@ -135,7 +135,7 @@ def test_edge(manager, domains):
         )
     )
     (edge / "static.yaml").chmod(0o644)
-    image = "ghcr.io/traefik/traefik:3.7.13"
+    image = manager.env["TRAEFIK_IMAGE"]
     command("docker", "pull", image)
     digest = json.loads(command("docker", "image", "inspect", image))[0]["RepoDigests"][
         0

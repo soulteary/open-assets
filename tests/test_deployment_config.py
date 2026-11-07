@@ -1,8 +1,8 @@
 import importlib.util
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 spec = importlib.util.spec_from_file_location(
     "deployment_config",
@@ -18,7 +18,7 @@ class NodeNaming(unittest.TestCase):
             domains = config.build_domains(node, "example.org")
             self.assertEqual(domains["img"], f"img-{node}.example.org")
             self.assertEqual(domains["storage"], f"storage-{node}.console.example.org")
-            self.assertEqual(len(domains), 6)
+            self.assertEqual(len(domains), 7)
 
     def test_reject_invalid_dns_before_rendering(self):
         for node in ("", "A", "-node", "node-", "x.y", "a/b", "${OTHER}", "a" * 49):

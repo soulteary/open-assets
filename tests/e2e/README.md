@@ -4,7 +4,7 @@
 
 ## 环境
 
-在可丢弃的 Linux VM 或 Docker-in-Docker 容器内放置源码，路径为 `/app/open-assets`。安装 Docker Engine/Compose、Python 3、PyYAML、bcrypt、Git、OpenSSH 客户端、OpenSSL 和 curl。需要能拉取 .env.example 中的镜像，以及 Traefik 3.7.13。
+在可丢弃的 Linux VM 或 Docker-in-Docker 容器内放置源码，路径为 `/app/open-assets`。安装 Docker Engine/Compose、Python 3、PyYAML、bcrypt、Git、OpenSSH 客户端、OpenSSL 和 curl。需要能拉取 .env.example 中的镜像，以及模板固定的 Traefik 镜像，并可下载固定版本的 Certs Maker 官方发行包。
 
 只把源码复制进去，不复制真实 private、.env、SSH 配置、ACME 状态或云凭据。测试 Docker daemon 不应发布远程 API，不要挂载生产或宿主机 Docker socket。容器内运行 DinD 需要额外权限，应把它限制在专用测试环境中。
 

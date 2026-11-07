@@ -12,6 +12,8 @@ docker compose logs --tail=100 publisher webhook
 
 status 依次输出任务 ID、仓库 key、SHA 和状态。任务 JSON 位于 `/data/asset-stack/publisher/jobs/`，失败时只保存异常类型，不保存完整请求或秘密。日志为空不代表没有任务，也不代表发布成功。
 
+容器健康与最近的受限恢复动作可在 [Info](info.md) 查看。自动重启有作用域、冷却和次数上限，不会替代坏配置、坏任务或存储数据的处理。维护和有意暂停服务前按 [健康恢复说明](health.md) 设置 maintenance.flag 并暂停恢复定时器，确认在途恢复已结束。
+
 failed 任务需人工重试：
 
 ```sh

@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Open Assets unhealthy containers every 30 seconds
+
+[Timer]
+OnBootSec=60s
+OnUnitInactiveSec=30s
+AccuracySec=2s
+Unit=open-assets-repair.service
+
+[Install]
+WantedBy=timers.target

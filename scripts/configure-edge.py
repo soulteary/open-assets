@@ -21,6 +21,7 @@ services = {
         ("auth", "http://172.29.19.3:8080"),
         ("storage", "https://oc:9090"),
         ("objects", "https://otterio:9000"),
+        ("info", "http://info:8082"),
     ]
 }
 services["storage"]["loadBalancer"]["serversTransport"] = "console-tls"
@@ -33,6 +34,7 @@ for key, service in [
     ("auth", "auth"),
     ("storage", "storage"),
     ("traefik", "api@internal"),
+    ("info", "info"),
 ]:
     rule = f"Host(`{dom[key]}`)"
     if key == "oss":
@@ -43,13 +45,15 @@ for key, service in [
         "service": service,
         "tls": {"certResolver": "le"},
     }
-    if key in ["git", "storage", "traefik"]:
+    if key in ["git", "storage", "traefik", "info"]:
         routers[key]["middlewares"] = ["console-auth"]
 # This exact endpoint must reach Stargate before a host-only session exists.
 # Its own ticket validation is the boundary; all other management paths use auth.
 routers["session-exchange"] = {
     "rule": "("
-    + " || ".join("Host(`" + dom[k] + "`)" for k in ["git", "storage", "traefik"])
+    + " || ".join(
+        "Host(`" + dom[k] + "`)" for k in ["git", "storage", "traefik", "info"]
+    )
     + ") && Path(`/_session_exchange`)",
     "entryPoints": ["websecure"],
     "service": "auth",
@@ -61,7 +65,9 @@ services["navigation"] = {"loadBalancer": {"servers": [{"url": "http://nginx:808
 # OC Origin/Fetch Metadata headers. It remains protected by ForwardAuth.
 routers["auth-return"] = {
     "rule": "("
-    + " || ".join("Host(`" + dom[k] + "`)" for k in ["git", "storage", "traefik"])
+    + " || ".join(
+        "Host(`" + dom[k] + "`)" for k in ["git", "storage", "traefik", "info"]
+    )
     + ") && Path(`/__auth_return`)",
     "entryPoints": ["websecure"],
     "service": "navigation",

@@ -1,4 +1,9 @@
 name: asset-stack
+x-health: &health
+  interval: 20s
+  timeout: 5s
+  retries: 3
+  start_period: 30s
 x-app: &app
   image: open-assets:local
   build: .
@@ -14,17 +19,46 @@ x-app: &app
     S3_SECRET_KEY_FILE: /run/private/publisher_secret
     S3_CA_FILE: /run/private/ca.crt
     WEBHOOK_SECRET_FILE: /run/private/webhook_secret
+    WORKER_MAX_JOB_SECONDS: ${WORKER_MAX_JOB_SECONDS:-1800}
     GIT_SSH_COMMAND: ssh -i /run/private/deploy_key -o UserKnownHostsFile=/run/private/known_hosts -o StrictHostKeyChecking=yes
   networks: [git, publish]
 services:
   webhook:
     <<: *app
     command: [serve]
+    healthcheck:
+      <<: *health
+      test: [CMD, python, -m, open_assets.health, webhook]
+    networks:
+      hooks:
+        ipv4_address: ${WEBHOOK_IP}
     volumes: ['./private/repositories.yaml:/config/repositories.yaml:ro','./private/webhook_secret:/run/private/webhook_secret:ro','${DATA_ROOT}/publisher:/state']
   publisher:
     <<: *app
     command: [worker]
+    healthcheck:
+      <<: *health
+      test: [CMD, python, -m, open_assets.health, publisher]
     volumes: ['./private/repositories.yaml:/config/repositories.yaml:ro','./private/publisher:/run/private:ro','${DATA_ROOT}/publisher:/state','${DATA_ROOT}/images:/images']
+  info:
+    image: open-assets:local
+    user: '20010:20010'
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    healthcheck:
+      <<: *health
+      test: [CMD, python, -m, open_assets.health, info]
+    entrypoint: [python, -m, open_assets.info]
+    environment:
+      INFO_AUTH_URL: https://auth-${NODE_NAME}.console.${PUBLIC_BASE}
+    volumes: ['${DATA_ROOT}/info:/info:ro']
+    tmpfs: ['/tmp:size=16m']
+    mem_limit: 128m
+    cpus: 0.25
+    pids_limit: 64
+    networks: [edge]
   nginx:
     image: ${NGINX_IMAGE}
     user: '20010:20010'
@@ -32,6 +66,9 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: ['no-new-privileges:true']
+    healthcheck:
+      <<: *health
+      test: [CMD, curl, -fsS, --max-time, '3', -o, /dev/null, 'http://127.0.0.1:8081/__health']
     entrypoint: [nginx]
     command: ['-c','/etc/nginx/open-assets.conf','-g','daemon off;']
     volumes: ['./config/nginx.conf:/etc/nginx/open-assets.conf:ro','./private/generated:/etc/nginx/generated:ro','${DATA_ROOT}/images:/srv/images:ro']
@@ -45,6 +82,10 @@ services:
     tmpfs: ['/tmp:size=128m']
     user: '20002:20002'
     restart: unless-stopped
+    healthcheck:
+      <<: *health
+      start_period: 60s
+      test: [CMD, curl, -fsS, --max-time, '3', --cacert, /tls/ca.crt, --resolve, 'storage.internal:9000:127.0.0.1', -o, /dev/null, 'https://storage.internal:9000/otterio/health/ready']
     command: [server,--address,':9000',--console-address,':9001',--certs-dir,/tls,/data]
     environment:
       HOME: /tmp
@@ -67,6 +108,9 @@ services:
     security_opt: ['no-new-privileges:true']
     tmpfs: ['/tmp:size=64m']
     restart: unless-stopped
+    healthcheck:
+      <<: *health
+      test: [CMD, curl, -fsS, --max-time, '3', --cacert, /tls/ca.crt, --resolve, '${STORAGE_DOMAIN}:9090:127.0.0.1', -H, 'Host: ${STORAGE_DOMAIN}', -o, /dev/null, 'https://${STORAGE_DOMAIN}:9090/']
     entrypoint: [oc-console]
     command: [--auth-mode,native,--address,'0.0.0.0:9090',--public-url,'https://${STORAGE_DOMAIN}',--s3-url,'https://storage.internal:9000',--admin-url,'https://storage.internal:9001',--s3-ca,/tls/ca.crt,--admin-ca,/tls/ca.crt,--tls-cert,/tls/console.crt,--tls-key,/tls/console.key,--data-dir,/app-data,--archive-dir,/archives,--allow-writes]
     volumes: ['./private/tls/console:/tls:ro','${DATA_ROOT}/console:/app-data','${DATA_ROOT}/archives:/archives']
@@ -74,6 +118,10 @@ services:
   stargate:
     image: ${STARGATE_IMAGE}
     restart: unless-stopped
+    healthcheck:
+      <<: *health
+      start_period: 10s
+      test: [CMD, wget, -q, -O, /dev/null, 'http://127.0.0.1:8080/healthz']
     env_file: ./private/stargate.env
     networks:
       auth:
@@ -83,6 +131,10 @@ services:
     image: ${GITEA_IMAGE}
     user: '20001:20001'
     restart: unless-stopped
+    healthcheck:
+      <<: *health
+      start_period: 120s
+      test: [CMD, curl, -fsS, --max-time, '3', -o, /dev/null, 'http://127.0.0.1:3000/api/healthz']
     environment:
       GITEA__server__DOMAIN: ${GIT_DOMAIN}
       GITEA__server__ROOT_URL: https://${GIT_DOMAIN}/
@@ -94,14 +146,14 @@ services:
       GITEA__server__LFS_START_SERVER: 'false'
       GITEA__security__INSTALL_LOCK: 'true'
       GITEA__service__DISABLE_REGISTRATION: 'true'
-      GITEA__webhook__ALLOWED_HOST_LIST: webhook
+      GITEA__webhook__ALLOWED_HOST_LIST: webhook,${WEBHOOK_IP}
       GITEA__security__DISABLE_WEBHOOKS: 'false'
       GITEA__security__DISABLE_GIT_HOOKS: 'true'
       GITEA__actions__ENABLED: 'false'
       GITEA__database__DB_TYPE: sqlite3
     volumes: ['${DATA_ROOT}/gitea/data:/var/lib/gitea','${DATA_ROOT}/gitea/config:/etc/gitea']
     ports: ['2222:2222','127.0.0.1:13000:3000']
-    networks: [edge, git]
+    networks: [edge, git, hooks]
 networks:
   edge:
     name: open-assets-edge
@@ -109,6 +161,10 @@ networks:
     name: open-assets-auth
     ipam:
       config: [{subnet: 172.29.19.0/24}]
+  hooks:
+    internal: true
+    ipam:
+      config: [{subnet: '${WEBHOOK_SUBNET}'}]
   git: {}
   publish: {}
   admin:

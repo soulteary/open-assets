@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Open Assets · 运行状态</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+<main>
+  <header><div><p class="eyebrow">OPEN ASSETS / SYSTEM INFO</p><h1>运行状态</h1><p>主机资源、服务健康与证书有效期</p></div><div><div id="freshness" role="status">正在读取采集结果…</div><p><a href="/session">认证状态</a></p></div></header>
+  <p id="error" role="alert" hidden></p>
+  <section aria-label="主机概览" id="overview" class="overview"></section>
+  <section><div class="section-head"><h2>服务组件</h2><span>CPU 100% = 一个逻辑核；内存为 Docker 工作集</span></div><div class="table-wrap"><table><thead><tr><th>组件</th><th>版本</th><th>运行 / 健康 / 探测</th><th>CPU</th><th>内存</th><th>Docker 重启计数</th></tr></thead><tbody id="components"></tbody></table></div></section>
+  <section><h2>磁盘与文件系统</h2><div id="disks"></div></section>
+  <section><h2>证书有效期</h2><div class="certificate-columns"><div><h3>内网证书与 CA</h3><div id="internal-certificates"></div></div><div><h3>ACME 公网证书</h3><div id="public-certificates"></div></div></div></section>
+  <section id="repair-section" hidden><h2>最近的健康恢复操作</h2><p class="muted">仅记录受限重启尝试；是否恢复以组件当前健康状态为准。</p><div id="repairs"></div></section>
+  <section id="performance-section" hidden><h2>最近一次限量压测</h2><p id="performance-details" class="muted">固定并发、固定时长的读取测试；不是服务器容量上限。</p><div class="table-wrap"><table><thead><tr><th>场景</th><th>并发</th><th>请求数 / 错误</th><th>吞吐 req/s</th><th>p50 / p95 / p99 ms</th></tr></thead><tbody id="performance"></tbody></table></div></section>
+  <footer><span id="host-details"></span><p>只读快照，每 30 秒刷新。采集失败会保留旧数据并提示过期。看板不提供命令执行、文件浏览或配置修改。</p></footer>
+</main>
+</body>
+</html>

@@ -4,16 +4,18 @@ This preserves existing secret files but rewrites runtime configuration. It is
 not an upgrade/merge command and must not be rerun to inspect credentials.
 """
 
-import bcrypt
+import json
 import os
 import pathlib as pl
 import secrets
-import subprocess
-import json
-import yaml
 import shutil
+import subprocess
 
+import bcrypt
+import yaml
 from deployment_config import DEFAULT_NODE_NAME, build_domains, render_env
+from internal_certs import generate
+from certs_maker import ensure_binary
 
 P = pl.Path
 app = P("/app/open-assets")
@@ -79,66 +81,16 @@ if not (p / "publisher/deploy_key").exists():
         str(p / "publisher/deploy_key"),
     )
 tls = p / "tls"
-if not (tls / "ca.key").exists():
-    run(
-        "openssl",
-        "req",
-        "-x509",
-        "-newkey",
-        "rsa:3072",
-        "-nodes",
-        "-days",
-        "3650",
-        "-subj",
-        "/CN=Open Assets Private CA",
-        "-keyout",
-        str(tls / "ca.key"),
-        "-out",
-        str(tls / "ca.crt"),
+if not (tls / "ca.crt").exists():
+    # The directory skeleton above is empty; Certs Maker owns the new TLS tree.
+    for empty in [tls / "storage", tls / "console"]:
+        empty.rmdir()
+    template = dict(
+        line.split("=", 1)
+        for line in (app / ".env.example").read_text().splitlines()
+        if "=" in line and not line.startswith("#")
     )
-for name, cn, cert, key in [
-    ("storage", "storage.internal", "public.crt", "private.key"),
-    ("console", dom["storage"], "console.crt", "console.key"),
-]:
-    t = tls / name
-    if not (t / cert).exists():
-        (t / "extensions").write_text(
-            f"subjectAltName=DNS:{cn},DNS:otterio\nextendedKeyUsage=serverAuth\n"
-        )
-        run(
-            "openssl",
-            "req",
-            "-new",
-            "-newkey",
-            "rsa:2048",
-            "-nodes",
-            "-subj",
-            "/CN=" + cn,
-            "-keyout",
-            str(t / key),
-            "-out",
-            str(t / "request.csr"),
-        )
-        run(
-            "openssl",
-            "x509",
-            "-req",
-            "-in",
-            str(t / "request.csr"),
-            "-CA",
-            str(tls / "ca.crt"),
-            "-CAkey",
-            str(tls / "ca.key"),
-            "-CAcreateserial",
-            "-days",
-            "365",
-            "-extfile",
-            str(t / "extensions"),
-            "-out",
-            str(t / cert),
-        )
-    (tls / "storage/CAs").mkdir(exist_ok=True)
-    shutil.copy(tls / "ca.crt", t / "ca.crt")
+    generate(tls, dom, ensure_binary(app, template))
 shutil.copy(tls / "ca.crt", p / "publisher/ca.crt")
 env = render_env((app / ".env.example").read_text(), node_name, base)
 (app / ".env").write_text(env)
@@ -153,7 +105,7 @@ h = bcrypt.hashpw(sec("stargate_password").encode(), bcrypt.gensalt()).decode()
             "COOKIE_SECURE=true",
             "SESSION_EXCHANGE_REDIRECT_PATH=/__auth_return",
             "CALLBACK_ALLOWED_HOSTS="
-            + ",".join(dom[k] for k in ["storage", "traefik", "git"]),
+            + ",".join(dom[k] for k in ["storage", "traefik", "git", "info"]),
             "SESSION_EXCHANGE_SECRET=" + sec("session_secret"),
             "TRUSTED_PROXIES=172.29.19.2",
             "WARDEN_ENABLED=false",

@@ -4,6 +4,8 @@ Open Assets 将 Gitea 仓库中的文件发布到 OtterIO 和 Nginx。开发者�
 
 项目适用于自己维护图片、文档和下载文件的单机环境。它包含发布程序、仓库接入 CLI、Docker Compose 配置，以及接入现有 Traefik 的脚本。许可证为 [Apache-2.0](LICENSE)。
 
+Info 看板通过 Stargate 查看组件健康、CPU/内存、磁盘、证书到期时间和最近压测结果。容器带健康检查；宿主机可以按冷却时间与次数上限重启持续不健康的服务。网页容器只读快照，不持有 Docker 管理权限。
+
 ## 发布后的地址
 
 假设仓库 key 为 `main-images`，图片前缀为 `/`，提交包含：
@@ -35,6 +37,8 @@ https://oss-node-name.lab.dev/attachments/repositories/main-images/releases/<完
 - 接入其他仓库：使用 [仓库接入 CLI](docs/cli.md)。命令协调 Gitea、S3 权限和 Nginx 映射，不会替你提交内容。
 - 调整配置：参考 [配置说明](docs/configuration.md) 和 [仓库与 URL 配置](docs/repositories.md)。
 - 处理失败、回滚或备份：参考 [运行维护](docs/operations.md) 和 [故障排查](docs/troubleshooting.md)。
+- 查看监控与恢复策略：参考 [Info 看板](docs/info.md) 和 [健康检查与受限恢复](docs/health.md)。
+- 更新组件、替换十年内部证书或复现采样：参考 [升级说明](docs/upgrade.md) 和 [性能与缓存分析](docs/performance.md)。
 - 理解程序行为和验证范围：参考 [发布流程](docs/architecture.md)、[验收记录](docs/acceptance.md) 与 [安全说明](SECURITY.md)。
 
 ## 日常操作
@@ -67,9 +71,11 @@ sudo docker compose exec -T publisher python -m open_assets status
 
 - **自动发布**：Gitea 向内部 Webhook 接收器发送签名事件。接收器校验签名、仓库和分支，将任务持久化后返回 202。单个 Publisher 串行处理任务，从固定 remote 拉取提交并导出 `public/`，上传、校验 OtterIO 对象，再原子切换对应仓库的图片 `current`。接收器和 Publisher 使用同一个应用镜像，以不同命令和挂载权限运行。
 - **公开读取**：现有 Traefik 提供 HTTPS 和路由。图片请求由 Nginx 从只读挂载的当前图片目录提供；附件请求经 OtterIO S3 读取带 SHA 的版本对象。两个入口均允许匿名 GET/HEAD，不经过 Stargate。普通图片发布不需要重载 Nginx；新增仓库映射时才生成、校验并重载配置。
-- **管理访问**：Traefik 通过 Stargate ForwardAuth 校验会话，通过后才将业务请求转发给 Gitea、OC Console 或 Dashboard/API。Stargate 不代理这些应用的业务流量；Gitea 和 OC 保留各自的应用认证。OC 通过内网 HTTPS 访问 OtterIO S3 和 Admin API，`9001` 是 Admin API，管理网页由独立 OC Console 提供。Git SSH 使用 Gitea 密钥，不经过 HTTP 认证层。
+- **管理访问**：Traefik 通过 Stargate ForwardAuth 校验会话，通过后才将业务请求转发给 Gitea、OC Console、Dashboard/API 或 Info。Stargate 不代理这些应用的业务流量；Gitea 和 OC 保留各自的应用认证。OC 通过内网 HTTPS 访问 OtterIO S3 和 Admin API，`9001` 是 Admin API，管理网页由独立 OC Console 提供。Git SSH 使用 Gitea 密钥，不经过 HTTP 认证层。
 
 宿主机仓库接入 CLI 使用本机 Docker 和私有管理员配置。应用容器不挂载 Docker socket，也不获得这项管理权限。
+
+宿主机另有两个独立定时任务：采集器写入过滤后的状态快照；恢复程序只处理明确项目/服务范围内的持续 unhealthy 容器。重启不是数据修复，维护时应设置标记，持续故障仍需人工处理。内部证书使用 Certs Maker 3.8.2，叶证书与 CA 均为 3650 天；公网证书继续由原 Traefik 的 ACME 管理。
 
 图中仓库接入命令 `repo ensure` 负责协调仓库、只读 Deploy Key、Webhook、S3 权限和 Nginx 映射，支持重复执行。具体参数见 [仓库接入 CLI](docs/cli.md)；发布状态、故障恢复和跨系统操作的限制见 [发布流程](docs/architecture.md)。
 
