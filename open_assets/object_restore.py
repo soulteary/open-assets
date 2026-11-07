@@ -154,6 +154,66 @@ def metadata_matches(response, item):
     )
 
 
+def prepare_local(base, sha, staging, files, budget):
+    """Validate every existing copy before network writes; never replace conflicts."""
+    from . import __main__ as core
+
+    releases = base / "releases"
+    directories(releases)
+    full, image = releases / sha, releases / ("images-" + sha)
+    image_files = core.image_files(files)
+    for path, expected in ((full, files), (image, image_files)):
+        if path.exists() or path.is_symlink():
+            core.verify_tree(path, expected, check=budget.check)
+    if image.exists():
+        return None
+    temporary = Path(tempfile.mkdtemp(prefix=".restore-images-", dir=base))
+    try:
+        shutil.copytree(staging / "images", temporary, dirs_exist_ok=True)
+        core.verify_tree(temporary, image_files, check=budget.check)
+        core.sync_tree(temporary)
+        return temporary
+    except BaseException:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
+
+
+def install_local(config, key, sha, staging, image_staging, files, report, budget):
+    from . import __main__ as core
+
+    releases = Path(config["images_root"]) / "repos" / key / "releases"
+    for source, target, expected, field in (
+        (staging, releases / sha, files, "local_full_rebuilt"),
+        (
+            image_staging,
+            releases / ("images-" + sha),
+            core.image_files(files),
+            "local_images_rebuilt",
+        ),
+    ):
+        budget.check()
+        if target.exists() or target.is_symlink():
+            core.verify_tree(target, expected, check=budget.check)
+            continue
+        if source is None:
+            raise ValueError("missing prepared local restoration copy")
+        if not report["local_partial_possible"]:
+            report["local_partial_possible"] = True
+            core.atomic(report_path(config, key, sha), report)
+        core.sync_tree(source)
+        os.rename(source, target)
+        report[field] = True
+        retention.sync_directory(releases)
+        retention.sync_directory(source.parent)
+        core.verify_tree(target, expected, check=budget.check)
+    # A successful pair is verified again after both renames, not inferred from flags.
+    core.verify_tree(releases / sha, files, check=budget.check)
+    core.verify_tree(
+        releases / ("images-" + sha), core.image_files(files), check=budget.check
+    )
+    report.update(local_verified=True, local_partial_possible=False)
+
+
 def restore_locked(config, repository, sha, report, s3, budget):
     from . import __main__ as core
     from .object_retention import (
@@ -211,11 +271,12 @@ def restore_locked(config, repository, sha, report, s3, budget):
     if (
         type(quota) is not int
         or quota <= 0
-        or shutil.disk_usage(images).free < quota * 2
+        or shutil.disk_usage(images).free < quota * (3 if report["with_local"] else 2)
     ):
         raise ValueError("insufficient restoration staging capacity")
     directories(images, images / "repos", images / "repos" / key)
     staging = Path(tempfile.mkdtemp(prefix=".restore-", dir=images / "repos" / key))
+    image_staging = None
     try:
         report["phase"] = "export"
         rebuilt = core.export(
@@ -227,7 +288,15 @@ def restore_locked(config, repository, sha, report, s3, budget):
             name: (item["size"], item["sha256"]) for name, item in files.items()
         }:
             raise ValueError("Git export differs from original restoration manifest")
-        core.verify_tree(staging, list(files.values()))
+        core.verify_tree(staging, list(files.values()), check=budget.check)
+        if report["with_local"]:
+            report["phase"] = "local-preflight"
+            image_staging = prepare_local(
+                images / "repos" / key, sha, staging, list(files.values()), budget
+            )
+        if report["rollback_requested"]:
+            # Refuse to switch on top of inconsistent current/published metadata.
+            retention.protected_references(config, key, [], [], budget.deadline)
         prefix = f"repositories/{key}/releases/{sha}/"
         expected = {prefix + name: item for name, item in files.items()}
         report.update(
@@ -277,15 +346,35 @@ def restore_locked(config, repository, sha, report, s3, budget):
             report["verified_objects"] += 1
         if retention.read_json(manifest_path) != original:
             raise ValueError("restoration manifest changed")
+        if report["with_local"]:
+            report["phase"] = "local-install"
+            install_local(
+                config,
+                key,
+                sha,
+                staging,
+                image_staging,
+                list(files.values()),
+                report,
+                budget,
+            )
         # Preserve original manifest bytes/MIME types and grant a new retention window.
         os.utime(manifest_path, None)
         restoration_record(config, key, sha, restored=True)
+        if report["rollback_requested"]:
+            budget.check()
+            report.update(phase="activate", activation_uncertain=True)
+            core.atomic(report_path(config, key, sha), report)
+            core.rollback_images_locked(config, key, sha)
+            report.update(activated=True, activation_uncertain=False)
         report.update(phase="complete", partial_possible=False, manifest_digest=digest)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
+        if image_staging is not None:
+            shutil.rmtree(image_staging, ignore_errors=True)
 
 
-def run(config, key, sha, s3=None):
+def run(config, key, sha, s3=None, *, with_local=False, rollback=False):
     from . import __main__ as core
     from .object_retention import bucket_scope
 
@@ -296,6 +385,12 @@ def run(config, key, sha, s3=None):
     ):
         raise ValueError("invalid restoration identity")
     repository = core.repo(config, key)
+    if (
+        type(with_local) is not bool
+        or type(rollback) is not bool
+        or (rollback and not with_local)
+    ):
+        raise ValueError("rollback requires local restoration")
     budget = Budget()
     with contextlib.ExitStack() as stack:
         try:
@@ -314,6 +409,14 @@ def run(config, key, sha, s3=None):
             repaired_objects=0,
             verified_objects=0,
             partial_possible=False,
+            with_local=with_local,
+            rollback_requested=rollback,
+            local_full_rebuilt=False,
+            local_images_rebuilt=False,
+            local_verified=False,
+            local_partial_possible=False,
+            activated=False,
+            activation_uncertain=False,
         )
         path = report_path(config, key, sha)
         directories(path.parent.parent, path.parent)

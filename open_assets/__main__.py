@@ -284,7 +284,7 @@ def switch(base, target):
         os.close(d)
 
 
-def verify_tree(root, files):
+def verify_tree(root, files, check=None):
     """Verify the exact serving tree, refusing links and unlisted files."""
     if not stat.S_ISDIR(root.lstat().st_mode):
         raise ValueError("version root is not a directory")
@@ -307,6 +307,8 @@ def verify_tree(root, files):
         expected[name] = item
     actual = set()
     for directory, directories, names in os.walk(root, followlinks=False):
+        if check is not None:
+            check()
         for name in directories:
             if not stat.S_ISDIR((P(directory) / name).lstat().st_mode):
                 raise ValueError("linked version directory")
@@ -373,20 +375,58 @@ def rollback_images(c, key, sha):
     if not SHA.fullmatch(sha):
         raise ValueError("invalid SHA")
     with lock(c):
-        from .object_retention import restoration_record
+        rollback_images_locked(c, key, sha)
 
-        restoration_record(c, key, sha)
-        state = P(c["state_root"])
-        manifest = json.loads((state / "manifests" / key / (sha + ".json")).read_text())
-        if manifest.get("key") != key or manifest.get("sha") != sha:
-            raise ValueError("manifest identity mismatch")
-        base = P(c["images_root"]) / "repos" / key
-        verify_tree(base / "releases" / sha, manifest["files"])
-        from .retention import remember_previous
 
-        remember_previous(c, key, sha)
+def rollback_images_locked(c, key, sha):
+    """Caller holds Worker lock; compensate current and published on failure."""
+    from .object_retention import restoration_record
+
+    restoration_record(c, key, sha)
+    state = P(c["state_root"])
+    from .retention import read_json
+
+    manifest = read_json(state / "manifests" / key / (sha + ".json"))
+    if manifest.get("key") != key or manifest.get("sha") != sha:
+        raise ValueError("manifest identity mismatch")
+    base = P(c["images_root"]) / "repos" / key
+    verify_tree(base / "releases" / sha, manifest["files"])
+    from .retention import remember_previous
+
+    if (base / "current").exists() and not (base / "current").is_symlink():
+        raise ValueError("current is not a symlink")
+    previous = (
+        os.readlink(base / "current") if (base / "current").is_symlink() else None
+    )
+    published = state / "published" / key
+    had_published = published.exists() or published.is_symlink()
+    saved = read_json(published) if had_published else None
+    remember_previous(c, key, sha)
+    try:
         activate_images(base, "images-" + sha, image_files(manifest["files"]))
-        atomic(state / "published" / key, manifest)
+        atomic(published, manifest)
+    except Exception:
+        if previous is None:
+            (base / "current").unlink(missing_ok=True)
+            from .retention import sync_directory
+
+            sync_directory(base)
+        elif (
+            not (base / "current").is_symlink()
+            or os.readlink(base / "current") != previous
+        ):
+            if not re.fullmatch(r"releases/images-[0-9a-f]{40}", previous):
+                raise ValueError("invalid previous activation reference")
+            switch(base, previous.removeprefix("releases/"))
+        if not had_published:
+            published.unlink(missing_ok=True)
+            if published.parent.exists():
+                from .retention import sync_directory
+
+                sync_directory(published.parent)
+        else:
+            atomic(published, saved)
+        raise
 
 
 def publish(c, j):
@@ -742,7 +782,21 @@ def main():
         ],
     )
     a.add_argument("args", nargs="*")
+    a.add_argument(
+        "--with-local",
+        action="store_true",
+        help="also rebuild verified local version copies",
+    )
+    a.add_argument(
+        "--rollback",
+        action="store_true",
+        help="explicitly activate a fully restored version; requires --with-local",
+    )
     o = a.parse_args()
+    if (o.with_local or o.rollback) and o.command != "restore-objects":
+        a.error("restoration flags require restore-objects")
+    if o.rollback and not o.with_local:
+        a.error("--rollback requires --with-local")
     try:
         c = load()
     except Exception as error:
@@ -796,7 +850,9 @@ def main():
         from .object_restore import run as restore_objects
 
         try:
-            report = restore_objects(c, *o.args)
+            report = restore_objects(
+                c, *o.args, with_local=o.with_local, rollback=o.rollback
+            )
         except (Exception, KeyboardInterrupt) as error:
             print(
                 json.dumps(dict(status="failed", error=type(error).__name__)),

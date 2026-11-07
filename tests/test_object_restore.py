@@ -444,6 +444,249 @@ class ObjectRestore(unittest.TestCase):
             self.run_restore()
         self.assertTrue(observed)
 
+    def remove_local(self, full=True, images=True):
+        releases = self.images / "repos/assets/releases"
+        if full:
+            shutil.rmtree(releases / self.sha)
+        if images:
+            shutil.rmtree(releases / ("images-" + self.sha))
+
+    def test_rebuild_both_copies_without_activation_and_repeat(self):
+        self.remove_local()
+        report = restore.run(
+            self.config, "assets", self.sha, self.store, with_local=True
+        )
+        self.assertTrue(report["local_verified"])
+        self.assertTrue(report["local_full_rebuilt"])
+        self.assertTrue(report["local_images_rebuilt"])
+        self.assertFalse(report["activated"])
+        self.assert_current()
+        self.assertEqual(self.job_bytes(), self.original_jobs)
+        repeat = restore.run(
+            self.config, "assets", self.sha, self.store, with_local=True
+        )
+        self.assertFalse(repeat["local_full_rebuilt"])
+        self.assertFalse(repeat["local_images_rebuilt"])
+        self.assertEqual(repeat["uploaded_objects"], 0)
+        core.rollback_images(self.config, "assets", self.sha)
+
+    def test_rebuild_one_missing_copy_preserves_the_existing_copy(self):
+        self.remove_local(images=False)
+        report = restore.run(
+            self.config, "assets", self.sha, self.store, with_local=True
+        )
+        self.assertTrue(report["local_full_rebuilt"])
+        self.assertFalse(report["local_images_rebuilt"])
+        self.assert_current()
+        self.remove_local(full=False)
+        report = restore.run(
+            self.config, "assets", self.sha, self.store, with_local=True
+        )
+        self.assertFalse(report["local_full_rebuilt"])
+        self.assertTrue(report["local_images_rebuilt"])
+        self.assert_current()
+
+    def test_explicit_rollback_only_after_full_restore(self):
+        self.remove_local()
+        report = restore.run(
+            self.config, "assets", self.sha, self.store, with_local=True, rollback=True
+        )
+        self.assertTrue(report["activated"])
+        self.assertFalse(report["activation_uncertain"])
+        self.assertEqual(
+            os.readlink(self.images / "repos/assets/current"),
+            "releases/images-" + self.sha,
+        )
+        self.assertEqual(
+            json.loads((self.state / "published/assets").read_text()), self.manifests[0]
+        )
+        self.assertEqual(self.job_bytes(), self.original_jobs)
+
+    def test_local_conflicts_links_and_extras_refuse_before_object_writes(self):
+        releases = self.images / "repos/assets/releases"
+        full = releases / self.sha
+        image = releases / ("images-" + self.sha)
+        reference = self.root / "reference"
+        shutil.copytree(full, reference)
+        for mutation in ("corrupt-full", "extra-image", "full-link", "image-link"):
+            with self.subTest(mutation=mutation):
+                for path in (full, image):
+                    if path.is_symlink():
+                        path.unlink()
+                    else:
+                        shutil.rmtree(path)
+                shutil.copytree(reference, full)
+                shutil.copytree(reference / "images", image)
+                if mutation == "corrupt-full":
+                    (full / "document.txt").write_bytes(b"conflict")
+                elif mutation == "extra-image":
+                    (image / "extra.bin").write_bytes(b"x")
+                elif mutation == "full-link":
+                    shutil.rmtree(full)
+                    full.symlink_to(reference, target_is_directory=True)
+                else:
+                    shutil.rmtree(image)
+                    image.symlink_to(reference / "images", target_is_directory=True)
+                with self.assertRaises(ValueError):
+                    restore.run(
+                        self.config, "assets", self.sha, self.store, with_local=True
+                    )
+                self.assertFalse(self.store.puts)
+                self.assert_current()
+
+    def test_interrupted_pair_install_is_resumed_without_overwriting_full_copy(self):
+        self.remove_local()
+        rename = os.rename
+
+        def fail_image(source, destination):
+            if Path(destination).name == "images-" + self.sha:
+                raise OSError("fixture second rename failure")
+            return rename(source, destination)
+
+        with patch("os.rename", side_effect=fail_image):
+            with self.assertRaises(OSError):
+                restore.run(
+                    self.config, "assets", self.sha, self.store, with_local=True
+                )
+        report = json.loads(
+            restore.report_path(self.config, "assets", self.sha).read_text()
+        )
+        self.assertTrue(report["local_partial_possible"])
+        self.assertTrue(report["local_full_rebuilt"])
+        self.assertEqual(json.loads(self.marker.read_text())["status"], "complete")
+        self.assert_current()
+        retry = restore.run(
+            self.config, "assets", self.sha, self.store, with_local=True
+        )
+        self.assertTrue(retry["local_verified"])
+        self.assertFalse(retry["local_full_rebuilt"])
+        self.assertTrue(retry["local_images_rebuilt"])
+        self.assertEqual(retry["uploaded_objects"], 0)
+        self.assert_current()
+
+    def test_failed_published_write_compensates_activation(self):
+        self.remove_local()
+        atomic = core.atomic
+        failed = [False]
+
+        def fail_after_published(path, value):
+            atomic(path, value)
+            if (
+                Path(path) == self.state / "published/assets"
+                and value.get("sha") == self.sha
+                and not failed[0]
+            ):
+                failed[0] = True
+                raise OSError("fixture post-replace failure")
+
+        with patch.object(core, "atomic", side_effect=fail_after_published):
+            with self.assertRaises(OSError):
+                restore.run(
+                    self.config,
+                    "assets",
+                    self.sha,
+                    self.store,
+                    with_local=True,
+                    rollback=True,
+                )
+        self.assert_current()
+        report = json.loads(
+            restore.report_path(self.config, "assets", self.sha).read_text()
+        )
+        self.assertTrue(report["local_verified"])
+        self.assertTrue(report["activation_uncertain"])
+        self.assertFalse(report["activated"])
+        retry = restore.run(
+            self.config, "assets", self.sha, self.store, with_local=True, rollback=True
+        )
+        self.assertTrue(retry["activated"])
+
+    def test_remote_readback_failure_prevents_local_install_and_activation(self):
+        self.remove_local()
+        get = self.store.get_object
+        count = len(self.manifests[0]["files"])
+
+        def corrupt(**kwargs):
+            value = get(**kwargs)
+            if (
+                kwargs["Key"].endswith("images/pic.png")
+                and sum(k.startswith(self.prefix()) for k in self.store.objects)
+                == count
+            ):
+                value["Body"].close()
+                value["Body"] = io.BytesIO(b"bad")
+            return value
+
+        with patch.object(self.store, "get_object", side_effect=corrupt):
+            with self.assertRaises(ValueError):
+                restore.run(
+                    self.config,
+                    "assets",
+                    self.sha,
+                    self.store,
+                    with_local=True,
+                    rollback=True,
+                )
+        self.assertFalse((self.images / "repos/assets/releases" / self.sha).exists())
+        self.assert_current()
+        self.assertEqual(json.loads(self.marker.read_text())["status"], "complete")
+
+    def test_rollback_flag_requires_local_and_is_restricted_to_restore_command(self):
+        with self.assertRaises(ValueError):
+            restore.run(self.config, "assets", self.sha, self.store, rollback=True)
+        for arguments in (
+            ["restore-objects", "assets", self.sha, "--rollback"],
+            ["status", "--with-local"],
+        ):
+            with (
+                patch("sys.argv", ["open_assets", *arguments]),
+                patch("sys.stderr", io.StringIO()),
+            ):
+                with self.assertRaises(SystemExit) as stopped:
+                    core.main()
+            self.assertEqual(stopped.exception.code, 2)
+        self.remove_local()
+        output = io.StringIO()
+        with (
+            patch.object(core, "load", return_value=self.config),
+            patch.object(core, "s3client", return_value=self.store),
+            patch(
+                "sys.argv",
+                [
+                    "open_assets",
+                    "restore-objects",
+                    "assets",
+                    self.sha,
+                    "--with-local",
+                    "--rollback",
+                ],
+            ),
+            patch("sys.stdout", output),
+        ):
+            core.main()
+        self.assertTrue(json.loads(output.getvalue())["activated"])
+
+    def test_invalid_current_file_is_preserved_when_rollback_is_refused(self):
+        self.run_restore()
+        current = self.images / "repos/assets/current"
+        current.unlink()
+        current.write_bytes(b"keep invalid entry for inspection")
+        before = (self.state / "published/assets").read_bytes()
+        with self.assertRaises(ValueError):
+            core.rollback_images(self.config, "assets", self.sha)
+        self.assertEqual(current.read_bytes(), b"keep invalid entry for inspection")
+        self.assertEqual((self.state / "published/assets").read_bytes(), before)
+
+    def test_local_mode_reserves_three_times_quota_without_filling_disk(self):
+        quota = self.config["repositories"][0]["max_bytes"]
+        with patch("shutil.disk_usage", return_value=SimpleNamespace(free=quota * 2)):
+            with self.assertRaises(ValueError):
+                restore.run(
+                    self.config, "assets", self.sha, self.store, with_local=True
+                )
+            self.assertFalse(self.store.puts)
+            self.assertEqual(self.run_restore()["status"], "complete")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -119,3 +119,5 @@ Info 同时展示仓库的本地容量和 OtterIO 对象数量、逻辑大小。
 Info 的对象保留区域区分最近完整预览、完整执行和最近尝试，展示规划时的候选数量/容量及失败、跳过原因。页面读取缓存摘要，不触发 S3 遍历；字段含义见[Info 文档](docs/info.md#对象保留策略与清理记录)。
 
 已清理的对象可用 restore-objects 从 Git 和原始清单恢复，不受已完成任务去重影响，也不切换当前图片入口。完整校验、重试和操作边界见[对象恢复](docs/object-restore.md)。
+
+restore-objects 追加 --with-local 可从 Git 重建已清理的 public 和图片副本；默认保持当前入口。追加 --rollback 才在对象与本地副本全部校验后显式切换，见[本地恢复与回滚](docs/object-restore.md#重建本地-public--图片副本)。

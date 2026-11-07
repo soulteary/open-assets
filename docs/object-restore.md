@@ -21,7 +21,7 @@ sudo docker compose exec -T publisher python -m open_assets \
 - verified_objects：最终逐对象读取、计算完整哈希并通过校验的数量。
 - logical_bytes：原清单中对象大小之和；不是本次网络流量或物理磁盘增量。
 
-重复执行会再次校验，通常 uploaded_objects 和 repaired_objects 为 0。命令不改变 current、published 或回滚历史，不创建发布任务，也不修改原任务、归档和去重记录。恢复对象不会自动切换图片入口。
+重复执行会再次校验，通常 uploaded_objects 和 repaired_objects 为 0。默认不改变 current、published 或回滚历史，不创建发布任务，也不修改原任务、归档和去重记录。仅显式 --with-local --rollback 才执行切换。
 
 ## 解决已完成任务的去重问题
 
@@ -67,8 +67,47 @@ S3 对象逐个写入，不提供整版事务。第一次 PUT 前先刷盘记录
 
 ## 后续图片回滚和看板
 
-此命令仅恢复对象，不重建已经被本地保留策略删除的 public/图片版本目录。若本地两份快照仍完整，恢复成功后可按正常 rollback-images 校验流程另行切换；本地副本已清理时，需从可信备份恢复或通过新提交重新发布。不要把对象恢复成功当作图片已经回滚。
+默认对象模式不重建本地副本。需要恢复已清理的 public/图片目录时使用下文 --with-local，只有额外指定 --rollback 才显式切换。对象恢复成功不表示图片已回滚。
 
 Info 中对象数量/大小在下一轮完整对象采集后更新；候选规划由下次对象保留预览重新计算。恢复不会伪造或撤销过去的清理结果，也不触发网页端 S3 遍历。需要立即核对保留候选时，手工执行一次只预览命令，见[对象保留](object-retention.md)。
 
 正常结束和可捕获异常会移除本次 .restore- 临时目录；强制结束或掉电可能留下目录和未结案报告。重试会重新导出 Git，不信任并复用遗留临时文件。遗留目录需在确认没有恢复进程及相应维护锁持有者后由运维核对处理，不纳入自动对象清理。
+
+## 重建本地 public / 图片副本
+
+需要同时恢复已被本地保留策略清理的副本时，显式添加 --with-local：
+
+```sh
+sudo docker compose exec -T publisher python -m open_assets \
+  restore-objects "$ASSET_KEY" "$ASSET_COMMIT" --with-local
+```
+
+此模式仍执行完整 S3 恢复和读回校验，同时从同一份 Git 导出重建：
+
+```text
+images/repos/<key>/releases/<sha>/          # 完整 public 内容
+images/repos/<key>/releases/images-<sha>/   # public/images 的相对路径投影
+```
+
+不从未知缓存或未校验的存储对象拼装本地副本。原清单、源分支历史、导出限制和应用目录权限等前提仍适用。已有副本会重新校验完整文件集合、大小、SHA-256 及普通文件/目录类型；发现损坏、额外文件、软链接或特殊条目时停止，不清空或覆盖它们。只缺少一份时仅安装缺少的那份。
+
+完整 public 暂存与图片暂存均在图片父目录所在文件系统内准备，校验并刷盘后分别重命名到 releases。两份目录的安装不是一个联合原子操作；中断可能留下已完成的一份，重试会校验并保留它，再补齐另一份。当前版本、任务和归档不会因默认恢复而改变。local_full_rebuilt / local_images_rebuilt 表示本次安装了相应副本，local_verified 表示最终两份副本都校验通过；重复执行通常两个 rebuilt 都为 false。
+
+带本地恢复时，图片盘预留检查按仓库 max_bytes 的三倍计算，以保守覆盖 public、图片投影及对象数据同盘时的增量；对象模式保持两倍检查。它不是对其他文件系统或 Git 历史的完整配额，空间不足会停止。
+
+## 完整恢复后显式切换
+
+恢复并在同一次维护锁内重新校验、显式切换到目标版本：
+
+```sh
+sudo docker compose exec -T publisher python -m open_assets \
+  restore-objects "$ASSET_KEY" "$ASSET_COMMIT" --with-local --rollback
+```
+
+--rollback 必须与 --with-local 一起使用，不能用于其他命令。没有 --rollback 时，即使目标目录已重建也不切换 current 或 published。显式切换前还要求原 current/published 引用一致，S3 对象和两份本地副本均已校验，然后复用图片回滚的切换前/后校验、原子软链接替换和回滚点保护。activated=true 表示显式切换流程完成；已在目标时仍重新校验。
+
+也可先只运行 --with-local，人工检查后另行执行 rollback-images。独立 rollback-images 校验本地副本和对象恢复标记，不重新下载全部对象；希望切换前重新核验 S3 时，应再次使用上面的组合命令。
+
+切换或 published 写入出现可捕获异常时，程序尝试恢复原 current 和 published 内容；回滚保护可能多留版本。文件系统持续故障、掉电或强制结束仍可能留下混合状态，不能宣称跨文件事务：activation_uncertain 表示应核对两个引用，activated=false 不证明没有发生过临时切换。先修复不一致状态再重试，不应绕过检查。
+
+local_partial_possible 表示本地安装可能未完整结案，独立于 S3 的 partial_possible。第一次目录安装和显式切换之前均保存意图。失败可能已经补齐对象或安装部分本地副本，这些有效内容不会被自动删除；恢复标记只有在本次要求的对象及本地校验均完成后才更新。恢复报告字段是最近落盘状态，不是逐文件实时进度。

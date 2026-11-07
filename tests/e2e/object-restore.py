@@ -113,8 +113,32 @@ try:
     )
     fixture.assert_current()
     assert fixture.job_bytes() == fixture.original_jobs
+    fixture.remove_local()
+    local = restore.run(config, "assets", fixture.sha, writer, with_local=True)
+    assert (
+        local["local_verified"]
+        and local["local_full_rebuilt"]
+        and local["local_images_rebuilt"]
+    )
+    assert not local["activated"]
+    fixture.assert_current()
+    repeated = restore.run(config, "assets", fixture.sha, writer, with_local=True)
+    assert not repeated["local_full_rebuilt"] and not repeated["local_images_rebuilt"]
+    activated = restore.run(
+        config, "assets", fixture.sha, writer, with_local=True, rollback=True
+    )
+    assert activated["activated"]
+    assert (
+        os.readlink(fixture.images / "repos/assets/current")
+        == "releases/images-" + fixture.sha
+    )
+    assert (
+        json.loads((fixture.state / "published/assets").read_text())
+        == fixture.manifests[0]
+    )
+    assert fixture.job_bytes() == fixture.original_jobs
     print(
-        "Isolated restore: archived/manual dedup bypassed without job changes; full bytes/metadata verified; repeat and partial retry passed; identity cannot delete; current images unchanged"
+        "Isolated restore: S3 bytes, metadata, retry and no-delete identity verified; both local copies rebuilt and repeated without activation; explicit rollback activated verified version; jobs unchanged"
     )
 finally:
     fixture.doCleanups()

@@ -79,7 +79,7 @@ docker compose exec -T publisher python -m open_assets.retention --apply
 
 可清理版本先在同一文件系统内移动到仓库下 `.retention-trash/<随机标识>/`，保存 key/SHA 收据，然后删除。只有成功移走的内容才会被删除。进程中断后，重试只删除有效收据下的 full/images 目录，不按旧收据去移动 releases 中后来重建的同 SHA 目录；部分移动留下的另一半会在新一轮重新判断。无效或未知暂存内容停止删除并留待人工核对。
 
-本地版本清理成功后，普通 `rollback-images` 无法直接回到已清理版本。需要恢复时，从可信备份恢复完整快照、图片副本和对应清单，再按回滚校验执行。保留 OSS 对象不等于项目会自动把它们重建成本地版本。需要可随时回滚的 SHA 应先固定保留。
+本地版本清理成功后，普通 `rollback-images` 无法直接回到已清理版本。需要恢复时，可使用 [restore-objects --with-local](object-restore.md#重建本地-public--图片副本) 从 Git 重建完整快照和图片副本，或从可信备份恢复。默认不切换当前版本；完整校验后可显式回滚。保留 OSS 对象本身不会自动重建本地版本。需要可随时回滚的 SHA 应先固定保留。
 
 终态任务移到 `state_root/job-archive/<任务ID前两位>/<任务ID>.json`。enqueue 同时检查活动目录和归档，所以重复 Webhook 不会重新创建任务；显式人工发布是另一种任务身份，仍沿用原去重规则。查看方式：
 

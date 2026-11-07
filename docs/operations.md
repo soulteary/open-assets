@@ -96,3 +96,5 @@ Worker 对每份任务最多读取 64 KiB，拒绝符号链接、非普通文件
 ## 已清理对象恢复
 
 使用[restore-objects](object-restore.md)从原仓库提交和可信清单恢复版本对象；已完成或归档的手工任务不阻止恢复。不要删除任务去重记录来触发重放。恢复后仍需分别确认对象链接、当前图片指向和本地回滚副本状态。
+
+本地副本也已清理时，使用 restore-objects KEY SHA --with-local；恢复后默认保持 current。需要切换时可组合 --with-local --rollback，在同一维护锁内校验对象与双副本后激活。中断或失败按恢复报告分别核对 S3、本地安装和 current/published，不把部分完成当作事务回滚。
