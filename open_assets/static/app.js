@@ -100,6 +100,48 @@ function retentionHistory(row, name, label) {
   if (!value) return label + '：暂无完整记录';
   return label + '：' + date(value.finished_at) + (name === 'last_apply' ? ' · 已确认删除 ' + value.removed_versions + ' 版 / ' + value.removed_objects + ' 个 / ' + bytes(value.removed_bytes) : ' · 仅预览') + ' · ' + (retentionReasons[value.reason] || '状态待核对') + (value.policy_changed ? '（配置已变更）' : value.stale ? '（历史记录，已过期）' : '');
 }
+const detailTabs = ['storage','policy','restore','check','audit','operations'];
+let activeDetailTab = 'storage';
+function selectDetailTab(key, focus = false) {
+  if (!detailTabs.includes(key)) return;
+  activeDetailTab = key;
+  for (const name of detailTabs) {
+    const button=byId('tab-'+name), selected=name===key;
+    button.setAttribute('aria-selected',String(selected)); button.tabIndex=selected?0:-1;
+    byId('panel-'+name).hidden=!selected;
+  }
+  if(focus)byId('tab-'+key).focus();
+}
+function initializeDetailTabs() {
+  for(const name of detailTabs){const button=byId('tab-'+name);
+    button.addEventListener('click',()=>selectDetailTab(name));
+    button.addEventListener('keydown',event=>{
+      const index=detailTabs.indexOf(name);
+      const target=event.key==='ArrowRight'?detailTabs[(index+1)%detailTabs.length]:event.key==='ArrowLeft'?detailTabs[(index+detailTabs.length-1)%detailTabs.length]:event.key==='Home'?detailTabs[0]:event.key==='End'?detailTabs[detailTabs.length-1]:null;
+      if(target){event.preventDefault();selectDetailTab(target,true);}
+    });
+  }
+  selectDetailTab(activeDetailTab);
+}
+function renderAuditStorage(data) {
+  const source=data.restoration_audits||{}, notice=byId('audit-notice');
+  notice.textContent=data.stale||source.status!=='ok'?'审计缓存不可用或主机快照过期，不能确认当前容量。':'容量默认每 15 分钟采样；最近实际归档结果来自独立记录，刷新和 tab 切换不扫描归档。';
+  notice.className=data.stale||source.status!=='ok'?'warning':'muted';
+  const table=byId('audit-repositories');table.replaceChildren();const rows=source.repositories||[];
+  if(!rows.length){const tr=el('tr'),td=storageCell('暂无审计统计缓存');td.colSpan=6;tr.append(td);table.append(tr);}
+  const protections={invalid:'坏记录 / 冲突',unfinished:'未结案','keep-last':'最近保留','unresolved-source':'不确定证据未覆盖',recent:'保留期内','batch-limit':'本轮数量上限'};
+  for(const row of rows){const tr=el('tr'),old=row.stale||row.status!=='ok'||row.changed_since_sample;
+    tr.append(storageCell(row.key,[row.measured_at?'采样 '+date(row.measured_at)+(old?'（旧数据 / 需复查）':''):'尚无完整采样','采集 '+({ok:'正常',busy:'锁忙跳过',unavailable:'失败',never:'尚未采样'})[row.status||'never'],...(row.changed_since_sample?['容量采样早于最近归档结果，等待下一次采样']:[])]));
+    for(const location of ['online','archive','retired']){const value=row[location];tr.append(storageCell(value?value.records+' 条':'—',value?['逻辑 '+bytes(value.bytes),'磁盘 '+bytes(value.disk_bytes)]:['未取得完整统计']));}
+    const lines=[];for(const [name,count] of Object.entries(row.protection_counts||{}))if(count)lines.push((protections[name]||'未知保护')+' '+count+' 条');
+    if(row.invalid_records)lines.push('完整性异常 '+row.invalid_records+' 条，保留原证据');
+    tr.append(storageCell(row.candidate_records==null?'规划不可用':'本轮候选 '+row.candidate_records+' 条 / '+bytes(row.candidate_bytes),['默认可归档总数 '+(row.eligible_records??'—')+' 条',...lines]));
+    const archive=row.archival||{}, a=archive.attempt, details=[];
+    if(a){details.push('开始 '+date(a.started_at));if(a.finished_at)details.push('结束 '+date(a.finished_at));details.push('候选 '+a.candidate_records+' / 已完成 '+a.archived_records+' / 保护 '+a.protected_records);details.push('参数：最近 '+a.keep_last+' 条 / '+a.min_age_days+' 天 / 单轮 '+a.max_records+' 条');if(a.partial_possible)details.push('可能已生成归档或移动/清理部分暂存，请核对后重试');for(const [name,count] of Object.entries(a.protection_counts||{}))if(count)details.push('本次保护：'+(protections[name]||'未知保护')+' '+count+' 条');if(a.failure_reason)details.push('失败原因：'+({missing:'文件缺失',permission:'权限不足',timeout:'超时',mismatch:'文件或证据不一致',io:'读写失败',storage:'存储请求失败',interrupted:'中断',unavailable:'无法确认'})[a.failure_reason]);if(archive.last_complete&&a.status!=='complete')details.push('上次完整执行 '+date(archive.last_complete.finished_at)+' · '+archive.last_complete.archived_records+' 条');}
+    tr.append(storageCell(archive.status==='never'?'尚无实际归档记录':archive.status!=='ok'?'归档结果不可用':({running:'归档未结案 / 可能中断',complete:'实际归档完整结束',failed:'实际归档失败'})[a?.status]||'结果未知',details));
+    if(old||row.invalid_records||archive.status==='unavailable'||(a&&a.status!=='complete'))tr.className='warning';table.append(tr);
+  }
+}
 function renderRestoreClosures(data) {
   const source=data.restoration_closures || {},notice=byId('restore-close-notice');
   notice.textContent=data.stale || source.status!=='ok' ? '结案摘要不可用或快照过期，请核对采集时间。' : '每仓库最近一次结案尝试；私有审计保留全部尝试，网页不提供结案操作。';
@@ -212,6 +254,7 @@ function render(data) {
   renderRestorations(data);
   renderRestoreChecks(data);
   renderRestoreClosures(data);
+  renderAuditStorage(data);
   const h = data.host, overview = byId('overview'); overview.replaceChildren();
   for (const [label, value, detail] of [
     ['CPU', pct(h.cpu_percent), h.cpu_count + ' 个逻辑核 · 采集窗口总利用率'],
@@ -236,6 +279,7 @@ function render(data) {
   byId('repair-section').hidden = repairs.length === 0;
   byId('repairs').replaceChildren(...repairs.map(r => item(r.service, date(r.time) + ' · ' + (r.reason === 'persistent-unhealthy' ? '持续健康检查失败' : r.reason), ({restarted: '已请求重启', failed: '重启失败', skipped: '状态已变化，未重启', attempt: '处理中'})[r.result] || r.result, r.result === 'failed')));
   const performance = data.performance?.scenarios || [];
+  byId('operations-empty').hidden = repairs.length > 0 || performance.length > 0;
   byId('performance-section').hidden = performance.length === 0;
   if (performance.length) byId('performance-details').textContent = '完成于 ' + date(data.performance.collected_at) + ' · 固定并发与速率上限的读取测试，不代表容量上限。';
   byId('performance').replaceChildren(...performance.map(p => {
@@ -247,6 +291,7 @@ function render(data) {
 }
 async function update() {
   try { const r = await fetch('/api/status', {cache: 'no-store'}); if (!r.ok) throw new Error(); render(await r.json()); byId('error').hidden = true; }
-  catch { byId('restore-close-notice').textContent = '结案结果无法刷新，下表可能是旧数据。'; byId('restore-close-notice').className = 'warning'; byId('restore-check-notice').textContent = '核对结果无法刷新，下表可能是旧数据。'; byId('restore-check-notice').className = 'warning'; byId('restore-notice').textContent = '恢复报告无法刷新，下表可能是旧结果，请复核采样时间。'; byId('restore-notice').className = 'warning'; byId('object-retention-notice').textContent = '对象保留数据无法刷新，下表保留旧结果，请复核采样时间。'; byId('object-retention-notice').className = 'warning'; byId('error').hidden = false; byId('error').textContent = '无法读取最新状态，请检查登录会话与采集定时器。下方可能是上次成功读取的数据。'; const notice = byId('capacity-notice'); notice.className = 'capacity-notice capacity-unknown'; notice.replaceChildren(el('strong', '容量状态待确认'), el('p', '无法取得最新状态，下方保留上次采样，不能作为实时容量依据。')); }
+  catch { byId('audit-notice').textContent = '审计容量与归档结果无法刷新，下表可能是旧数据。'; byId('audit-notice').className = 'warning'; byId('restore-close-notice').textContent = '结案结果无法刷新，下表可能是旧数据。'; byId('restore-close-notice').className = 'warning'; byId('restore-check-notice').textContent = '核对结果无法刷新，下表可能是旧数据。'; byId('restore-check-notice').className = 'warning'; byId('restore-notice').textContent = '恢复报告无法刷新，下表可能是旧结果，请复核采样时间。'; byId('restore-notice').className = 'warning'; byId('object-retention-notice').textContent = '对象保留数据无法刷新，下表保留旧结果，请复核采样时间。'; byId('object-retention-notice').className = 'warning'; byId('error').hidden = false; byId('error').textContent = '无法读取最新状态，请检查登录会话与采集定时器。下方可能是上次成功读取的数据。'; const notice = byId('capacity-notice'); notice.className = 'capacity-notice capacity-unknown'; notice.replaceChildren(el('strong', '容量状态待确认'), el('p', '无法取得最新状态，下方保留上次采样，不能作为实时容量依据。')); }
 }
+initializeDetailTabs();
 update(); setInterval(update, 30000);

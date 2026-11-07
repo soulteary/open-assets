@@ -16,6 +16,7 @@ from open_assets import restore_check_info as check_info
 from open_assets import restore_close as close
 from open_assets import restore_close_info as close_info
 from open_assets import restore_audit as audit
+from open_assets import audit_info, audit_observation
 from open_assets import __main__ as core
 
 assert os.environ.get("OPEN_ASSETS_OBJECT_RESTORE_TEST") == "1"
@@ -256,6 +257,25 @@ try:
     )
     assert audit.run(config, "assets", fixture.sha)["total"] == 3
     fixture.assert_current()
+    stats = audit_info.collect(config, {})
+    sample = stats["repositories"]["assets"]["sample"]
+    assert (
+        sample["online"]["records"] == 2
+        and sample["archive"]["records"] == 1
+        and sample["retired"]["records"] == 0
+    )
+    assert audit_observation.read(config, "assets")["attempt"]["archived_records"] == 1
+    with patch.object(
+        audit, "scan", side_effect=AssertionError("cached call must not scan")
+    ):
+        assert audit_info.collect(config, stats) == stats
+    (host / "data/info").mkdir()
+    (host / "data/info/audit-cache.json").write_text(json.dumps(stats))
+    dashboard = audit_info.summary(host, host / "data")["repositories"][0]
+    assert (
+        dashboard["archive"]["records"] == 1
+        and dashboard["archival"]["attempt"]["status"] == "complete"
+    )
     activated = restore.run(
         config, "assets", fixture.sha, writer, with_local=True, rollback=True
     )
@@ -283,7 +303,7 @@ try:
     )
     assert audit.verify_archive(package, "assets", closed["audit_id"])[1] == audit_bytes
     print(
-        "Isolated restore: S3 bytes, metadata, retry and no-delete identity verified; both local copies rebuilt and repeated without activation; explicit rollback activated verified version; filtered Info success/partial-failure/local/activation observations verified; read-only diagnostic checks and Info snapshots verified; explicit closure/audit preservation/changed-source Info verified; query/preview/verified archival/current preservation verified; jobs unchanged"
+        "Isolated restore: S3 bytes, metadata, retry and no-delete identity verified; both local copies rebuilt and repeated without activation; explicit rollback activated verified version; filtered Info success/partial-failure/local/activation observations verified; read-only diagnostic checks and Info snapshots verified; explicit closure/audit preservation/changed-source Info verified; query/preview/verified archival/current preservation verified; cached audit counts/operation outcomes and no-repeat scanning verified; jobs unchanged"
     )
 finally:
     fixture.doCleanups()

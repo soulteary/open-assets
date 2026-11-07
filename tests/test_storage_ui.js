@@ -14,6 +14,9 @@ class Element {
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.text = ''; this.children = children; }
   setAttribute(name, value) { this[name] = value; }
+  addEventListener(type, callback) { (this.listeners ||= {})[type] = callback; }
+  focus() { this.focused = true; }
+  fire(type, event={}) { this.listeners[type](event); }
 }
 function setup() {
   const elements = new Map();
@@ -192,4 +195,30 @@ test('closure audit growth suggests preview archival without hiding unfinished r
   const ui=setup(),data=fixture();data.restoration_closures={status:'ok',repositories:[{key:'near',result_status:'ok',online_attempts:450,archive_hint:'near-limit',attempt:{status:'running',started_at:1}},{key:'over',result_status:'unavailable',online_attempts_at_least:513,archive_hint:'scan-limit'}]};
   ui.context.render(data);const text=ui.get('restore-close-repositories').textContent;
   assert.match(text,/在线审计 450 条/);assert.match(text,/restore-audit-archive 预览归档/);assert.match(text,/未结案记录仍需保留/);assert.match(text,/不能视为结案/);
+});
+
+test('tabs support mouse and keyboard selection and preserve state across refresh', () => {
+  const ui=setup();
+  assert.equal(ui.get('panel-storage').hidden,false);assert.equal(ui.get('panel-audit').hidden,true);
+  assert.equal(ui.get('tab-storage')['aria-selected'],'true');assert.equal(ui.get('tab-audit').tabIndex,-1);
+  ui.get('tab-audit').fire('click');assert.equal(ui.get('panel-audit').hidden,false);assert.equal(ui.get('panel-storage').hidden,true);
+  ui.context.render(fixture());assert.equal(ui.get('panel-audit').hidden,false);
+  let prevented=false;ui.get('tab-audit').fire('keydown',{key:'ArrowRight',preventDefault(){prevented=true;}});
+  assert.equal(prevented,true);assert.equal(ui.get('tab-operations').focused,true);assert.equal(ui.get('panel-operations').hidden,false);
+  ui.get('tab-operations').fire('keydown',{key:'Home',preventDefault(){}});assert.equal(ui.get('panel-storage').hidden,false);
+  ui.get('tab-storage').fire('keydown',{key:'End',preventDefault(){}});assert.equal(ui.get('panel-operations').hidden,false);
+  assert.ok(html.indexOf('磁盘与文件系统')<html.indexOf('role="tablist"'));assert.ok(html.indexOf('证书有效期')<html.indexOf('role="tablist"'));
+  assert.equal(detailPanels(ui).filter(id=>ui.get(id).hidden===false).length,1);
+});
+function detailPanels(){return ['storage','policy','restore','check','audit','operations'].map(k=>'panel-'+k);}
+test('audit cached locations and protection reasons stay separate from actual archival results', () => {
+  const ui=setup(),data=fixture();
+  data.restoration_audits={status:'ok',repositories:[{key:'assets',status:'ok',stale:false,measured_at:1,online:{records:20,bytes:4096,disk_bytes:8192},archive:{records:7,bytes:1024,disk_bytes:4096},retired:{records:1,bytes:0,disk_bytes:4096},candidate_records:3,candidate_bytes:128,eligible_records:5,invalid_records:1,protection_counts:{unfinished:2,'keep-last':20,'unresolved-source':1},archival:{status:'ok',attempt:{status:'failed',started_at:1,finished_at:2,candidate_records:3,archived_records:1,protected_records:22,keep_last:1,min_age_days:0,max_records:3,partial_possible:true,failure_reason:'io'},last_complete:{finished_at:1,archived_records:2}}}]};
+  ui.context.render(data);const text=ui.get('audit-repositories').textContent;
+  assert.match(text,/20 条/);assert.match(text,/7 条/);assert.match(text,/逻辑 0 B/);assert.match(text,/磁盘 4.0 KiB/);assert.match(text,/未结案 2 条/);assert.match(text,/不确定证据未覆盖 1 条/);assert.match(text,/实际归档失败/);assert.match(text,/已完成 1/);assert.match(text,/上次完整执行/);assert.match(text,/清理部分暂存/);
+});
+test('missing, stale and busy audit measurements never render fabricated zeros', async () => {
+  const ui=setup(),data=fixture();data.restoration_audits={status:'ok',repositories:[{key:'new',status:'never',stale:true,archival:{status:'never'}},{key:'busy',status:'busy',stale:true,measured_at:1,online:{records:2,bytes:1,disk_bytes:1},archival:{status:'unavailable'}}]};
+  ui.context.render(data);const text=ui.get('audit-repositories').textContent;assert.match(text,/尚无完整采样/);assert.match(text,/锁忙跳过/);assert.match(text,/旧数据/);assert.match(text,/归档结果不可用/);assert.doesNotMatch(text,/0 条/);
+  ui.context.fetch=async()=>{throw Error('offline')};await ui.context.update();assert.match(ui.get('audit-notice').textContent,/无法刷新/);
 });

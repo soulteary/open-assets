@@ -98,3 +98,5 @@ Worker 对每份任务最多读取 64 KiB，拒绝符号链接、非普通文件
 使用[restore-objects](object-restore.md)从原仓库提交和可信清单恢复版本对象；已完成或归档的手工任务不阻止恢复。不要删除任务去重记录来触发重放。恢复后仍需分别确认对象链接、当前图片指向和本地回滚副本状态。
 
 本地副本也已清理时，使用 restore-objects KEY SHA --with-local；恢复后默认保持 current。需要切换时可组合 --with-local --rollback，在同一维护锁内校验对象与双副本后激活。中断或失败按恢复报告分别核对 S3、本地安装和 current/published，不把部分完成当作事务回滚。
+
+恢复审计容量采集由 `open-assets-audits.timer` 执行。升级或恢复 Publisher 状态前，把该 timer/service 也纳入停止范围；维护标记只防止新的服务启动，不终止已在运行的采集。归档后如需立即更新看板，先运行 `python3 -m open_assets.audit_info --root /app/open-assets --force`，再启动 Info 主机采样服务；默认刷新不会绕过统计间隔。实际归档摘要和 audit-cache.json 也应纳入私有备份。

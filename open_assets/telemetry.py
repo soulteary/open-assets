@@ -377,6 +377,9 @@ def collect(root, refresh_storage=False):
     from .restore_close_info import summary as close_summary
 
     result["restoration_closures"] = close_summary(root, data_root)
+    from .audit_info import summary as audit_summary
+
+    result["restoration_audits"] = audit_summary(root, data_root)
     result["capacity"] = capacity(disks, result["storage"], env, image_disk_index)
     result["collection_seconds"] = round(time.monotonic() - started, 3)
     performance = root / "private/performance/latest-summary.json"

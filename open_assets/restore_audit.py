@@ -484,19 +484,28 @@ def run(
         )
         if not apply:
             return result
-        for name in ("archive", "retired"):
-            mkdir_private(paths[name].parent)
-            mkdir_private(paths[name])
+        from .audit_observation import persist
+
+        started = time.time()
+        policy = dict(
+            keep_last=keep_last, min_age_days=min_age_days, max_records=max_records
+        )
+        result["partial_possible"] = bool(candidates)
+        persist(config, key, result, started, policy)
         try:
+            for name in ("archive", "retired"):
+                mkdir_private(paths[name].parent)
+                mkdir_private(paths[name])
             for row in candidates:
-                # Internal content digest never appears in query/planning output.
                 internal = next(r for r in rows if r["audit_id"] == row["audit_id"])
                 result["partial_possible"] = True
                 apply_one(paths, key, internal, deadline)
                 result["archived_records"] += 1
+                persist(config, key, result, started, policy)
             result["partial_possible"] = False
         except (Exception, KeyboardInterrupt) as error:
             from .restore_check import reason
 
             result.update(status="failed", failure_reason=reason(error))
+        persist(config, key, result, started, policy, finished=True)
         return result

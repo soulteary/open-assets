@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh cached local restoration audit statistics every 15 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec=15min
+AccuracySec=15s
+Unit=open-assets-audits.service
+
+[Install]
+WantedBy=timers.target

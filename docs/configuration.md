@@ -82,3 +82,5 @@ Worker 在导出前要求 images_root 文件系统的可用空间至少为 `2 ×
 OtterIO 对象容量使用独立 open-assets-objects.timer：固定 15 分钟缓存间隔、共享 100 页/110 秒预算、每页最多 1000 对象和每秒至多一次列表请求。此间隔不依赖页面刷新，也不由 --refresh-storage 绕过；安装、续采与统计口径见 [Info 文档](info.md#otterio-对象统计)。
 
 object_retention 为独立对象保留策略，支持全局默认和仓库覆盖。默认 enabled=false、exclusive_writer=false，不继承本地 retention.enabled。清理预算、专用 IAM、预览与执行步骤见[对象保留](object-retention.md)。
+
+恢复审计容量使用独立 `open-assets-audits.timer`，默认 15 分钟缓存，30 秒主机采集只读取过滤缓存及实际归档摘要。无需新增 S3 权限或容器；安装、手工强制采样、口径与上限见 [Info 审计统计](info.md#审计容量缓存与实际归档结果)。

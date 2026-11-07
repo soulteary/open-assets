@@ -215,7 +215,14 @@ class RestoreAudit(unittest.TestCase):
         remaining.write_bytes(b"conflict")
         before = self.snapshot()
         self.assertEqual(self.archive(apply=True)["archived_records"], 0)
-        self.assertEqual(before, self.snapshot())
+        self.assertEqual(
+            {p: v for p, v in before.items() if "/audit-archive-results/" not in p},
+            {
+                p: v
+                for p, v in self.snapshot().items()
+                if "/audit-archive-results/" not in p
+            },
+        )
         package = self.paths["archive"] / (self.first["audit_id"] + ".tar.gz")
         package.write_bytes(b"bad")
         self.assertEqual(self.run_audit(action="verify")["status"], "failed")
