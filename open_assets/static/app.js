@@ -23,7 +23,7 @@ function render(data) {
   for (const c of data.components) {
     const tr = el('tr');
     const version = c.image ? c.image.split('@')[0].split('/').pop() : '—';
-    for (const value of [c.service, version, c.state + ' / ' + (c.health || '未配置') + ' / ' + (c.probe === 'not-probed' ? '—' : c.probe), pct(c.cpu_percent), bytes(c.memory_bytes), String(c.restarts ?? '—')]) tr.append(el('td', value));
+    for (const value of [c.service, version, c.state + ' / ' + (c.health || '未配置') + (c.probe && c.probe !== 'not-probed' ? ' / ' + c.probe : ''), pct(c.cpu_percent), bytes(c.memory_bytes), String(c.restarts ?? '—')]) tr.append(el('td', value));
     if (c.state !== 'running' || c.health !== 'healthy' || !['ok', 'running', 'healthy', 'not-probed'].includes(c.probe)) tr.className = 'warning';
     components.append(tr);
   }

@@ -85,3 +85,7 @@ Automatic recovery restarts eligible persistently unhealthy containers within do
 ## Compressed log retention — 2026-11-07
 
 All nine service containers were recreated with explicit Docker local logging (10m, three files, compression enabled) and returned healthy. Public bytes/Range and management authentication regression checks passed. Host journald limits and an hourly, scoped private text-log rotation timer were installed; isolated fixtures verified Docker retention and logrotate gzip content. Database queue logs, certificates, credentials and backups were excluded. Configuration and retention limits are documented in [logging](logging.md).
+
+## Protected-page gzip and optional probe display — 2026-11-07
+
+Traefik dynamically loaded gzip after ForwardAuth for the four management routes and authenticated return document. Real authenticated requests negotiated gzip with Vary: Accept-Encoding, and decompressed HTML/JSON passed validation: Gitea 5925/15860 bytes, OC 9590/37736, Traefik API 1243/6792, Info status 1742/5505 (compressed/decoded, one response each). Anonymous redirects, login, public image/object bytes and Range checks passed; all nine containers remained healthy. Info now omits the third status item and separator when no additional probe is configured. Eight relevant regression tests, Ruff and JavaScript syntax checks passed.

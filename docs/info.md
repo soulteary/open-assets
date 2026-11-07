@@ -48,4 +48,6 @@ journalctl -u open-assets-info.service --since '10 minutes ago' --no-pager
 
 Docker 重启计数来自 Docker `RestartCount`，不包含所有手工或宿主机修复程序发起的重启。自动修复另有受限的操作记录，不能只靠该计数判断是否修复过。
 
-组件状态按“运行 / 健康 / 探测”展示：运行状态来自 Docker State，健康来自 Docker Healthcheck，探测是宿主机采集器额外执行的请求或心跳检查。`—` 表示未配置额外探测，不等于失败。目前 Traefik 使用容器内 `traefik healthcheck`，没有额外 HTTP 探针，因此正常显示为 `running / healthy / —`；其他组件显示 `ok` 是其额外探测通过。这些检查均不保证所有公开路由或发布结果正确。
+组件状态按“运行 / 健康 / 探测”展示：运行状态来自 Docker State，健康来自 Docker Healthcheck，探测是宿主机采集器额外执行的请求或心跳检查。未配置额外探测时省略第三项及其分隔符。目前 Traefik 使用容器内 `traefik healthcheck`，没有额外 HTTP 探针，因此正常显示为 `running / healthy`；其他组件显示 `ok` 是其额外探测通过。这些检查均不保证所有公开路由或发布结果正确。
+
+受保护的 Gitea、OC、Traefik 和 Info 路由按顺序使用 `console-auth` 与 `console-gzip` 中间件。认证通过后，对客户端接受 gzip 的 HTML、CSS、JavaScript、JSON、XML 和 SVG 响应启用 gzip，最小响应体 1024 字节。未通过认证的响应、Stargate 登录与会话交换路由不添加此压缩中间件，公开图片和对象路由保持原配置。已经编码、体积较小或不属于允许文本类型的响应不要求压缩。配置依据见 [Traefik Compress](https://doc.traefik.io/traefik/reference/routing-configuration/http/middlewares/compress/)。

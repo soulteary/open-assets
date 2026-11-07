@@ -192,9 +192,11 @@ class AuthenticationNavigation(unittest.TestCase):
                 check=True,
             )
             routes = json.loads((p / "routes.yaml").read_text())["http"]["routers"]
-            self.assertEqual(routes["info"]["middlewares"], ["console-auth"])
+            self.assertEqual(
+                routes["info"]["middlewares"], ["console-auth", "console-gzip"]
+            )
             landing = routes["auth-return"]
-            self.assertEqual(landing["middlewares"], ["console-auth"])
+            self.assertEqual(landing["middlewares"], ["console-auth", "console-gzip"])
             self.assertIn("Path(`/__auth_return`)", landing["rule"])
             for k in ["git", "storage", "traefik", "info"]:
                 self.assertIn(f"Host(`{domains[k]}`)", landing["rule"])

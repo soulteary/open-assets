@@ -46,7 +46,7 @@ for key, service in [
         "tls": {"certResolver": "le"},
     }
     if key in ["git", "storage", "traefik", "info"]:
-        routers[key]["middlewares"] = ["console-auth"]
+        routers[key]["middlewares"] = ["console-auth", "console-gzip"]
 # This exact endpoint must reach Stargate before a host-only session exists.
 # Its own ticket validation is the boundary; all other management paths use auth.
 routers["session-exchange"] = {
@@ -71,7 +71,7 @@ routers["auth-return"] = {
     + ") && Path(`/__auth_return`)",
     "entryPoints": ["websecure"],
     "service": "navigation",
-    "middlewares": ["console-auth"],
+    "middlewares": ["console-auth", "console-gzip"],
     "priority": 900,
     "tls": {"certResolver": "le"},
 }
@@ -80,13 +80,30 @@ config = {
         "routers": routers,
         "services": services,
         "middlewares": {
+            "console-gzip": {
+                "compress": {
+                    "encodings": ["gzip"],
+                    "minResponseBodyBytes": 1024,
+                    "includedContentTypes": [
+                        "text/html",
+                        "text/plain",
+                        "text/css",
+                        "text/javascript",
+                        "application/javascript",
+                        "application/json",
+                        "application/xml",
+                        "text/xml",
+                        "image/svg+xml",
+                    ],
+                }
+            },
             "console-auth": {
                 "forwardAuth": {
                     "address": "http://172.29.19.3:8080/_auth",
                     "trustForwardHeader": False,
                     "maxResponseBodySize": 1048576,
                 }
-            }
+            },
         },
         "serversTransports": {
             "console-tls": {"serverName": dom["storage"], "rootCAs": [ca]},
