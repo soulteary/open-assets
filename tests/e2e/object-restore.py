@@ -15,6 +15,7 @@ from open_assets import restore_check as check
 from open_assets import restore_check_info as check_info
 from open_assets import restore_close as close
 from open_assets import restore_close_info as close_info
+from open_assets import restore_audit as audit
 from open_assets import __main__ as core
 
 assert os.environ.get("OPEN_ASSETS_OBJECT_RESTORE_TEST") == "1"
@@ -207,8 +208,8 @@ try:
     assert closed["status"] == "closed" and not closed["current_is_target"]
     assert restore.report_path(config, "assets", fixture.sha).read_bytes() == evidence
     fixture.assert_current()
-    audit = fixture.state / "restore-closures/assets" / closed["audit_id"]
-    audit_bytes = {p.name: p.read_bytes() for p in audit.iterdir()}
+    audit_directory = fixture.state / "restore-closures/assets" / closed["audit_id"]
+    audit_bytes = {p.name: p.read_bytes() for p in audit_directory.iterdir()}
     assert audit_bytes["source.json"] == evidence
     closed_row = close_info.summary(host, host / "data")["repositories"][0]
     assert (
@@ -216,6 +217,45 @@ try:
         and closed_row["attempt"]["status"] == "closed"
     )
     assert not closed_row["attempt"].get("observation_unavailable")
+    repeated_close = close.run(
+        config, "assets", fixture.sha, "Fixture repeat preserves prior audit", writer
+    )
+    assert (
+        repeated_close["status"] == "closed"
+        and repeated_close["audit_id"] != closed["audit_id"]
+    )
+    preview = audit.run(
+        config, "assets", fixture.sha, action="archive", keep_last=1, min_age_days=0
+    )
+    assert preview["mode"] == "preview" and preview["archived_records"] == 0
+    assert audit_bytes == {p.name: p.read_bytes() for p in audit_directory.iterdir()}
+    archived = audit.run(
+        config,
+        "assets",
+        fixture.sha,
+        action="archive",
+        apply=True,
+        keep_last=1,
+        min_age_days=0,
+    )
+    assert (
+        archived["status"] == "complete"
+        and archived["archived_records"] == 1
+        and not audit_directory.exists()
+    )
+    package = (
+        fixture.state
+        / "restore-audit-archives/assets"
+        / (closed["audit_id"] + ".tar.gz")
+    )
+    _, saved = audit.verify_archive(package, "assets", closed["audit_id"])
+    assert saved == audit_bytes
+    assert (
+        audit.run(config, "assets", fixture.sha, action="verify")["status"]
+        == "complete"
+    )
+    assert audit.run(config, "assets", fixture.sha)["total"] == 3
+    fixture.assert_current()
     activated = restore.run(
         config, "assets", fixture.sha, writer, with_local=True, rollback=True
     )
@@ -241,9 +281,9 @@ try:
         closed_row["attempt"]["source_changed"]
         and closed_row["attempt"]["references_changed"]
     )
-    assert audit_bytes == {p.name: p.read_bytes() for p in audit.iterdir()}
+    assert audit.verify_archive(package, "assets", closed["audit_id"])[1] == audit_bytes
     print(
-        "Isolated restore: S3 bytes, metadata, retry and no-delete identity verified; both local copies rebuilt and repeated without activation; explicit rollback activated verified version; filtered Info success/partial-failure/local/activation observations verified; read-only diagnostic checks and Info snapshots verified; explicit closure/audit preservation/changed-source Info verified; jobs unchanged"
+        "Isolated restore: S3 bytes, metadata, retry and no-delete identity verified; both local copies rebuilt and repeated without activation; explicit rollback activated verified version; filtered Info success/partial-failure/local/activation observations verified; read-only diagnostic checks and Info snapshots verified; explicit closure/audit preservation/changed-source Info verified; query/preview/verified archival/current preservation verified; jobs unchanged"
     )
 finally:
     fixture.doCleanups()

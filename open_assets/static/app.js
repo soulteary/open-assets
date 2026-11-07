@@ -109,12 +109,12 @@ function renderRestoreClosures(data) {
   if(!rows.length){const tr=el('tr'),td=storageCell('暂无结案摘要');td.colSpan=5;tr.append(td);table.append(tr);}
   const reasons={verified:'重新核对通过并显式结案','source-unavailable':'原恢复报告缺失、损坏或范围已变',ineligible:'原恢复不是未结案或状态不确定','check-failed':'重新核对未通过','references-missing':'没有一致的在用 current/published','evidence-changed':'核对期间证据或屏障发生变化',io:'审计或文件读写失败',permission:'权限不足',timeout:'超时',interrupted:'中断',unavailable:'未能确认',missing:'证据缺失',mismatch:'证据不一致',storage:'存储请求失败'};
   for(const row of rows){const tr=el('tr'),a=row.attempt;tr.append(storageCell(row.key));
-    if(row.result_status!=='ok'||!a){const td=storageCell(row.result_status==='never'?'尚无结案记录':'结案报告不可用，不能确认结果');td.colSpan=4;tr.append(td);if(row.result_status!=='never')tr.className='warning';}
+    if(row.result_status!=='ok'||!a){const td=storageCell(row.result_status==='never'?'尚无结案记录':row.archive_hint==='scan-limit'?'在线审计超过读取上限；请用 restore-audit-archive 预览归档，未结案记录仍需保留':'结案报告不可用，不能确认结果');td.colSpan=4;tr.append(td);if(row.result_status!=='never')tr.className='warning';}
     else{
       tr.append(storageCell(({closed:'已显式结案（当时）',refused:'结案被拒绝',failed:'结案失败',running:'结案未完成 / 未结案'})[a.status]||'未知',['开始 '+date(a.started_at),a.finished_at?'结束 '+date(a.finished_at):'未记录结束时间']));
       tr.append(storageCell(a.source_status?({running:'原报告未结案',failed:'原报告失败',complete:'原报告完整结束'})[a.source_status]:'原证据未确认',[a.source_uncertain?'原报告的不确定状态保持原样':'原恢复报告不被改写','审计原因与原始快照仅在私有目录保存']));
       tr.append(storageCell(a.status==='closed'?'结案前重新核对通过':'未确认满足结案条件',[a.current_is_target===true?'核对时目标版本在用':a.current_is_target===false?'核对时保留其他当前版本':'目标是否在用：未知','未自动切换版本或解除屏障']));
-      const notes=[];if(a.source_changed)notes.push('原恢复报告已变化，此结案不涵盖新尝试');if(a.scope_changed)notes.push('存储范围已变化');if(a.manifest_changed)notes.push('清单已变化');if(a.references_changed)notes.push('current/published 已变化；结案是历史记录');if(a.observation_unavailable)notes.push('无法比较当前证据，请人工核对');if(a.status==='running')notes.push('可能仍在执行或进程已中断，不能视为结案');
+      const notes=[];if(row.online_attempts!=null)notes.push('在线审计 '+row.online_attempts+' 条 / 512 上限');if(row.archive_hint==='near-limit')notes.push('接近读取上限，可用 restore-audit-archive 预览归档');if(a.source_changed)notes.push('原恢复报告已变化，此结案不涵盖新尝试');if(a.scope_changed)notes.push('存储范围已变化');if(a.manifest_changed)notes.push('清单已变化');if(a.references_changed)notes.push('current/published 已变化；结案是历史记录');if(a.observation_unavailable)notes.push('无法比较当前证据，请人工核对');if(a.status==='running')notes.push('可能仍在执行或进程已中断，不能视为结案');
       tr.append(storageCell(reasons[a.reason]||'未记录最终结果',notes));
       if(a.status!=='closed'||a.source_changed||a.scope_changed||a.manifest_changed||a.references_changed||a.observation_unavailable)tr.className='warning';
     }table.append(tr);

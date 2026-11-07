@@ -105,3 +105,11 @@ sudo docker compose exec -T publisher python -m open_assets publish project-b FU
 ## 显式结案恢复
 
 `python -m open_assets close-restore <仓库key> <完整SHA> --reason '人工复核原因'` 在同一维护锁内重新核对，通过后单独记录结案。原恢复必须未结案或状态不确定，且 current/published 必须存在并一致；不切换版本、不解除清理屏障、不改写原报告。前提、退出码和私有审计说明见[恢复结案](restore-close.md)。
+
+## 查询与归档恢复审计
+
+- `restore-audit-list <key> [完整SHA] --limit 100 --offset 0`：合并查询在线与已归档的结案审计。
+- `restore-audit-archive <key> [完整SHA]`：默认仅预览，保留最近 20 条、完成不足 30 天及未结案记录；添加 `--apply` 才实际归档。
+- `restore-audit-verify <key> [完整SHA]`：验证归档完整性和中断清理现场，不恢复或解包到在线目录。
+
+均在 Publisher 中使用 `python -m open_assets` 执行。归档先保存完整文件与校验清单，验证后才移出在线目录；支持中断重试，不自动删除归档包。参数、保护范围、退出码见[恢复审计](restore-audit.md)。

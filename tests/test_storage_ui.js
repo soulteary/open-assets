@@ -187,3 +187,9 @@ test('uncompleted and unreadable closure audits do not fall back to success', as
   const text=ui.get('restore-close-repositories').textContent;assert.match(text,/尚无结案记录/);assert.match(text,/不能确认结果/);assert.match(text,/不能视为结案/);assert.doesNotMatch(text,/已显式结案/);
   ui.context.fetch=async()=>{throw Error('offline')};await ui.context.update();assert.match(ui.get('restore-close-notice').textContent,/无法刷新/);
 });
+
+test('closure audit growth suggests preview archival without hiding unfinished records', () => {
+  const ui=setup(),data=fixture();data.restoration_closures={status:'ok',repositories:[{key:'near',result_status:'ok',online_attempts:450,archive_hint:'near-limit',attempt:{status:'running',started_at:1}},{key:'over',result_status:'unavailable',online_attempts_at_least:513,archive_hint:'scan-limit'}]};
+  ui.context.render(data);const text=ui.get('restore-close-repositories').textContent;
+  assert.match(text,/在线审计 450 条/);assert.match(text,/restore-audit-archive 预览归档/);assert.match(text,/未结案记录仍需保留/);assert.match(text,/不能视为结案/);
+});

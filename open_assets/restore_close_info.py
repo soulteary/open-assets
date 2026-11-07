@@ -1,6 +1,7 @@
 """Bounded, read-only closure observations with private audit evidence checks."""
 
 import hashlib
+import json
 import os
 import re
 import stat
@@ -68,12 +69,20 @@ def clean(intent, result, key, audit_id):
 
 
 def verify_evidence(directory, intent, result):
+    verify_snapshots(
+        read_bytes(directory / "source.json", 16384),
+        read_bytes(directory / "check.json", 16384),
+        intent,
+        result,
+    )
+
+
+def verify_snapshots(source_raw, check_raw, intent, result):
     from .restore_info import clean as clean_restore
 
-    source_raw = read_bytes(directory / "source.json", 16384)
     if hashlib.sha256(source_raw).hexdigest() != result.get("source_report_digest"):
         raise ValueError("changed closure source snapshot")
-    original = read_json(directory / "source.json", 16384)
+    original = json.loads(source_raw)
     evidence = clean_restore(
         original, intent["key"], intent["sha"], intent["scope_digest"]
     )
@@ -82,10 +91,9 @@ def verify_evidence(directory, intent, result):
         or original.get("scope_digest") != intent["scope_digest"]
     ):
         raise ValueError("ineligible closure snapshot")
-    check_raw = read_bytes(directory / "check.json", 16384)
     if hashlib.sha256(check_raw).hexdigest() != result.get("check_digest"):
         raise ValueError("changed closure check snapshot")
-    checked = read_json(directory / "check.json", 16384)
+    checked = json.loads(check_raw)
     sanitized = clean_check(checked, intent["key"], intent["sha"])
     if (
         sanitized["diagnosis"] != "verified"
@@ -130,6 +138,7 @@ def summary(root, data_root):
     for key in keys:
         row = dict(key=key, result_status="never")
         parent = data_root / "publisher/restore-closures" / key
+        count = 0
         try:
             for path in (parent.parent, parent):
                 if path.exists() or path.is_symlink():
@@ -139,6 +148,7 @@ def summary(root, data_root):
             if parent.exists():
                 with os.scandir(parent) as entries:
                     for index, entry in enumerate(entries):
+                        count = index + 1
                         if index >= MAX_ATTEMPTS or time.monotonic() > deadline:
                             raise ValueError("closure scan limit")
                         if not re.fullmatch(
@@ -159,6 +169,8 @@ def summary(root, data_root):
                             or record["started_at"] > latest[0]["started_at"]
                         ):
                             latest = (record, intent, result, directory)
+            row["online_attempts"] = count
+            row["archive_hint"] = "near-limit" if count >= 448 else "none"
             if latest:
                 record, intent, result, directory = latest
                 if record["status"] == "closed":
@@ -196,6 +208,11 @@ def summary(root, data_root):
             AttributeError,
             RecursionError,
         ):
-            row = dict(key=key, result_status="unavailable")
+            row = dict(
+                key=key,
+                result_status="unavailable",
+                online_attempts_at_least=count,
+                archive_hint="scan-limit" if count > MAX_ATTEMPTS else "unavailable",
+            )
         rows.append(row)
     return dict(status="ok", repositories=rows)

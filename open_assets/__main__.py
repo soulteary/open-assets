@@ -780,6 +780,9 @@ def main():
             "restore-objects",
             "check-restore",
             "close-restore",
+            "restore-audit-list",
+            "restore-audit-archive",
+            "restore-audit-verify",
             "retry",
             "rollback-images",
             "status",
@@ -797,7 +800,23 @@ def main():
         help="explicitly activate a fully restored version; requires --with-local",
     )
     a.add_argument("--reason", help="private audit reason for close-restore")
+    a.add_argument("--apply", action="store_true", help="apply restore audit archival")
+    a.add_argument("--keep-last", type=int)
+    a.add_argument("--min-age-days", type=int)
+    a.add_argument("--max-records", type=int)
+    a.add_argument("--limit", type=int)
+    a.add_argument("--offset", type=int)
     o = a.parse_args()
+    if (
+        o.apply
+        or any(v is not None for v in (o.keep_last, o.min_age_days, o.max_records))
+    ) and o.command != "restore-audit-archive":
+        a.error("archive options require restore-audit-archive")
+    if any(v is not None for v in (o.limit, o.offset)) and o.command not in (
+        "restore-audit-list",
+        "restore-audit-verify",
+    ):
+        a.error("pagination requires an audit list or verify command")
     if o.command == "close-restore" and o.reason is None:
         a.error("close-restore requires --reason")
     if o.reason is not None and o.command != "close-restore":
@@ -809,7 +828,11 @@ def main():
     try:
         c = load()
     except Exception as error:
-        if o.command in ("restore-objects", "check-restore", "close-restore"):
+        if o.command in (
+            "restore-objects",
+            "check-restore",
+            "close-restore",
+        ) or o.command.startswith("restore-audit-"):
             print(
                 json.dumps(dict(status="failed", error=type(error).__name__)),
                 file=sys.stderr,
@@ -896,6 +919,39 @@ def main():
             raise SystemExit(2)
         if report.get("diagnosis") != "verified" and report["status"] != "closed":
             raise SystemExit(1)
+    elif o.command.startswith("restore-audit-"):
+        if not 1 <= len(o.args) <= 2:
+            a.error(o.command + " requires a repository key and optional full SHA")
+        from .restore_audit import run as audit_run
+
+        options = {
+            k: v
+            for k, v in dict(
+                keep_last=o.keep_last,
+                min_age_days=o.min_age_days,
+                max_records=o.max_records,
+                limit=o.limit,
+                offset=o.offset,
+            ).items()
+            if v is not None
+        }
+        try:
+            report = audit_run(
+                c,
+                *o.args,
+                action=o.command.removeprefix("restore-audit-"),
+                apply=o.apply,
+                **options,
+            )
+        except (Exception, KeyboardInterrupt) as error:
+            print(
+                json.dumps(dict(status="failed", error=type(error).__name__)),
+                file=sys.stderr,
+            )
+            raise SystemExit(1) from None
+        print(json.dumps(report))
+        if report["status"] != "complete":
+            raise SystemExit(2 if report["status"] == "busy" else 1)
     elif o.command == "retry":
         if not re.fullmatch("[0-9a-f]{64}", o.args[0]):
             raise ValueError("invalid job ID")
