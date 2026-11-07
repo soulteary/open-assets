@@ -61,11 +61,19 @@ sudo docker compose exec -T publisher python -m open_assets status
 
 ## 服务组成
 
-Gitea 向内部 Webhook 接收器发送签名事件；接收器写入文件队列；单个 Publisher 串行处理任务，上传 OtterIO 并准备 Nginx 图片目录。接收器和 Publisher 使用同一个应用镜像，以不同命令和挂载权限运行。
+![Open Assets 架构图：Git 自动发布、公开读取与管理认证](.github/images/open-assets-architecture.gif)
 
-现有 Traefik 提供 HTTPS 和路由。公开图片、附件允许匿名读取；Gitea 网页、OC Console 和 Traefik Dashboard/API 经过 Stargate。Gitea 和 OC 保留各自的应用认证。Git SSH 使用 Gitea 密钥，不经过 HTTP 认证层。
+架构图按三类链路展示服务；同名服务在不同视图中重复出现，仍是同一部署实例。动画依次演示发布、图片读取、附件读取和管理认证，只表示调用或操作方向，不表示实际延迟、并发或事务边界。域名均为示例。
+
+- **自动发布**：Gitea 向内部 Webhook 接收器发送签名事件。接收器校验签名、仓库和分支，将任务持久化后返回 202。单个 Publisher 串行处理任务，从固定 remote 拉取提交并导出 `public/`，上传、校验 OtterIO 对象，再原子切换对应仓库的图片 `current`。接收器和 Publisher 使用同一个应用镜像，以不同命令和挂载权限运行。
+- **公开读取**：现有 Traefik 提供 HTTPS 和路由。图片请求由 Nginx 从只读挂载的当前图片目录提供；附件请求经 OtterIO S3 读取带 SHA 的版本对象。两个入口均允许匿名 GET/HEAD，不经过 Stargate。普通图片发布不需要重载 Nginx；新增仓库映射时才生成、校验并重载配置。
+- **管理访问**：Traefik 通过 Stargate ForwardAuth 校验会话，通过后才将业务请求转发给 Gitea、OC Console 或 Dashboard/API。Stargate 不代理这些应用的业务流量；Gitea 和 OC 保留各自的应用认证。OC 通过内网 HTTPS 访问 OtterIO S3 和 Admin API，`9001` 是 Admin API，管理网页由独立 OC Console 提供。Git SSH 使用 Gitea 密钥，不经过 HTTP 认证层。
 
 宿主机仓库接入 CLI 使用本机 Docker 和私有管理员配置。应用容器不挂载 Docker socket，也不获得这项管理权限。
+
+图中仓库接入命令 `repo ensure` 负责协调仓库、只读 Deploy Key、Webhook、S3 权限和 Nginx 映射，支持重复执行。具体参数见 [仓库接入 CLI](docs/cli.md)；发布状态、故障恢复和跨系统操作的限制见 [发布流程](docs/architecture.md)。
+
+架构图使用 [fireworks-tech-graph](https://github.com/yizhiyanhua-ai/fireworks-tech-graph/) 的 Claude 风格生成，并在 SVG 上定制流向动画。
 
 ## 使用限制
 
