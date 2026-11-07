@@ -78,3 +78,5 @@ Worker 在导出前要求 images_root 文件系统的可用空间至少为 `2 ×
 全局和仓库级 `retention` 控制本地版本保留及任务归档，默认禁用实际清理，配置项和保护规则见 [历史清理](retention.md)。
 
 `INFO_DISK_*` 与 `INFO_INODE_*` 控制 Info 的容量提示阈值，由宿主机采集器读取；默认值与统计范围见 [Info 说明](info.md#容量提示)。
+
+OtterIO 对象容量使用独立 open-assets-objects.timer：固定 15 分钟缓存间隔、共享 100 页/110 秒预算、每页最多 1000 对象和每秒至多一次列表请求。此间隔不依赖页面刷新，也不由 --refresh-storage 绕过；安装、续采与统计口径见 [Info 文档](info.md#otterio-对象统计)。

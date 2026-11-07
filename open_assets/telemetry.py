@@ -359,6 +359,9 @@ def collect(root, refresh_storage=False):
 
     result["storage"] = collect_storage(root, data_root, force=refresh_storage)
     result["storage"]["cleanup_service"] = cleanup_service()
+    from .object_info import summary
+
+    result["object_storage"] = summary(root, data_root)
     result["capacity"] = capacity(disks, result["storage"], env, image_disk_index)
     result["collection_seconds"] = round(time.monotonic() - started, 3)
     performance = root / "private/performance/latest-summary.json"

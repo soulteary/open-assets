@@ -65,3 +65,22 @@ test('failed refresh replaces a previous green capacity notice', async () => {
   assert.match(ui.get('capacity-notice').textContent, /无法取得最新状态/);
   assert.equal(ui.get('error').hidden, false);
 });
+
+test('object totals show complete measurements, pending and failed scans keep explicit status', () => {
+  const ui = setup(), data = fixture();
+  data.object_storage = {status: 'ok', repositories: [{key: 'assets', status: 'ok', objects: 1005, bytes: 4096, started_at: Date.now()/1000-10, measured_at: Date.now()/1000, stale: false}]};
+  ui.context.render(data);
+  assert.match(ui.get('repositories').textContent, /1005 个 \/ 4.0 KiB/);
+  assert.match(ui.get('repositories').textContent, /对象逻辑大小，非底层磁盘占用/);
+  data.object_storage.repositories[0].status = 'scanning';
+  ui.context.render(data);
+  assert.match(ui.get('repositories').textContent, /分页采集中，显示上次完整结果/);
+  assert.match(ui.get('repositories').textContent, /1005 个/);
+  data.object_storage.repositories[0].status = 'unavailable';
+  ui.context.render(data);
+  assert.match(ui.get('repositories').textContent, /最近采集失败/);
+  data.object_storage.repositories = [{key: 'assets', status: 'scanning', stale: true}];
+  ui.context.render(data);
+  assert.match(ui.get('repositories').textContent, /尚无完整统计/);
+  assert.doesNotMatch(ui.get('repositories').textContent, /0 个 \/ 0 B/);
+});

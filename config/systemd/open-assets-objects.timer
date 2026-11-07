@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh cached S3 repository statistics every 15 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=15min
+AccuracySec=15s
+Unit=open-assets-objects.service
+
+[Install]
+WantedBy=timers.target

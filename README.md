@@ -111,3 +111,5 @@ python -m unittest discover -s tests -v
 本地历史版本的数量/时间保留、固定回滚点和终态任务归档见 [历史清理](docs/retention.md)；默认只预览，OSS 历史附件继续保留。
 
 Info 看板提供各仓库本地版本数、占用、保留策略和最近完整清理结果，并提示空间、inode 及发布预留不足。采样范围和阈值配置见 [Info 说明](docs/info.md)。
+
+Info 同时展示仓库的本地容量和 OtterIO 对象数量、逻辑大小。对象统计独立定时采集、分页限速并缓存，页面刷新不会遍历存储；安装与统计边界见 [Info 文档](docs/info.md#otterio-对象统计)。

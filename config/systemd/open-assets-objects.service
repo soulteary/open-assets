@@ -1,0 +1,18 @@
+[Unit]
+Description=Open Assets cached S3 repository object statistics
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/app/open-assets
+ExecStart=/usr/bin/python3 -m open_assets.object_info --root /app/open-assets
+UMask=0077
+Environment=DOCKER_CONFIG=/tmp/open-assets-docker
+TimeoutStartSec=140
+Nice=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/data/asset-stack/info

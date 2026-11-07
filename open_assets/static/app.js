@@ -57,7 +57,7 @@ function renderStorage(data) {
   const rows = storage.repositories || [];
   const table = byId('repositories'); table.replaceChildren();
   if (!rows.length) {
-    const tr = el('tr'), td = storageCell('暂时无法读取仓库统计'); td.colSpan = 5; tr.append(td); table.append(tr);
+    const tr = el('tr'), td = storageCell('暂时无法读取仓库统计'); td.colSpan = 6; tr.append(td); table.append(tr);
   }
   for (const row of rows) {
     const tr = el('tr');
@@ -66,6 +66,13 @@ function renderStorage(data) {
     tr.append(storageCell(row.key, [row.measured_at ? '本地统计于 ' + date(row.measured_at) + (old ? '（旧数据 / 需复查）' : '') : '本地统计不可用']));
     tr.append(storageCell(row.versions == null ? '—' : row.versions + ' 版', ['完整快照 ' + (row.full_copies ?? '—') + ' / 图片副本 ' + (row.image_copies ?? '—'), '未配对 ' + (row.partial_versions ?? '—') + ' · 异常条目 ' + (row.unusual_entries ?? '—')]));
     tr.append(storageCell(bytes(row.local_bytes), ['版本 ' + bytes(row.version_bytes) + ' · Git ' + bytes(row.git_bytes), '清理暂存 ' + bytes(row.trash_bytes) + ' · 发布暂存 ' + bytes(row.staging_bytes), '发布预留 ' + bytes(row.publication_required_bytes)]));
+    const objects = (data.object_storage?.repositories || []).find(record => record.key === row.key) || {};
+    const objectOld = data.stale || objects.stale || objects.status !== 'ok';
+    const objectLabels = {scanning: '分页采集中，显示上次完整结果', unavailable: '最近采集失败，需复查', never: '等待首次完整采集'};
+    const objectDetails = [objects.measured_at ? '完整统计于 ' + date(objects.measured_at) + (objectOld ? '（旧数据 / 需复查）' : '') : '尚无完整统计', objectLabels[objects.status] || (objects.measured_at ? '采集开始于 ' + date(objects.started_at) : '对象统计不可用'), '对象逻辑大小，非底层磁盘占用'];
+    const objectCell = storageCell(objects.objects == null ? '—' : objects.objects + ' 个 / ' + bytes(objects.bytes), objectDetails);
+    if (objectOld || objects.objects == null) objectCell.className = 'warning';
+    tr.append(objectCell);
     const policy = row.policy;
     tr.append(!policy || row.policy_status === 'unavailable' ? storageCell('策略不可用') : storageCell(policy.enabled ? '自动清理已启用' : '实际清理未启用', ['最近 ' + policy.keep_last + ' 版、' + policy.keep_days + ' 天（取并集）', '回滚 ' + policy.rollback_versions + ' 版 · 固定 ' + policy.pinned_count + ' 版 · 最少 ' + policy.min_age_hours + ' 小时', '每轮上限 ' + policy.max_delete_versions + ' 版 / ' + bytes(policy.max_delete_bytes) + '（逻辑）', '任务 ' + policy.archive_jobs_after_days + ' 天后归档，上限 ' + policy.max_archive_jobs + ' 份']));
     const cleanup = row.cleanup || {};

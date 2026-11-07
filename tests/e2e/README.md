@@ -34,3 +34,9 @@ OPEN_ASSETS_FRESH_TEST=1 sh tests/e2e/fresh-stack.sh
 ## 退出与清理
 
 测试不自动删除环境，以便检查失败。完成后销毁专用 VM/容器及其独立数据卷即可。不要在不确定 Docker context 时使用全局 prune 或批量删除命令。
+
+## 独立对象统计测试
+
+objects.py 只用于专用临时网络中的 OtterIO，目标固定为 http://objects-fixture:9000 和 statistics-fixture 桶，必须设置 OPEN_ASSETS_OBJECTS_TEST=1。用临时凭据文件提供 S3_ACCESS_KEY_FILE、S3_SECRET_KEY_FILE；测试容器需能导入候选 open_assets 模块。不要连接生产网络、挂载生产 private 或发布服务端口。
+
+脚本创建 1003 个带中文和特殊字符的主前缀对象、2 个相邻前缀对象、空前缀及范围外对象，检查数量和字节总和。每轮限制 1 页，验证跨轮续采；只在测试内调整尝试时间以模拟间隔，最后确认间隔内重复执行没有列表调用。测试完成后只删除专用测试容器和网络，不执行全局 prune。
