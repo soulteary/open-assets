@@ -4,7 +4,7 @@
 
 配置见 `config/repositories.example.yaml`。稳定 key 与 Gitea repository_id 共同绑定发布身份；名称用于阅读，remote 由管理员固定。仅接受配置分支 Push，禁用项拒绝入队和执行。
 
-源目录为 public，图片子目录为 images。附件 URL：`https://oss-toh1.lab.dev/attachments/repositories/main-images/releases/<sha>/images/logo.png`；图片 URL：`https://img-toh1.lab.dev/logo.png`。
+源目录为 public，图片子目录为 images。附件 URL：`https://oss-node-name.lab.dev/attachments/repositories/main-images/releases/<sha>/images/logo.png`；图片 URL：`https://img-node-name.lab.dev/logo.png`。
 
 新增仓库优先使用 repo ensure；手工接入时，需要分别配置 Gitea 读取权限、发布白名单、S3 对象前缀权限和 Nginx 映射，全部完成后再配置 Hook 并首次 Push。只创建 Gitea 仓库不会触发自动发布。
 

@@ -171,10 +171,10 @@ class AuthenticationNavigation(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             p = pathlib.Path(t)
             domains = {
-                k: f"{k}-toh1.console.lab.dev"
+                k: f"{k}-node-name.console.lab.dev"
                 for k in ["git", "storage", "traefik", "auth"]
             }
-            domains.update(img="img-toh1.lab.dev", oss="oss-toh1.lab.dev")
+            domains.update(img="img-node-name.lab.dev", oss="oss-node-name.lab.dev")
             (p / "domains.json").write_text(json.dumps(domains))
             (p / "ca.pem").write_text("test-ca")
             subprocess.run(

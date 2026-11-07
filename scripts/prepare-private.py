@@ -13,18 +13,16 @@ import json
 import yaml
 import shutil
 
+from deployment_config import DEFAULT_NODE_NAME, build_domains, render_env
+
 P = pl.Path
 app = P("/app/open-assets")
 p = app / "private"
 d = P("/data/asset-stack")
 os.umask(0o077)
 base = os.environ["PUBLIC_BASE"]
-dom = {
-    k: f"{k}-toh1."
-    + ("console." if k in ["storage", "git", "auth", "traefik"] else "")
-    + base
-    for k in ["oss", "img", "storage", "git", "auth", "traefik"]
-}
+node_name = os.environ.get("NODE_NAME", DEFAULT_NODE_NAME)
+dom = build_domains(node_name, base)
 for s in ["storage", "publisher", "tls/storage", "tls/console", "generated"]:
     (p / s).mkdir(parents=True, exist_ok=True)
 for s, uid in [
@@ -142,12 +140,7 @@ for name, cn, cert, key in [
     (tls / "storage/CAs").mkdir(exist_ok=True)
     shutil.copy(tls / "ca.crt", t / "ca.crt")
 shutil.copy(tls / "ca.crt", p / "publisher/ca.crt")
-env = (
-    (app / ".env.example")
-    .read_text()
-    .replace("storage-toh1.console.lab.dev", dom["storage"])
-    .replace("git-toh1.console.lab.dev", dom["git"])
-)
+env = render_env((app / ".env.example").read_text(), node_name, base)
 (app / ".env").write_text(env)
 
 h = bcrypt.hashpw(sec("stargate_password").encode(), bcrypt.gensalt()).decode()

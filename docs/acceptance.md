@@ -53,3 +53,15 @@ The CLI is host-only and privileged; it does not grant application containers Do
 ## Isolated fresh installation — 2026-11-07
 
 Two independent DinD instances completed the documented cold-start sequence. The second ran the guarded fresh-stack.sh from an empty daemon/configuration/data state and exited 0. Initialization, first/repeated onboarding, no restart on repeat, conflict rejection, real SSH Push in two repositories, published state, private-CA HTTPS byte comparisons, encoded image paths, Range and management authentication passed. No production host or credentials were used. See [environment and scope](fresh-install.md) and [reproduction](../tests/e2e/README.md). No application behavior change was needed; the suite now includes eighteen ordinary regression tests, including default refusal of the destructive-fixture runner.
+
+## Configurable node naming — 2026-11-07
+
+The naming change was installed and verified on the existing server before publication to GitHub:
+
+- Two separate private mount namespaces bound empty test application/data directories over the initialization paths. One omitted NODE_NAME and used the default `node-name`; the other explicitly used `acceptance-node-2`. Both ran prepare-private.py, the read-only naming checker and Compose configuration validation successfully. No application containers were started in these namespaces.
+- Original installed files and the private environment were backed up before the host scripts/template were updated. NODE_NAME and PUBLIC_BASE metadata were derived from the existing domains; existing public service names were preserved. This was not a domain migration.
+- Checksums of the existing runtime domain, authentication, repository and CA files stayed unchanged. Running container identities also stayed unchanged; no application restart was needed.
+- Live Compose, Nginx and Publisher configuration checks passed. Existing public image/attachment bytes matched the manifest, and Range downloads passed. Anonymous Gitea, OC and Dashboard requests redirected to Stargate; password login and authenticated routes passed for all three.
+- Twenty-two ordinary automated tests, Ruff checks and shell syntax validation passed. The updated GIF and current text examples use generic node names.
+
+These checks cover naming initialization and regression of the existing deployment. They do not repeat the full fresh-stack Git Push suite or Chrome upload/download/logout checks for this revision. Two separate temporary-directory reproductions confirmed the rollback-copy and malformed-task issues documented in [the risk assessment](risks.md); those issues remain open.

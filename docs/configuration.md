@@ -2,9 +2,38 @@
 
 ## 配置放在哪里
 
-`.env` 保存 Compose 的镜像引用、DATA_ROOT 和应用域名。`private/repositories.yaml` 保存接收器与 Publisher 共同使用的发布规则。`private/stargate.env`、密钥、CA 和 OC alias 也属于私有运行配置，不提交 Git。
+`.env` 保存 Compose 的镜像引用、DATA_ROOT、节点元数据和应用域名。`private/repositories.yaml` 保存接收器与 Publisher 共同使用的发布规则。`private/stargate.env`、密钥、CA 和 OC alias 也属于私有运行配置，不提交 Git。
 
 `.env.example` 和 `config/repositories.example.yaml` 是模板。示例仓库 ID 不能代替 Gitea 实际 ID；生产 endpoint 需保留私有 CA 验证。初始化脚本会生成符合配方的私有文件，后续通过接入 CLI 添加仓库。
+
+## 节点与域名
+
+新部署在初始化时传入两个环境变量：
+
+```sh
+NODE_NAME=beijing-1 PUBLIC_BASE=example.org python3 scripts/prepare-private.py
+```
+
+`NODE_NAME` 默认 `node-name`，接受 1–48 位小写字母、数字和连字符，首尾必须是字母或数字。`PUBLIC_BASE` 必须显式传入，使用自己控制的小写 DNS 域名，不带协议、端口、路径或末尾的点。国际化域名请先转换为 ASCII/Punycode。
+
+脚本生成 `img-<节点名>.<基域>`、`oss-<节点名>.<基域>` 和四个 `<服务>-<节点名>.console.<基域>` 管理域名，再把 `NODE_NAME`、`PUBLIC_BASE` 和解析后的 `STORAGE_DOMAIN`、`GIT_DOMAIN` 写入 `.env`。凭据、内部证书、Stargate 和 Traefik 路由使用同一组生成结果。
+
+这里的 `.env` 是初始化输出，不会在脚本启动时自动读回作为输入。重新执行初始化仍会重写配置；不要用它修改正在运行的服务。
+
+已有部署若尚未记录 `NODE_NAME` 和 `PUBLIC_BASE`，先备份 `.env`，根据 `private/domains.json` 中的现有地址补入对应值，保留原有 `STORAGE_DOMAIN`、`GIT_DOMAIN` 和其他字段。随后只读检查：
+
+```sh
+python3 scripts/deployment_config.py \
+  --env .env \
+  --domains private/domains.json
+docker compose config --quiet
+```
+
+检查器不输出域名或秘密，不修改文件。它核对六个运行域名及两个 Compose 域名是否与节点元数据一致，不检查 DNS、证书有效期或服务健康。
+
+只改 `.env` 中的 `NODE_NAME` 或 `PUBLIC_BASE` 不会更新 `private/domains.json`、Stargate 回调、内部证书或 Traefik 动态路由。迁移节点域名需要分别安排 DNS、证书、Gitea ROOT_URL/SSH 地址、OC public URL、Stargate 回调和入口路由，并处理旧链接；当前没有自动迁移命令。不要通过重跑初始化替代迁移。
+
+`NODE_NAME` 只参与域名生成，不改变 Compose 项目、服务名、固定 IP、端口和数据目录，因此不提供同机多实例隔离。
 
 ## 发布配置字段
 

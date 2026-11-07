@@ -56,7 +56,7 @@ sudo ./scripts/open-assets repo ensure content/project-b \
 在自己的电脑克隆并提交内容，示例域名替换成实际 Gitea 主机：
 
 ```sh
-git clone ssh://git@git-toh1.console.lab.dev:2222/content/project-b.git
+git clone ssh://git@git-node-name.console.lab.dev:2222/content/project-b.git
 cd project-b
 # 放入 public/images/logo.png，以及可选 public/documents/manual.pdf
 git add public
@@ -76,8 +76,8 @@ sudo docker compose exec -T publisher python -m open_assets status
 链接：
 
 ```text
-https://img-toh1.lab.dev/project-b/logo.png
-https://oss-toh1.lab.dev/attachments/repositories/project-b/releases/<完整SHA>/documents/manual.pdf
+https://img-node-name.lab.dev/project-b/logo.png
+https://oss-node-name.lab.dev/attachments/repositories/project-b/releases/<完整SHA>/documents/manual.pdf
 ```
 
 已有内容无需新提交时，可显式补发：

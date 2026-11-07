@@ -17,13 +17,13 @@ public/
 图片通过固定地址访问：
 
 ```text
-https://img-toh1.lab.dev/2026/11/07/logo.png
+https://img-node-name.lab.dev/2026/11/07/logo.png
 ```
 
 附件通过版本地址访问：
 
 ```text
-https://oss-toh1.lab.dev/attachments/repositories/main-images/releases/<完整SHA>/documents/manual.pdf
+https://oss-node-name.lab.dev/attachments/repositories/main-images/releases/<完整SHA>/documents/manual.pdf
 ```
 
 图片地址在下一次成功发布后指向新版本，默认缓存 300 秒。附件地址包含完整 SHA，适合在文章或版本说明中引用；项目不会自动删除历史附件。文档中的 `lab.dev` 是占位域名，不能原样用于生产配置。
@@ -77,11 +77,15 @@ sudo docker compose exec -T publisher python -m open_assets status
 
 ## 使用限制
 
-当前配方固定使用节点名 `toh1`、Compose 项目名 `asset-stack`、`/app/open-assets` 和 `/data/asset-stack`。适用范围是单机 Docker Compose、一个 Publisher 和本地 POSIX 文件系统；改变路径、项目名或拓扑前需要检查脚本中的固定值。
+节点名由 `NODE_NAME` 指定，默认 `node-name`，初始化后记录在私有 `.env` 中；示例地址中的 `node-name` 应替换为自己的节点名。修改已有部署的节点名需要另行迁移域名、证书和认证配置，不能只修改 `.env`。操作范围见 [节点与域名配置](docs/configuration.md#节点与域名)。
+
+当前配方固定使用 Compose 项目名 `asset-stack`、`/app/open-assets` 和 `/data/asset-stack`。适用范围是单机 Docker Compose、一个 Publisher 和本地 POSIX 文件系统；改变路径、项目名或拓扑前需要检查脚本中的固定值。`NODE_NAME` 不会隔离同一主机上的端口、网络或数据目录。
 
 发布程序不执行内容仓库脚本，不支持 LFS、submodule、符号链接或隐藏路径。图片按扩展名限制为 PNG/JPEG/GIF/WebP/AVIF/ICO，不检测文件格式或恶意内容。每个版本需包含 `public/images/` 中至少一张图片；其余文件作为附件发布。
 
 失败任务不会自动重试。程序重启会重新处理遗留的 `running` / `images_prepared` 任务，但自动任务若已不是远端分支头，会被标记为 `superseded`。对象上传、图片切换和任务记录之间没有跨系统事务；部分对象可能在任务完成前已能读取。
+
+当前实现仍有回滚副本校验、损坏任务隔离、容量管理和默认管理权限等风险，具体触发条件与建议见 [风险评估](docs/risks.md)。
 
 ## 本地检查
 

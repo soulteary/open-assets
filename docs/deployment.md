@@ -1,6 +1,6 @@
 # 部署说明
 
-本配方针对单台 Linux 服务器，复用一套已经工作的 Traefik。源码、私有配置和数据分别放在 `/app/open-assets`、`/app/open-assets/private` 和 `/data/asset-stack`。节点名固定为 toh1，Compose 项目名固定为 asset-stack。
+本配方针对单台 Linux 服务器，复用一套已经工作的 Traefik。源码、私有配置和数据分别放在 `/app/open-assets`、`/app/open-assets/private` 和 `/data/asset-stack`。节点名由 `NODE_NAME` 指定，默认 `node-name`；Compose 项目名固定为 asset-stack。
 
 准备迁移现有服务时，先备份原 Compose、数据、DNS 凭据和 ACME 状态，并确认恢复方法。下面的初始化步骤只用于空的新部署，不用于覆盖已有运行目录。
 
@@ -47,21 +47,23 @@ git rev-parse HEAD
 准备自己的公共 DNS 基域，然后生成私有配置：
 
 ```sh
-PUBLIC_BASE=lab.dev python3 scripts/prepare-private.py
+NODE_NAME=node-name PUBLIC_BASE=lab.dev python3 scripts/prepare-private.py
 ```
 
-这里的 lab.dev 必须替换为自己控制的域名。脚本生成六个主机名并保存到 `private/domains.json`：
+这里的 lab.dev 必须替换为自己控制的域名，node-name 替换为自己的节点标识，例如 `beijing-1`。节点名使用 1–48 位小写字母、数字或连字符，首尾不能是连字符；不传 `NODE_NAME` 时使用 `node-name`。脚本生成六个主机名并保存到 `private/domains.json`：
 
 ```text
-oss-toh1.<base>
-img-toh1.<base>
-storage-toh1.console.<base>
-traefik-toh1.console.<base>
-auth-toh1.console.<base>
-git-toh1.console.<base>
+oss-node-name.<base>
+img-node-name.<base>
+storage-node-name.console.<base>
+traefik-node-name.console.<base>
+auth-node-name.console.<base>
+git-node-name.console.<base>
 ```
 
-该脚本会生成密码、Publisher SSH 密钥、内部 CA 和证书，写入 .env、Stargate 配置及初始仓库模板。已有秘密文件通常会被复用，但配置文件会重写，因此不能把它当作幂等的配置更新工具。
+上述 `node-name` 对应 `NODE_NAME`，`<base>` 对应 `PUBLIC_BASE`。两者同时写入私有 `.env`，`STORAGE_DOMAIN` 和 `GIT_DOMAIN` 写入解析后的完整主机名。
+
+该脚本会生成密码、Publisher SSH 密钥、内部 CA 和证书，写入 .env、Stargate 配置及初始仓库模板。已有秘密文件通常会被复用，但配置文件会重写，因此不能把它当作幂等的配置更新工具。已有部署只需记录与现有域名一致的节点元数据，不应重新初始化；具体检查方式见 [节点与域名配置](configuration.md#节点与域名)。
 
 创建指向服务器的 DNS 记录。脚本不调用 DNS 服务商 API，也不申请公网证书。公网证书由现有 Traefik 的 resolver 处理；它使用的 DNS 凭据和 ACME 文件仍由原部署管理，不复制到开源仓库。
 

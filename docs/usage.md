@@ -72,7 +72,7 @@ ssh-keygen -lf /data/asset-stack/gitea/data/ssh/gitea.ed25519.pub
 在自己的电脑执行，将 `GIT_HOST` 替换为实际 `git` 主机名：
 
 ```sh
-export GIT_HOST=git-toh1.console.lab.dev
+export GIT_HOST=git-node-name.console.lab.dev
 export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/open-assets_ed25519 -o IdentitiesOnly=yes"
 git clone "ssh://git@$GIT_HOST:2222/content/images.git"
 cd images
@@ -143,27 +143,27 @@ docker compose exec -T publisher python -m open_assets publish main-images FULL_
 在自己的电脑设置真实公开主机名：
 
 ```sh
-export IMG_HOST=img-toh1.lab.dev
-export OSS_HOST=oss-toh1.lab.dev
+export IMG_HOST=img-node-name.lab.dev
+export OSS_HOST=oss-node-name.lab.dev
 export RELEASE_SHA=$(git rev-parse HEAD)
 ```
 
 根仓库 `public/images/2026/11/07/logo.png` 的固定图片地址：
 
 ```text
-https://img-toh1.lab.dev/2026/11/07/logo.png
+https://img-node-name.lab.dev/2026/11/07/logo.png
 ```
 
 同一图片在对象存储中的不可变版本地址：
 
 ```text
-https://oss-toh1.lab.dev/attachments/repositories/main-images/releases/<完整SHA>/images/2026/11/07/logo.png
+https://oss-node-name.lab.dev/attachments/repositories/main-images/releases/<完整SHA>/images/2026/11/07/logo.png
 ```
 
 附件 `public/documents/manual.pdf` 的版本地址：
 
 ```text
-https://oss-toh1.lab.dev/attachments/repositories/main-images/releases/<完整SHA>/documents/manual.pdf
+https://oss-node-name.lab.dev/attachments/repositories/main-images/releases/<完整SHA>/documents/manual.pdf
 ```
 
 也可在本地打印链接：
@@ -334,8 +334,8 @@ docker compose exec -T publisher python -m open_assets status
 确认该 SHA 为 published 后访问：
 
 ```text
-https://img-toh1.lab.dev/project-b/logo.png
-https://oss-toh1.lab.dev/attachments/repositories/project-b/releases/<完整SHA>/images/logo.png
+https://img-node-name.lab.dev/project-b/logo.png
+https://oss-node-name.lab.dev/attachments/repositories/project-b/releases/<完整SHA>/images/logo.png
 ```
 
 这里对应新仓库文件 `public/images/logo.png`。确认旧仓库仍可发布，再结束维护窗口；窗口内失败的 Hook 投递需重投或按 SHA 补发。

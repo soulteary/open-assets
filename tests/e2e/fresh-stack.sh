@@ -8,7 +8,8 @@ cd "$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
 [ ! -e private ] && [ ! -e /data/asset-stack ] || { echo 'Refusing existing private configuration or data.' >&2; exit 1; }
 [ -z "$(docker ps -aq)" ] || { echo 'Refusing a Docker daemon with existing containers.' >&2; exit 1; }
 python3 -c 'import yaml, bcrypt'
-PUBLIC_BASE=acceptance.invalid python3 scripts/prepare-private.py
+NODE_NAME=acceptance-node PUBLIC_BASE=acceptance.invalid python3 scripts/prepare-private.py
+python3 scripts/deployment_config.py --env .env --domains private/domains.json
 docker compose config --quiet
 docker compose pull otterio oc stargate gitea nginx
 docker compose build publisher
