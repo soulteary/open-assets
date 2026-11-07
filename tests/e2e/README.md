@@ -50,3 +50,5 @@ object-retention.py 需要 OPEN_ASSETS_OBJECT_RETENTION_TEST=1，仅使用 http:
 object-restore.py 需要 OPEN_ASSETS_OBJECT_RESTORE_TEST=1，固定目标为 http://objects-fixture:9000 和 restore-fixture 桶。使用临时 root 准备并删除测试对象，另给恢复账号 ListBucket/GetObject/PutObject，明确不授予 DeleteObject。脚本用真实 Git 历史与 OtterIO 验证已完成/归档任务不阻止恢复，原任务字节和图片入口不变，以及重复执行、上传中断重试和同字节元数据修复。测试只连接可销毁实例，不挂载生产发布状态。
 
 本地恢复验收还删除目标版本的两份本地副本，验证 `--with-local` 重建、重复执行不重复安装且不切换当前版本，随后验证 `--with-local --rollback` 显式切换及原任务字节不变。
+
+对象恢复隔离验收同时调用主机只读摘要，核对真实恢复报告中的对象成功、部分上传失败、本地校验和显式回滚标志；不向业务状态注入失败报告。

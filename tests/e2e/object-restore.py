@@ -3,6 +3,9 @@
 import json
 import os
 import sys
+from pathlib import Path
+
+import yaml
 from unittest.mock import patch
 
 from botocore.exceptions import ClientError
@@ -19,6 +22,26 @@ fixture.setUp()
 try:
     config = fixture.config
     config.update(bucket="restore-fixture", endpoint="http://objects-fixture:9000")
+    from open_assets.restore_info import summary
+
+    host = (
+        Path(fixture.tmp.name) / "info-host"
+        if hasattr(fixture, "tmp")
+        else fixture.state.parent / "info-host"
+    )
+    host.mkdir(exist_ok=True)
+    (host / "private").mkdir(exist_ok=True)
+    (host / "data").mkdir(exist_ok=True)
+    (host / "data/publisher").symlink_to(fixture.state, target_is_directory=True)
+    (host / "private/repositories.yaml").write_text(
+        yaml.safe_dump(dict(config, schema_version=1, state_root="/state"))
+    )
+
+    def observation():
+        row = summary(host, host / "data")["repositories"][0]
+        assert row["result_status"] == "ok"
+        return row["attempt"]
+
     root = core.s3client(config, bounded=True)
     root.create_bucket(Bucket=config["bucket"])
     for key, value in fixture.original_objects.items():
@@ -55,6 +78,7 @@ try:
     assert report["status"] == "complete" and report["uploaded_objects"] == len(
         fixture.manifests[0]["files"]
     )
+    assert observation()["objects_verified"]
     fixture.assert_current()
     assert fixture.job_bytes() == fixture.original_jobs
     assert json.loads(fixture.marker.read_text())["status"] == "restored"
@@ -93,6 +117,7 @@ try:
     assert json.loads(restore.report_path(config, "assets", fixture.sha).read_text())[
         "partial_possible"
     ]
+    assert observation()["status"] == "failed" and observation()["uncertain"]
     resumed = restore.run(config, "assets", fixture.sha, writer)
     assert resumed["uploaded_objects"] == len(fixture.manifests[0]["files"]) - 1
     key = fixture.prefix() + "images/pic.png"
@@ -120,6 +145,7 @@ try:
         and local["local_full_rebuilt"]
         and local["local_images_rebuilt"]
     )
+    assert observation()["local_verified"] and not observation()["activated"]
     assert not local["activated"]
     fixture.assert_current()
     repeated = restore.run(config, "assets", fixture.sha, writer, with_local=True)
@@ -127,6 +153,7 @@ try:
     activated = restore.run(
         config, "assets", fixture.sha, writer, with_local=True, rollback=True
     )
+    assert observation()["activated"] and observation()["rollback_requested"]
     assert activated["activated"]
     assert (
         os.readlink(fixture.images / "repos/assets/current")
@@ -138,7 +165,7 @@ try:
     )
     assert fixture.job_bytes() == fixture.original_jobs
     print(
-        "Isolated restore: S3 bytes, metadata, retry and no-delete identity verified; both local copies rebuilt and repeated without activation; explicit rollback activated verified version; jobs unchanged"
+        "Isolated restore: S3 bytes, metadata, retry and no-delete identity verified; both local copies rebuilt and repeated without activation; explicit rollback activated verified version; filtered Info success/partial-failure/local/activation observations verified; jobs unchanged"
     )
 finally:
     fixture.doCleanups()

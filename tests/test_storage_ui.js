@@ -123,3 +123,32 @@ test('busy, configuration changes and corrupt or missing planning data are expli
   assert.match(text,/规划记录损坏或不可用/);assert.match(text,/最近完整执行：记录损坏/);
   assert.doesNotMatch(text,/0 版 \/ 0 B/);
 });
+
+test('restoration verification, explicit rollback and uncertain failures stay distinct', () => {
+  const ui = setup(), data = fixture();
+  data.restorations = {status:'ok', repositories:[{key:'assets',result_status:'ok',attempt:{status:'complete',phase:'complete',started_at:1,finished_at:2,objects_verified:true,verified_objects:2,files:2,with_local:true,local_verified:true,local_full_rebuilt:true,local_images_rebuilt:true,rollback_requested:false,activated:false}}]};
+  ui.context.render(data);
+  assert.match(ui.get('restore-repositories').textContent,/对象校验通过（当时）/);
+  assert.match(ui.get('restore-repositories').textContent,/两份本地副本校验通过/);
+  assert.match(ui.get('restore-repositories').textContent,/未请求显式回滚/);
+  const a=data.restorations.repositories[0].attempt;
+  Object.assign(a,{status:'failed',phase:'activate',rollback_requested:true,activation_uncertain:true,uncertain:true,scope_changed:true});
+  ui.context.render(data);
+  assert.match(ui.get('restore-repositories').textContent,/恢复失败/);
+  assert.match(ui.get('restore-repositories').textContent,/切换状态不确定/);
+  assert.match(ui.get('restore-repositories').textContent,/可能已有部分写入/);
+  assert.match(ui.get('restore-repositories').textContent,/存储配置已变化/);
+  Object.assign(a,{status:'complete',activated:true,activation_uncertain:false,uncertain:false});ui.context.render(data);
+  assert.match(ui.get('restore-repositories').textContent,/显式回滚完成（当时）/);
+});
+test('missing legacy or unreadable restoration records never imply success', async () => {
+  const ui=setup(),data=fixture();
+  data.restorations={status:'ok',repositories:[{key:'none',result_status:'never'},{key:'bad',result_status:'unavailable'},{key:'legacy',result_status:'ok',attempt:{status:'running',phase:'git',started_at:1,uncertain:true}}]};
+  ui.context.render(data);
+  assert.match(ui.get('restore-repositories').textContent,/尚无恢复记录/);
+  assert.match(ui.get('restore-repositories').textContent,/不能确认最近结果/);
+  assert.match(ui.get('restore-repositories').textContent,/旧报告未记录本地模式/);
+  assert.doesNotMatch(ui.get('restore-repositories').textContent,/校验通过|回滚完成/);
+  ui.context.fetch=async()=>{throw Error('offline')};await ui.context.update();
+  assert.match(ui.get('restore-notice').textContent,/无法刷新/);
+});
