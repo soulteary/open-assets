@@ -12,9 +12,14 @@ import urllib.request
 import base64
 import yaml
 import os
+from bootstrap_guard import initialize, complete, SetupRefused
 
 p = pathlib.Path("/app/open-assets/private")
 data = pathlib.Path("/data/asset-stack")
+try:
+    initialization = initialize(p)
+except SetupRefused as error:
+    raise SystemExit("Initialization refused: " + str(error)) from None
 
 
 def sec(s):
@@ -212,4 +217,5 @@ oc(
     "user=" + sec("publisher/publisher_access"),
 )
 oc("admin", "policy", "set", "store", "consoleAdmin", "user=" + sec("console_user"))
+complete(initialization)
 print("Repository, signed hook, trusted host keys and storage identities initialized")

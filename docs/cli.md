@@ -1,6 +1,6 @@
 # 命令行使用
 
-日常命令统一从 `sudo ./scripts/open-assets` 调用。先运行 `repo list` 查稳定 key，`doctor` 查配置/运行状态；发布、恢复、结案和审计命令可直接接在脚本后。每个子命令支持独立 --help，完整速查见[日常操作入口](operator.md)。原容器命令继续兼容，下面保留其等价形式与接入细节。
+日常命令统一从 `sudo ./scripts/open-assets` 调用。先运行 `repo list` 查稳定 key，`doctor` 查配置/运行状态；发布、恢复、结案和审计命令可直接接在脚本后。每个子命令支持独立 --help，完整速查见[日常操作入口](operator.md)。下面说明仓库接入；日常发布与恢复使用同一宿主机入口。
 
 ## 仓库自动接入 CLI
 
@@ -57,40 +57,15 @@ sudo ./scripts/open-assets repo ensure content/project-b \
 
 ## 接入后发布
 
-在自己的电脑克隆并提交内容，示例域名替换成实际 Gitea 主机：
+用个人 Gitea SSH 密钥克隆新仓库，按[首次发布](usage.md#首次发布空仓库)提交内容。第一次提交前不拉取不存在的远端 main 分支。若使用其他分支，将示例中的 main 替换为接入时的配置分支。
+
+在服务器查询：
 
 ```sh
-git clone ssh://git@git-node-name.console.lab.dev:2222/content/project-b.git
-cd project-b
-# 放入 public/images/logo.png，以及可选 public/documents/manual.pdf
-git add public
-git commit -m 'Publish project assets'
-git push origin main
+sudo ./scripts/open-assets status --key project-b
 ```
 
-个人公钥需事先加入 Gitea 账号。空仓库首次 clone 后请确认当前分支为 main，必要时 `git switch -c main`。第一次 Push 后再按团队要求设置 main 分支保护。
-
-在服务器确认目标 SHA 为 published：
-
-```sh
-cd /app/open-assets
-sudo docker compose exec -T publisher python -m open_assets status
-```
-
-链接：
-
-```text
-https://img-node-name.lab.dev/project-b/logo.png
-https://oss-node-name.lab.dev/attachments/repositories/project-b/releases/<完整SHA>/documents/manual.pdf
-```
-
-已有内容无需新提交时，可显式补发：
-
-```sh
-sudo docker compose exec -T publisher python -m open_assets publish project-b FULL_COMMIT_SHA
-```
-
-查看凭据、SSH 密钥、链接编码及禁用仓库，见 [实际使用指南](usage.md)。手工接入步骤保留在该指南中，供排查和定制部署使用。
+目标 SHA 为 `published` 后，使用 `links` 生成地址，详见[命令速查](operator.md)。已有内容需补发时，执行 `sudo ./scripts/open-assets publish project-b FULL_COMMIT_SHA`，然后继续查询任务结果。
 
 ## 对象清理账号
 
@@ -98,17 +73,17 @@ sudo docker compose exec -T publisher python -m open_assets publish project-b FU
 
 ## 恢复已清理对象
 
-在 Publisher 中执行 python -m open_assets restore-objects <仓库key> <完整SHA>，从固定 Git 分支历史重建并核验对象。它同步执行，不依赖任务重放；获取不到 Worker 锁时返回 busy 和退出码 2。命令及前提见[对象恢复](object-restore.md)。
+在部署服务器执行 `sudo ./scripts/open-assets restore-objects KEY FULL_SHA`，从固定 Git 分支历史重建并核验对象。它同步执行，不依赖任务重放；获取不到 Worker 锁时返回 busy 和退出码 2。命令及前提见[对象恢复](object-restore.md)。
 
 本地副本也已清理时，添加 `--with-local` 重建完整 public 与图片副本，默认保持当前版本。确认需要切换后，使用 `--with-local --rollback` 在完整校验后显式回滚。已有副本冲突会停止，不强制覆盖；详见[恢复与切换](object-restore.md#完整恢复后显式切换)。
 
 ## 核对恢复状态
 
-`python -m open_assets check-restore <仓库key> <完整SHA>` 只读核对对象、本地两份副本、current/published 与清理屏障，并保存独立诊断报告。默认不修复、不切换，也不结案原恢复。完整前提、结果与退出码见[恢复状态核对](restore-check.md)。
+`sudo ./scripts/open-assets check-restore <仓库key> <完整SHA>` 只读核对对象、本地两份副本、current/published 与清理屏障，并保存独立诊断报告。默认不修复、不切换，也不结案原恢复。完整前提、结果与退出码见[恢复状态核对](restore-check.md)。
 
 ## 显式结案恢复
 
-`python -m open_assets close-restore <仓库key> <完整SHA> --reason '人工复核原因'` 在同一维护锁内重新核对，通过后单独记录结案。原恢复必须未结案或状态不确定，且 current/published 必须存在并一致；不切换版本、不解除清理屏障、不改写原报告。前提、退出码和私有审计说明见[恢复结案](restore-close.md)。
+`sudo ./scripts/open-assets close-restore <仓库key> <完整SHA> --reason '人工复核原因'` 在同一维护锁内重新核对，通过后单独记录结案。原恢复必须未结案或状态不确定，且 current/published 必须存在并一致；不切换版本、不解除清理屏障、不改写原报告。前提、退出码和私有审计说明见[恢复结案](restore-close.md)。
 
 ## 查询与归档恢复审计
 
@@ -116,4 +91,4 @@ sudo docker compose exec -T publisher python -m open_assets publish project-b FU
 - `restore-audit-archive <key> [完整SHA]`：默认仅预览，保留最近 20 条、完成不足 30 天及未结案记录；添加 `--apply` 才实际归档。
 - `restore-audit-verify <key> [完整SHA]`：验证归档完整性和中断清理现场，不恢复或解包到在线目录。
 
-均在 Publisher 中使用 `python -m open_assets` 执行。归档先保存完整文件与校验清单，验证后才移出在线目录；支持中断重试，不自动删除归档包。参数、保护范围、退出码见[恢复审计](restore-audit.md)。
+均在部署服务器通过 `sudo ./scripts/open-assets` 执行。归档先保存完整文件与校验清单，验证后才移出在线目录；支持中断重试，不自动删除归档包。参数、保护范围、退出码见[恢复审计](restore-audit.md)。

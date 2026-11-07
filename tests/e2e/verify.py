@@ -185,6 +185,29 @@ def main():
         raise SystemExit("refusing non-test domains")
     work = ROOT / "private/e2e"
     work.mkdir(exist_ok=True)
+    import hashlib
+
+    protected = [
+        ROOT / ".env",
+        *[
+            p
+            for p in (ROOT / "private").rglob("*")
+            if p.is_file() and not p.is_symlink()
+        ],
+    ]
+    before = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in protected}
+    for script in ("prepare-private.py", "initialize-services.py"):
+        refused = subprocess.run(
+            ["python3", "scripts/" + script],
+            cwd=ROOT,
+            env=dict(os.environ, PUBLIC_BASE="acceptance.invalid"),
+            capture_output=True,
+        )
+        assert refused.returncode != 0 and b"refused" in refused.stderr.lower()
+    assert before == {
+        str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in protected
+    }
+    print("PASS repeated setup refused before credentials or configuration changed")
     manager = Manager(ROOT)
     manager.ensure("content/e2e-images", "e2e-images", "/e2e-images/", "main")
     repository = manager.api("repos/content/e2e-images")
@@ -264,21 +287,32 @@ def main():
             "git", "-C", str(checkout), "config", "user.email", "e2e@localhost.invalid"
         )
         command("git", "-C", str(checkout), "config", "commit.gpgsign", "false")
-        if (
-            command("git", "-C", str(checkout), "branch", "--show-current").strip()
-            != b"main"
-        ):
-            command("git", "-C", str(checkout), "switch", "-c", "main")
         (checkout / "public/images").mkdir(parents=True)
         (checkout / "public/documents").mkdir()
         (checkout / "public/images/图片 +%.png").write_bytes(png)
         body = ("Fresh deployment: " + key_name + "\n").encode()
         (checkout / "public/documents/manual.txt").write_bytes(body)
-        command("git", "-C", str(checkout), "add", "public")
-        command(
-            "git", "-C", str(checkout), "commit", "-m", "Publish isolated test assets"
+        import re
+
+        blocks = re.findall(
+            r"```sh\n(.*?)```", (ROOT / "docs/usage.md").read_text(), re.S
         )
-        command("git", "-C", str(checkout), "push", "origin", "main", env=env)
+        first = next(
+            block for block in blocks if block.startswith("# 首次发布（空仓库）")
+        )
+        command("sh", "-eu", "-c", "cd " + str(checkout) + "\n" + first, env=env)
+        sha = command("git", "-C", str(checkout), "rev-parse", "HEAD").decode().strip()
+        wait_job(key_name, sha)
+        update = next(block for block in blocks if block.startswith("# 后续更新"))
+        # The documentation asks the operator to edit after pulling.
+        body += b"updated\n"
+        updated = update.replace(
+            "# 修改 public/ 中的文件",
+            "printf 'Fresh deployment: "
+            + key_name
+            + "\\nupdated\\n' > public/documents/manual.txt",
+        )
+        command("sh", "-eu", "-c", "cd " + str(checkout) + "\n" + updated, env=env)
         sha = command("git", "-C", str(checkout), "rev-parse", "HEAD").decode().strip()
         wait_job(key_name, sha)
         releases.append((key_name, mount, sha, body))

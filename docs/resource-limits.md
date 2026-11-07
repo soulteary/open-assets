@@ -28,13 +28,13 @@ resource_limits:
 ```sh
 cp -p private/repositories.yaml private/repositories.yaml.before-resource-change
 # 编辑 private/repositories.yaml，保留仓库、endpoint 和其他现有配置。
-python3 -c 'import yaml; yaml.safe_load(open("private/repositories.yaml"))'
+docker compose run --rm --no-deps publisher validate
 docker compose up -d --no-build --force-recreate webhook publisher
-docker compose exec -T publisher python -m open_assets validate
-scripts/open-assets doctor
+sudo ./scripts/open-assets validate
+sudo ./scripts/open-assets doctor
 ```
 
-YAML 语法检查不检查业务字段。重建后的 `validate` 必须成功；若服务无法通过健康检查，恢复备份并再次重建，不继续投递任务。不要把备份、任务记录或真实配置提交到 Git。降低额度前，应先检查现有占用；超限不会自动删除数据。
+先用新容器读取并校验候选配置，通过后再重建常驻服务。重建后的 `validate` 也必须成功；若服务无法通过健康检查，恢复备份并再次重建，不继续投递任务。不要把备份、任务记录或真实配置提交到 Git。降低额度前，应先检查现有占用；超限不会自动删除数据。
 
 ## Git 拉取
 

@@ -66,7 +66,7 @@ info-node-name.console.<base>
 
 上述 `node-name` 对应 `NODE_NAME`，`<base>` 对应 `PUBLIC_BASE`。两者同时写入私有 `.env`，`STORAGE_DOMAIN` 和 `GIT_DOMAIN` 写入解析后的完整主机名。
 
-该脚本会生成密码、Publisher SSH 密钥、内部 CA 和证书，写入 .env、Stargate 配置及初始仓库模板。已有秘密文件通常会被复用，但配置文件会重写，因此不能把它当作幂等的配置更新工具。已有部署只需记录与现有域名一致的节点元数据，不应重新初始化；具体检查方式见 [节点与域名配置](configuration.md#节点与域名)。
+该脚本会生成密码、Publisher SSH 密钥、内部 CA 和证书，写入 .env、Stargate 配置及初始仓库模板。发现已有 `.env`、`private/` 或非空数据目录时，脚本会拒绝操作。准备中断会保留 `private/.preparation.json`；不要直接删除标记后重跑。已有部署修改配置请按[配置说明](configuration.md)处理。
 
 创建指向服务器的 DNS 记录。脚本不调用 DNS 服务商 API，也不申请公网证书。公网证书由现有 Traefik 的 resolver 处理；它使用的 DNS 凭据和 ACME 文件仍由原部署管理，不复制到开源仓库。
 
@@ -93,7 +93,7 @@ python3 scripts/initialize-services.py
 
 initialize-services.py 创建 content 管理账号、私有 content/images 仓库、只读 Deploy Key 和 Push Hook，记录实际仓库 ID，并初始化 attachments 桶、匿名读取策略和发布/OC 用户。它也从实际 Gitea 数据目录读取 SSH 公钥，写入 Publisher 的 known_hosts。
 
-这是固定配方的首次初始化脚本。它会设置 IAM 用户和替换指定策略，不能在已有业务部署中作为巡检命令重复执行。后续新增仓库用 repo ensure。
+初始化必须来自成功完成的首次准备。程序在修改账号、策略和仓库前写入 `private/.initialization.json`；已有初始化记录、旧版部署或中断状态会被拒绝，没有覆盖开关。失败时保留现场并检查私有日志与备份，按实际阶段修复；可丢弃测试环境可销毁后重建。后续新增仓库用 `repo ensure`。
 
 生成图片服务配置，再启动发布链路：
 
@@ -105,7 +105,7 @@ docker compose up -d --no-build nginx webhook publisher info
 docker compose exec -T nginx nginx -c /etc/nginx/open-assets.conf -t
 ```
 
-首次发布前 images current 不存在，图片请求返回 404 是预期行为。不要放一个虚构的成功页面来掩盖未发布状态。
+首次发布前 images current 不存在，图片请求返回 404 是预期行为。完成首次发布后再检查具体文件地址。
 
 ## 4. 将现有 Traefik 接入网络
 

@@ -6,18 +6,18 @@
 
 ```sh
 docker compose ps
-docker compose exec -T publisher python -m open_assets status
+sudo ./scripts/open-assets status
 docker compose logs --tail=100 publisher webhook
 ```
 
-status 默认列活动目录，`status archived` 列归档，`status all` 列两者。依次输出有效任务的 ID、仓库 key、SHA 和状态；遇到坏记录只报告固定错误类型并跳过，不修改文件。任务 JSON 位于 `/data/asset-stack/publisher/jobs/`，失败时只保存异常类型，不保存完整请求或秘密。日志为空不代表没有任务，也不代表发布成功。
+status 默认列活动目录，`status archived` 列归档，`status all` 列两者。依次输出有效任务的 ID、仓库 key、SHA 和状态；遇到坏记录只报告固定错误类型并跳过，不修改文件。任务 JSON 位于 `/data/asset-stack/publisher/jobs/`，失败时保存固定异常类型，资源超限另记限制代码；不保存完整请求或秘密。日志为空不代表没有任务，也不代表发布成功。
 
 容器健康与最近的受限恢复动作可在 [Info](info.md) 查看。自动重启有作用域、冷却和次数上限，不会替代坏配置、坏任务或存储数据的处理。维护和有意暂停服务前按 [健康恢复说明](health.md) 设置 maintenance.flag 并暂停恢复定时器，确认在途恢复已结束。
 
 failed 任务需人工重试：
 
 ```sh
-docker compose exec -T publisher python -m open_assets retry JOB_ID
+sudo ./scripts/open-assets retry JOB_ID
 ```
 
 命令只接受完整的失败任务 ID。重复投递相同 Push 不会重置失败任务。running 或 images_prepared 遗留任务会在 Worker 重启后重新处理；自动任务若已不是分支头，则变为 superseded。
@@ -25,8 +25,8 @@ docker compose exec -T publisher python -m open_assets retry JOB_ID
 ## 手工发布与图片回滚
 
 ```sh
-docker compose exec -T publisher python -m open_assets publish main-images FULL_COMMIT_SHA
-docker compose exec -T publisher python -m open_assets rollback-images main-images FULL_COMMIT_SHA
+sudo ./scripts/open-assets publish main-images FULL_COMMIT_SHA
+sudo ./scripts/open-assets rollback-images main-images FULL_COMMIT_SHA
 ```
 
 publish 创建人工任务，提交必须在配置分支的历史中，但可以不是最新提交。发布历史 SHA 会重新选择当前图片版本，不应当作无副作用的补查命令。

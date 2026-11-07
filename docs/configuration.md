@@ -20,7 +20,7 @@ NODE_NAME=beijing-1 PUBLIC_BASE=example.org python3 scripts/prepare-private.py
 
 脚本生成 `img-<节点名>.<基域>`、`oss-<节点名>.<基域>` 和五个 `<服务>-<节点名>.console.<基域>` 管理域名（storage、git、auth、traefik、info），再把 `NODE_NAME`、`PUBLIC_BASE` 和解析后的 `STORAGE_DOMAIN`、`GIT_DOMAIN` 写入 `.env`。凭据、内部证书、Stargate 和 Traefik 路由使用同一组生成结果。
 
-这里的 `.env` 是初始化输出，不会在脚本启动时自动读回作为输入。重新执行初始化仍会重写配置；不要用它修改正在运行的服务。
+`.env` 是首次准备的输出，不作为准备脚本的输入。已有状态会被初始化保护拒绝；修改运行配置请编辑对应文件并校验。
 
 已有部署若尚未记录 `NODE_NAME` 和 `PUBLIC_BASE`，先备份 `.env`，根据 `private/domains.json` 中的现有地址补入对应值，保留原有 `STORAGE_DOMAIN`、`GIT_DOMAIN` 和其他字段。随后只读检查：
 
@@ -79,7 +79,7 @@ Worker 在导出前要求 images_root 文件系统的可用空间至少为 `2 ×
 
 全局和仓库级 `retention` 控制本地版本保留及任务归档，默认禁用实际清理，配置项和保护规则见 [历史清理](retention.md)。
 
-`INFO_DISK_*` 与 `INFO_INODE_*` 控制 Info 的容量提示阈值，由宿主机采集器读取；默认值与统计范围见 [Info 说明](info.md#容量提示)。
+`INFO_DISK_*` 与 `INFO_INODE_*` 控制 Info 的容量提示阈值，由宿主机采集器读取；默认值与统计范围见 [Info 说明](info.md#健康磁盘和证书)。
 
 OtterIO 对象容量使用独立 open-assets-objects.timer：固定 15 分钟缓存间隔、共享 100 页/110 秒预算、每页最多 1000 对象和每秒至多一次列表请求。此间隔不依赖页面刷新，也不由 --refresh-storage 绕过；安装、续采与统计口径见 [Info 文档](info.md#otterio-对象统计)。
 

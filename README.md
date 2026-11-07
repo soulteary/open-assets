@@ -1,129 +1,51 @@
 # Open Assets
 
-Open Assets 将 Gitea 仓库中的文件发布到 OtterIO 和 Nginx。开发者通过 SSH Push 更新内容；发布程序导出指定提交的 `public/`，把附件保存到带 commit SHA 的对象路径，再切换图片服务的当前版本。
-
-发布默认启用 Git 拉取、缓存与队列总量预算，普通发布以文件流上传并分块读回校验。配置和限制触发后的处理见[发布资源预算](docs/resource-limits.md)。
-
-项目适用于自己维护图片、文档和下载文件的单机环境。它包含发布程序、仓库接入 CLI、Docker Compose 配置，以及接入现有 Traefik 的脚本。许可证为 [Apache-2.0](LICENSE)。
-
-Info 看板通过 Stargate 查看组件健康、CPU/内存、磁盘、证书到期时间和最近压测结果。“Git 与队列”Tab 使用定时缓存展示各仓库 Git 占用、全局队列预算及最近超限原因，接近预算时提示。容器带健康检查；宿主机可以按冷却时间与次数上限重启持续不健康的服务。网页容器只读快照，不持有 Docker 管理权限。
-
-## 发布后的地址
-
-假设仓库 key 为 `main-images`，图片前缀为 `/`，提交包含：
+通过 Git 管理图片和附件：把文件提交到 Gitea，Open Assets 自动导出 `public/`，将版本附件上传到 OtterIO，再更新 Nginx 的当前图片目录。适合自己维护图片、文档和下载文件的单机部署。
 
 ```text
-public/
-├── images/2026/11/07/logo.png
-└── documents/manual.pdf
+public/images/logo.png  → https://img-node-name.lab.dev/logo.png
+public/documents/a.pdf  → https://oss-node-name.lab.dev/attachments/repositories/main-images/releases/<SHA>/documents/a.pdf
 ```
 
-图片通过固定地址访问：
+图片地址跟随当前版本，默认缓存 300 秒；附件地址包含 commit SHA。默认保留历史附件，启用对象清理并实际删除后，旧链接会失效。示例域名和节点名需替换为自己的值。
 
-```text
-https://img-node-name.lab.dev/2026/11/07/logo.png
-```
+## 开始使用
 
-附件通过版本地址访问：
+- 首次安装：[部署说明](docs/deployment.md)。复用现有 Traefik，不启动第二套入口。
+- 已经部署：[使用指南](docs/usage.md)。包含登录、个人 SSH 密钥、空仓库首次提交与后续更新。
+- 接入新仓库：[仓库 CLI](docs/cli.md)。自动配置只读 Deploy Key、Webhook、S3 权限和图片映射，支持重复执行。
+- 日常维护：[命令速查](docs/operator.md)、[故障排查](docs/troubleshooting.md)。
+- 全部文档：[文档目录](docs/README.md)。
 
-```text
-https://oss-node-name.lab.dev/attachments/repositories/main-images/releases/<完整SHA>/documents/manual.pdf
-```
-
-图片地址在下一次成功发布后指向新版本，默认缓存 300 秒。附件地址包含完整 SHA，适合在文章或版本说明中引用；默认不自动删除历史附件，显式启用[对象保留策略](docs/object-retention.md)并执行清理后，过期附件链接会失效。文档中的 `lab.dev` 是占位域名，不能原样用于生产配置。
-
-## 阅读顺序
-
-- 已经部署：从 [实际使用指南](docs/usage.md) 开始，查看登录凭据、设置个人 SSH 密钥、克隆仓库并 Push。
-- 首次部署：先读 [部署说明](docs/deployment.md)，确认固定路径、网络、证书和初始化脚本的适用范围。
-- 接入其他仓库：使用 [仓库接入 CLI](docs/cli.md)。命令协调 Gitea、S3 权限和 Nginx 映射，不会替你提交内容。
-- 调整配置：参考 [配置说明](docs/configuration.md) 和 [仓库与 URL 配置](docs/repositories.md)。
-- 处理失败、回滚或备份：参考 [运行维护](docs/operations.md) 和 [故障排查](docs/troubleshooting.md)。
-- 查看监控与恢复策略：参考 [Info 看板](docs/info.md) 和 [健康检查与受限恢复](docs/health.md)。
-- 更新组件、替换十年内部证书或复现采样：参考 [升级说明](docs/upgrade.md) 和 [性能与缓存分析](docs/performance.md)。
-- 理解程序行为和验证范围：参考 [发布流程](docs/architecture.md)、[验收记录](docs/acceptance.md) 与 [安全说明](SECURITY.md)。
-
-## 日常操作
-
-以下命令在已经完成初始化的服务器执行。先查看部署状态和仓库 key：
+在部署服务器执行：
 
 ```sh
 cd /app/open-assets
 sudo ./scripts/open-assets doctor
 sudo ./scripts/open-assets repo list
-sudo ./scripts/open-assets --help
-```
-
-日常发布、恢复和审计命令都可通过此入口调用，不必记住 Docker 前缀；`子命令 --help` 只显示该命令适用的参数。`doctor` 只读检查，不重启服务或重置环境。常见任务的选择方法见[操作速查](docs/operator.md)。
-
-新增仓库：
-
-```sh
-cd /app/open-assets
-sudo ./scripts/open-assets repo ensure content/project-b \
-  --key project-b \
-  --mount-path /project-b/
-```
-
-返回 `status: ready` 后，开发者使用个人 Gitea SSH 密钥克隆仓库，把图片放进 `public/images/`，把其他附件放进 `public/` 下的相应目录，然后提交到配置分支。接入命令创建的是空私有仓库；Publisher 的只读 Deploy Key 不用于开发者 Push。
-
-查看发布结果：
-
-```sh
-cd /app/open-assets
+sudo ./scripts/open-assets repo ensure content/project-b --key project-b --mount-path /project-b/
 sudo ./scripts/open-assets status --key project-b
 ```
 
-只有目标仓库与 SHA 对应的任务显示 `published`，才表示该次发布完成。`git push` 成功和 Webhook 返回 202 都不是发布成功的标志。
+接入返回 `ready` 后，用个人 Git SSH 密钥提交内容。只有该 SHA 的任务显示 `published` 才表示发布完成；Push 成功和 Webhook 返回 202 只表示前面的步骤已完成。
 
 ## 服务组成
 
-![Open Assets 架构图：Git 自动发布、公开读取与管理认证](.github/images/open-assets-architecture.gif)
+![Open Assets 架构图](.github/images/open-assets-architecture.gif)
 
-架构图按三类链路展示服务；同名服务在不同视图中重复出现，仍是同一部署实例。动画依次演示发布、图片读取、附件读取和管理认证，只表示调用或操作方向，不表示实际延迟、并发或事务边界。域名均为示例。
+Gitea 通过内部签名 Webhook 提交任务，Publisher 串行导出和校验内容。Traefik 为 Nginx 图片和 OtterIO 附件提供 HTTPS；Gitea、OC、Traefik 管理页与 Info 由单实例 Stargate 保护，应用自身权限继续生效。应用容器不挂载 Docker socket。
 
-- **自动发布**：Gitea 向内部 Webhook 接收器发送签名事件。接收器校验签名、仓库和分支，将任务持久化后返回 202。单个 Publisher 串行处理任务，从固定 remote 拉取提交并导出 `public/`，上传、校验 OtterIO 对象，再原子切换对应仓库的图片 `current`。接收器和 Publisher 使用同一个应用镜像，以不同命令和挂载权限运行。
-- **公开读取**：现有 Traefik 提供 HTTPS 和路由。图片请求由 Nginx 从只读挂载的当前图片目录提供；附件请求经 OtterIO S3 读取带 SHA 的版本对象。两个入口均允许匿名 GET/HEAD，不经过 Stargate。普通图片发布不需要重载 Nginx；新增仓库映射时才生成、校验并重载配置。
-- **管理访问**：Traefik 通过 Stargate ForwardAuth 校验会话，通过后才将业务请求转发给 Gitea、OC Console、Dashboard/API 或 Info。Stargate 不代理这些应用的业务流量；Gitea 和 OC 保留各自的应用认证。OC 通过内网 HTTPS 访问 OtterIO S3 和 Admin API，`9001` 是 Admin API，管理网页由独立 OC Console 提供。Git SSH 使用 Gitea 密钥，不经过 HTTP 认证层。
+Info 展示组件健康、CPU/内存、磁盘、证书、Git/队列预算和恢复记录。容量统计使用定时缓存；历史记录与当前健康分别查看。日志轮转和受限健康恢复由宿主机定时任务管理。
 
-宿主机仓库接入 CLI 使用本机 Docker 和私有管理员配置。应用容器不挂载 Docker socket，也不获得这项管理权限。
+架构图由 [fireworks-tech-graph](https://github.com/yizhiyanhua-ai/fireworks-tech-graph/) 的 Claude 风格生成，SVG 定制了流向动画。动画表示调用方向，不表示延迟或事务边界。
 
-宿主机定时任务分别处理状态采集、对象与审计缓存、保留清理、日志轮转及受限恢复；恢复程序只处理明确项目/服务范围内的持续 unhealthy 容器。重启不是数据修复，维护时应设置标记，持续故障仍需人工处理。内部证书使用 Certs Maker 3.8.2，叶证书与 CA 均为 3650 天；公网证书继续由原 Traefik 的 ACME 管理。
+## 使用前确认
 
-图中仓库接入命令 `repo ensure` 负责协调仓库、只读 Deploy Key、Webhook、S3 权限和 Nginx 映射，支持重复执行。具体参数见 [仓库接入 CLI](docs/cli.md)；发布状态、故障恢复和跨系统操作的限制见 [发布流程](docs/architecture.md)。
+- 面向单机 Docker Compose、单个 Publisher 和本地 POSIX 文件系统。配方固定 `/app/open-assets`、`/data/asset-stack` 及部分网络、端口；更改拓扑前需检查配置。
+- 每个发布版本需有 `public/images/` 中至少一张图片。支持 PNG/JPEG/GIF/WebP/AVIF/ICO，不支持 SVG、LFS、submodule、符号链接和隐藏路径；不会执行仓库脚本。
+- 发布使用 Git/队列预算与流式校验。预算不替代磁盘配额、容器内存限制和备份。多个系统没有联合事务，失败时可能留下部分对象。
+- 初始化只用于新部署。程序拒绝已有配置或已启动的初始化；升级、改域名及新增仓库使用对应维护步骤。
 
-架构图使用 [fireworks-tech-graph](https://github.com/yizhiyanhua-ai/fireworks-tech-graph/) 的 Claude 风格生成，并在 SVG 上定制流向动画。
+更多说明：[资源预算](docs/resource-limits.md)、[恢复内容](docs/object-restore.md)、[保留策略](docs/object-retention.md)、[安全](SECURITY.md)与[风险控制](docs/risks.md)。
 
-## 使用限制
-
-节点名由 `NODE_NAME` 指定，默认 `node-name`，初始化后记录在私有 `.env` 中；示例地址中的 `node-name` 应替换为自己的节点名。修改已有部署的节点名需要另行迁移域名、证书和认证配置，不能只修改 `.env`。操作范围见 [节点与域名配置](docs/configuration.md#节点与域名)。
-
-当前配方固定使用 Compose 项目名 `asset-stack`、`/app/open-assets` 和 `/data/asset-stack`。适用范围是单机 Docker Compose、一个 Publisher 和本地 POSIX 文件系统；改变路径、项目名或拓扑前需要检查脚本中的固定值。`NODE_NAME` 不会隔离同一主机上的端口、网络或数据目录。
-
-发布程序不执行内容仓库脚本，不支持 LFS、submodule、符号链接或隐藏路径。图片按扩展名限制为 PNG/JPEG/GIF/WebP/AVIF/ICO，不检测文件格式或恶意内容。每个版本需包含 `public/images/` 中至少一张图片；其余文件作为附件发布。
-
-失败任务不会自动重试。程序重启会重新处理遗留的 `running` / `images_prepared` 任务，但自动任务若已不是远端分支头，会被标记为 `superseded`。对象上传、图片切换和任务记录之间没有跨系统事务；部分对象可能在任务完成前已能读取。
-
-回滚副本校验和异常任务隔离已完成；容量管理、默认管理权限及跨系统一致性仍有边界，具体状态与建议见 [风险评估](docs/risks.md)。
-
-## 本地检查
-
-发布程序使用 Python 3.13 和 Git；宿主机初始化另需 PyYAML、bcrypt、OpenSSL、OpenSSH 及 Docker Compose。详细依赖和启动顺序见部署文档。
-
-```sh
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
-python -m unittest discover -s tests -v
-```
-
-普通测试使用临时目录和回环 HTTP 端口，不连接生产服务器。独立的 [从零部署脚本](tests/e2e/README.md) 仅用于可丢弃的空环境；执行结果见 [隔离部署记录](docs/fresh-install.md)。仓库中的 [CI](.github/workflows/test.yml) 另外运行 Ruff 和镜像构建。一次部署的成功记录不代表所有浏览器、硬件或升级路径均已验证。
-
-## 恢复、审计与容量
-
-- 内容缺失：使用[对象与本地副本恢复](docs/object-restore.md)，默认不切换版本；`--with-local --rollback` 才明确切换。
-- 状态不确定：先[重新核对](docs/restore-check.md)，再按需要[显式结案](docs/restore-close.md)，原报告与审计保留。
-- 审计增长：按仓库/SHA [查询与预览归档](docs/restore-audit.md)，校验后才移出在线目录，未结案记录继续保护。
-- 历史容量：配置[本地版本保留](docs/retention.md)及[对象保留](docs/object-retention.md)；对象清理默认预览，启用实际删除后旧链接可能失效。
-- 运行观察：[Info](docs/info.md)显示各自采样时间、恢复/核对/结案结果与审计占用，主机信息常显，详情按 tab 切换。页面保持只读。
-- 日志与长期维护：参考[日志管理](docs/logging.md)、[备份与运行维护](docs/operations.md)及[现有缺陷与改进范围](docs/usability.md)。
+项目采用 [Apache-2.0](LICENSE)。参与开发见[开发测试](docs/development.md)，已验证范围见[验证记录](docs/acceptance.md)。

@@ -31,7 +31,8 @@ OPEN_ASSETS_FRESH_TEST=1 sh tests/e2e/fresh-stack.sh
 
 - CLI 新建 content/e2e-images，再次执行，检查仓库 ID、Key/Hook 数量和 Worker 启动时间。
 - 请求冲突前缀，确认没有创建对应仓库。
-- 使用新生成的个人 SSH 密钥克隆初始图片仓库和新增仓库，各执行一次真实 Push。
+- 核对重复执行准备/初始化会被拒绝，凭据与配置哈希不变。
+- 使用个人 SSH 密钥克隆两个空仓库，执行使用指南中的首次提交和后续更新，各完成两次真实 Push。
 - 等待两个签名事件对应任务达到 published。
 - 用独立测试 Traefik 检查图片、不可变附件、中文/特殊字符路径、Range 和管理入口认证。
 

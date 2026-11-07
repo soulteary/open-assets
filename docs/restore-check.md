@@ -4,7 +4,7 @@
 
 ```sh
 cd /app/open-assets
-sudo docker compose exec -T publisher python -m open_assets \
+sudo ./scripts/open-assets \
   check-restore "$ASSET_KEY" "$ASSET_COMMIT"
 ```
 
@@ -43,7 +43,7 @@ sudo docker compose exec -T publisher python -m open_assets \
 
 ## Info 展示
 
-[Info](info.md#恢复状态核对)只读展示每仓库最近启动的一次核对。它与“最近恢复结果”是两组记录，目标 SHA 可能不同。采集过程不自动重新下载对象，不把核对结果写回原恢复结果。
+[Info](info.md#恢复结果与状态核对)只读展示每仓库最近启动的一次核对。它与“最近恢复结果”是两组记录，目标 SHA 可能不同。采集过程不自动重新下载对象，不把核对结果写回原恢复结果。
 
 对象检查针对当前可见的对象集合，不枚举 S3 历史版本或未完成的分片；也不证明对象此前从未变化。缺失的本地副本会报告问题，即使该版本原本只计划恢复对象，也不会据此自动重建它。
 

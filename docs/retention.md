@@ -84,9 +84,9 @@ docker compose exec -T publisher python -m open_assets.retention --apply
 终态任务移到 `state_root/job-archive/<任务ID前两位>/<任务ID>.json`。enqueue 同时检查活动目录和归档，所以重复 Webhook 不会重新创建任务；显式人工发布是另一种任务身份，仍沿用原去重规则。查看方式：
 
 ```sh
-docker compose exec -T publisher python -m open_assets status
-docker compose exec -T publisher python -m open_assets status archived
-docker compose exec -T publisher python -m open_assets status all
+sudo ./scripts/open-assets status
+sudo ./scripts/open-assets status archived
+sudo ./scripts/open-assets status all
 ```
 
 `status` 默认只列活动目录。归档不是删除去重记录，也不等于重新发布；不要把归档文件移动回 jobs。

@@ -1,8 +1,4 @@
-"""Prepare the fixed single-node layout for a new deployment.
-
-This preserves existing secret files but rewrites runtime configuration. It is
-not an upgrade/merge command and must not be rerun to inspect credentials.
-"""
+"""Create configuration for a new single-node deployment; refuse existing state."""
 
 import json
 import os
@@ -16,15 +12,26 @@ import yaml
 from deployment_config import DEFAULT_NODE_NAME, build_domains, render_env
 from internal_certs import generate
 from certs_maker import ensure_binary
+from bootstrap_guard import prepare, complete, unused, SetupRefused
 
 P = pl.Path
 app = P("/app/open-assets")
 p = app / "private"
 d = P("/data/asset-stack")
 os.umask(0o077)
-base = os.environ["PUBLIC_BASE"]
+try:
+    unused(app, d)
+except SetupRefused as error:
+    raise SystemExit("Preparation refused: " + str(error)) from None
+base = os.environ.get("PUBLIC_BASE")
+if not base:
+    raise SystemExit("PUBLIC_BASE is required; see docs/deployment.md")
 node_name = os.environ.get("NODE_NAME", DEFAULT_NODE_NAME)
 dom = build_domains(node_name, base)
+try:
+    preparation = prepare(app, d)
+except SetupRefused as error:
+    raise SystemExit("Preparation refused: " + str(error)) from None
 for s in ["storage", "publisher", "tls/storage", "tls/console", "generated"]:
     (p / s).mkdir(parents=True, exist_ok=True)
 for s, uid in [
@@ -139,6 +146,7 @@ tls.chmod(0o711)
 os.chown(tls / "console", 20004, 20004)
 for f in (tls / "console").iterdir():
     os.chown(f, 20004, 20004)
+complete(preparation)
 print(
     "Private credentials, certificates and configuration prepared; existing Traefik unchanged"
 )

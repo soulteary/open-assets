@@ -9,7 +9,7 @@ cd /app/open-assets
 ASSET_KEY=main-images
 # 替换为目标提交的完整 40 位小写 SHA。
 ASSET_COMMIT=0123456789abcdef0123456789abcdef01234567
-sudo docker compose exec -T publisher python -m open_assets \
+sudo ./scripts/open-assets \
   restore-objects "$ASSET_KEY" "$ASSET_COMMIT"
 ```
 
@@ -78,7 +78,7 @@ Info 中对象数量/大小在下一轮完整对象采集后更新；候选规�
 需要同时恢复已被本地保留策略清理的副本时，显式添加 --with-local：
 
 ```sh
-sudo docker compose exec -T publisher python -m open_assets \
+sudo ./scripts/open-assets \
   restore-objects "$ASSET_KEY" "$ASSET_COMMIT" --with-local
 ```
 
@@ -100,7 +100,7 @@ images/repos/<key>/releases/images-<sha>/   # public/images 的相对路径投�
 恢复并在同一次维护锁内重新校验、显式切换到目标版本：
 
 ```sh
-sudo docker compose exec -T publisher python -m open_assets \
+sudo ./scripts/open-assets \
   restore-objects "$ASSET_KEY" "$ASSET_COMMIT" --with-local --rollback
 ```
 
@@ -112,7 +112,7 @@ sudo docker compose exec -T publisher python -m open_assets \
 
 local_partial_possible 表示本地安装可能未完整结案，独立于 S3 的 partial_possible。第一次目录安装和显式切换之前均保存意图。失败可能已经补齐对象或安装部分本地副本，这些有效内容不会被自动删除；恢复标记只有在本次要求的对象及本地校验均完成后才更新。恢复报告字段是最近落盘状态，不是逐文件实时进度。
 
-Info 的[最近恢复结果](info.md#最近恢复结果)按仓库显示对象、本地副本和显式回滚的报告摘要。它只反映最近一次已持久化的尝试及当时的验证状态，不替代私有报告、当前版本核对或持续完整性检查。
+Info 的[最近恢复结果](info.md#恢复结果与状态核对)按仓库显示对象、本地副本和显式回滚的报告摘要。它只反映最近一次已持久化的尝试及当时的验证状态，不替代私有报告、当前版本核对或持续完整性检查。
 
 恢复未结案或状态不确定时，可先运行 [check-restore](restore-check.md)，重新读取对象、本地副本与 current/published，保留原恢复证据后再决定重试或人工恢复。核对本身不修复、不切换、不解除屏障。
 

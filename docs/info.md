@@ -1,265 +1,116 @@
-# Info 运行看板
+# Info 看板
 
-默认地址为 `https://info-node-name.console.lab.dev`。以私有 `domains.json` 中的实际地址为准。所有页面、静态资源和 `/api/status` 都经过 Stargate ForwardAuth；会话交换与认证落地页沿用精确管理主机路由。
+Info 通过 Stargate 提供只读状态页面。先看组件、磁盘和证书，再按需要打开容量、保留、恢复或审计 Tab。页面不执行发布、删除和修复命令。
 
-## 展示内容与数据边界
+## 安装采集服务
 
-看板展示主机 CPU 总利用率、逻辑核数、可用内存、Swap、系统负载与运行时间；组件的运行状态、Docker 健康状态、可用的 HTTP/TLS/心跳探测、CPU、内存工作集和重启次数；磁盘可用容量与 inode；各仓库的 OtterIO 对象数与逻辑字节数；内部 CA/叶证书及公网证书的到期时间。如果存在限量压测结果，还会展示请求数、错误数、吞吐和延迟分位数。
-
-磁盘区独占一行，证书区在桌面宽度下分为内网与 ACME 公网两列，小屏幕顺序排列。顶部“认证状态”进入配置的 Stargate 认证主机，仅显示当前认证状态，不是退出按钮；不接收请求参数指定的返回地址。恢复记录仅展示固定字段，是否成功恢复仍以组件当前健康状态为准。
-
-Docker CPU 的 100% 表示使用一个逻辑核；主机 CPU 则以整机为 100%，两者不能直接混用。内存工作集不是进程 RSS，也不包含主机上全部文件缓存。磁盘 `/` 与数据目录位于同一文件系统时只显示一项，不能把同一容量加两次。图片、发布状态或对象数据若使用独立挂载，会分别展示；发布预留按图片盘的可用空间判断。
-
-宿主机 collector 有受信任运维权限，读取 Docker 状态、Linux `/proc` 和公开证书，生成明确字段的 JSON 快照。它不输出环境变量、密码、SSH 密钥、容器完整 inspect、主机名、公网 IP 或完整文件路径。版本镜像引用和系统版本属于运行信息，仍只供管理入口访问。
-
-info 容器以非 root 身份运行，根文件系统只读，只有快照目录的只读挂载；不挂载 Docker socket、宿主机 `/proc`、private 或证书私钥。它提供固定读取路由，不提供 PHP 探针中的命令执行、文件管理、端口扫描或在线性能测试功能。
-
-## 启动采集
-
-完成部署、DNS 和 Traefik 接入后，在服务器管理员 shell 执行：
+在完成部署的服务器执行，先确认 `.env` 中的 `DATA_ROOT` 与实际目录一致。以下路径适用于默认配方；自定义路径需一起修改 systemd 的 WorkingDirectory、ExecStart、ConditionPathExists 和 ReadWritePaths。
 
 ```sh
 cd /app/open-assets
-install -d -o root -g 20010 -m 0750 /data/asset-stack/info
-docker compose up -d --no-build info
-python3 -m open_assets.telemetry --root /app/open-assets
-install -m 0644 config/systemd/open-assets-info.service /etc/systemd/system/
-install -m 0644 config/systemd/open-assets-info.timer /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable --now open-assets-info.timer
-systemctl status open-assets-info.timer --no-pager
+sudo install -d -o root -g 20010 -m 0750 /data/asset-stack/info
+sudo docker compose up -d --no-build info
+for name in info objects audits resources retention object-retention repair logrotate; do
+  sudo install -m 0644 "config/systemd/open-assets-$name.service" "config/systemd/open-assets-$name.timer" /etc/systemd/system/
+done
+sudo systemctl daemon-reload
+sudo python3 -m open_assets.telemetry --root /app/open-assets
+sudo systemctl enable --now open-assets-info.timer open-assets-objects.timer open-assets-audits.timer open-assets-resources.timer
 ```
 
-固定路径与 Compose 项目限制仍适用。采集每次结束后约 30 秒再运行，页面每 30 秒读取一次；超过 120 秒的快照会标记过期。采集失败保留旧快照，不能把旧快照当作实时健康证明。定时器的状态与错误通过 systemd 日志检查：
+上述命令安装所有单元，只启用采集。对象清理账号和删除权限按对象保留文档另行准备。保留清理、健康恢复和日志轮转分别按[本地保留](retention.md)、[对象保留](object-retention.md)、[健康检查](health.md)和[日志](logging.md)启用。`doctor` 会提醒未启用的定时器；应按部署需要核对，不用为了消除提示直接开启删除策略。
+
+主机快照每轮结束后约 30 秒更新，页面每 30 秒读取一次。超过 120 秒会标记过期。查看采集故障：
 
 ```sh
-journalctl -u open-assets-info.service --since '10 minutes ago' --no-pager
+sudo systemctl status open-assets-info.timer --no-pager
+sudo journalctl -u open-assets-info.service --since '10 minutes ago' --no-pager
 ```
 
-`/healthz` 只表示 info HTTP 进程存活。Publisher 的健康心跳不证明最近任务成功；Traefik 的 ping 不等于所有入口配置正确。判断具体发布还应使用任务状态与公开字节验证。各探针与自动恢复边界见 [健康检查](health.md)。
+## 管理入口
 
-## 已有部署增加入口
+Info 使用 `info-<节点名>.console.<基域>`。已有部署新增入口时，更新 `private/domains.json`、Stargate 回调名单和 Traefik 动态配置，保留原有密码与交换密钥。具体路由生成见[部署说明](deployment.md)。
 
-先备份应用与现有 Traefik 私有配置，按 [升级说明](upgrade.md) 更新源码。根据 `.env` 中的节点与基域生成 info 地址，追加到 `private/domains.json` 和 Stargate 的 `CALLBACK_ALLOWED_HOSTS`，保留原有域名、密码与交换密钥。重新生成现有 Traefik 的动态文件，重建 Stargate 和 info，再安装采集定时器。
+匿名访问页面、`/api/status` 和 `/app.js` 都应跳转 Stargate。认证链使用精确的 `/_session_exchange` 与受保护的 `/__auth_return` 路径，不能将认证例外扩展为全局规则。HTTP 容器只读最终快照，不持有 Docker socket、存储凭据或 Publisher 状态目录。
 
-四个受保护管理主机都必须包含精确 `/_session_exchange` 与受保护 `/__auth_return` 路由。不要只新增 info 主路由而漏掉回调与交换路径，也不要把认证例外改成全局规则。匿名访问 `/`、`/api/status`、`/app.js` 均应进入 Stargate；登录后页面与 API 应可读，会话失效后重新受到保护。
+## 健康、磁盘和证书
 
-内部证书长期有效不等于可以忽略私钥保护；到期提示也不替代异机告警。原始性能采样、私有快照与带实际地址的截图不要提交 GitHub。
+组件行显示运行状态、容器健康，以及配置过的 HTTP 探针结果。没有 HTTP 探针时不显示第三项。Publisher 心跳只说明工作循环存活；判断具体发布是否成功，还需查询对应任务。
 
-Docker 重启计数来自 Docker `RestartCount`，不包含所有手工或宿主机修复程序发起的重启。自动修复另有受限的操作记录，不能只靠该计数判断是否修复过。
+Docker CPU 的 100% 表示一个逻辑核，主机 CPU 的 100% 表示整机。内存工作集、RSS 和主机可用内存口径不同。Docker RestartCount 不包含所有手工或修复程序发起的重启，另查看运维记录。
 
-组件状态按“运行 / 健康 / 探测”展示：运行状态来自 Docker State，健康来自 Docker Healthcheck，探测是宿主机采集器额外执行的请求或心跳检查。未配置额外探测时省略第三项及其分隔符。目前 Traefik 使用容器内 `traefik healthcheck`，没有额外 HTTP 探针，因此正常显示为 `running / healthy`；其他组件显示 `ok` 是其额外探测通过。这些检查均不保证所有公开路由或发布结果正确。
+磁盘单独显示空间和 inode。容量阈值位于 `.env` 的 `INFO_DISK_*`、`INFO_INODE_*`；默认空间使用率 85% 提示、95% 严重，可用空间低于 5 GiB 提示、2 GiB 严重，inode 分别为 85% 和 95%。还会核对各仓库发布暂存预留。阈值错误或统计未知时，页面提示待确认。
 
-受保护的 Gitea、OC、Traefik 和 Info 路由按顺序使用 `console-auth` 与 `console-gzip` 中间件。认证通过后，对客户端接受 gzip 的 HTML、CSS、JavaScript、JSON、XML 和 SVG 响应启用 gzip，最小响应体 1024 字节。未通过认证的响应、Stargate 登录与会话交换路由不添加此压缩中间件，公开图片和对象路由保持原配置。已经编码、体积较小或不属于允许文本类型的响应不要求压缩。配置依据见 [Traefik Compress](https://doc.traefik.io/traefik/reference/routing-configuration/http/middlewares/compress/)。
+证书分内网和 ACME 公网两列。内网证书由 Certs Maker 生成，CA 和叶证书有效期均为 3650 天，没有自动续期；公网证书由原 Traefik 续期。更新方法见[证书维护](upgrade.md)。
 
 ## 仓库容量、保留策略和清理结果
 
-“仓库容量与保留”按稳定 key 展示仓库，不输出 Git remote、真实目录、完整 SHA、任务 ID、密钥或原始配置。
+“仓库容量”展示版本数、完整 public/图片副本、未配对目录、本地占用、OSS 对象统计和最近清理结果。版本按 SHA 去重；目录存在不表示内容已校验。占用包括版本、Git 缓存、清单、暂存和清理暂存，不含共享队列、备份、Docker 镜像及日志。
 
-- 本地版本按 releases 中可识别的 SHA 去重计数，完整 public 与 images 副本分别计数，未配对目录单独标记。这只是目录统计，不代表发布成功或内容校验通过；发布中的瞬间也可能出现未配对目录。
-- 本地占用包括仓库图片目录下的版本、清理暂存、发布暂存和其他本地条目，加上该仓库 Git 缓存与清单。按 `st_blocks × 512` 估算分配空间，仓库内硬链接去重，不跟随软链接，current 不重复计入目标内容。
-- 本地占用不包括 OSS 对象、共享任务/归档/隔离数据、备份、Docker 镜像与日志，也不能把各仓库值当作整机磁盘使用量。文件系统压缩、共享块与元数据可能使估算和实际可回收空间不同。
-- 保留策略显示是否启用、数量/天数并集、安全间隔、回滚与固定版本数、每轮上限及任务归档规则。固定 SHA 只输出数量，回滚、当前和在途任务的实际保护仍以清理程序重新计算为准。
-- 最近完整清理优先读取每仓库 retention-results/<key>.json；升级前记录回退到 retention-last.json：完成时间、移入清理暂存的版本数、删除的暂存目录数和归档任务数。目录数不是版本数，也不等于已释放的磁盘容量。未启用仓库不把预览候选计为已删除。
+本地占用按分配块估算，与逻辑文件字节不同，也不是保证可回收的空间。默认缓存 300 秒，配置、版本或清理记录变化时可提前刷新；扫描共享两秒与 50,000 项预算。失败保留上次值并标为旧数据。
 
-定时服务状态单独展示。最近失败或正在运行时，会明确说明下表是上次完整结果；进程正常退出也可能是持锁忙碌跳过，不代表完成了清理。每仓库摘要不会被其他仓库的单独执行覆盖。尚无结果、旧格式最近一次未包含该仓库、元数据损坏均有独立状态，不显示成“删除 0 个且成功”。
-
-常规主机采集器读取固定 DATA_ROOT 映射的本地目录和对象统计缓存，不调用 S3、不读取对象内容、不执行 Git 或清理操作。统计默认缓存 300 秒；配置、版本目录、发布记录或清理结果变化时提前刷新。每行显示实际统计时间。至多支持 100 个配置仓库，扫描共享 2 秒检查预算和 50,000 条目录项上限；超限或出错时保留旧测量并标记不可用/旧数据，不用零代替未知值。该预算不能中断阻塞的内核 I/O。
-
-缓存位于 info 数据目录的 repositories-cache.json，权限为 0600。Info HTTP 进程不能读取该文件；公开给受保护页面的 snapshot.json 仍只包含明确字段。新增统计仅支持既有 `/state`、`/images` 容器路径映射，其他映射会提示不可用。
-
-需要立即刷新统计时在管理员 shell 执行：
-
-```sh
-cd /app/open-assets
-sudo python3 -m open_assets.telemetry --root /app/open-assets --refresh-storage
-```
-
-## 容量提示
-
-阈值在私有 .env 配置，采集器下次运行时读取，不必因此重建应用容器：
-
-```dotenv
-INFO_DISK_WARN_PERCENT=85
-INFO_DISK_CRITICAL_PERCENT=95
-INFO_DISK_WARN_FREE_BYTES=5368709120
-INFO_DISK_CRITICAL_FREE_BYTES=2147483648
-INFO_INODE_WARN_PERCENT=85
-INFO_INODE_CRITICAL_PERCENT=95
-```
-
-空间或 inode 使用率达到阈值时提示；可用空间低于字节阈值时提示。默认分别为 85% / 95%、5 GiB / 2 GiB。数据盘可用空间小于任一仓库 `max_bytes × 2` 时，还会提示该仓库无法满足现有 Publisher 的发布预留检查。这是配置上限预留，不是此次上传文件的预测大小。
-
-阈值无效、inode 数据未知、仓库统计不可用或过期时，不显示“全部正常”；整个快照超过 120 秒或浏览器刷新失败时，也会撤销实时容量正常提示。提示不会自动删除、解锁、重启或发送通知，不能替代独立的外部容量告警。若没有可清理版本，应检查 Git、OSS、任务归档、备份和日志等其他占用，不能突破 current/回滚/在途任务的保护强制清理。
-
-开发验证可运行 `python -m unittest discover -s tests -v` 和 `node --test tests/test_storage_ui.js`。前者覆盖采集和数据边界，后者用最小 DOM 替身验证渲染、旧数据、读取失败和文本注入；实际浏览器布局仍需单独检查。
+清理结果区分预览、实际执行、锁忙、禁用及失败。服务正常退出也可能是跳过，不能只看 systemd 退出码判断删除了多少。先在 CLI 预览，再按[保留策略](retention.md)操作。
 
 ## OtterIO 对象统计
 
-仓库表中的“OtterIO 对象”独立于本地容量，按配置桶内 `repositories/<key>/` 前缀递归统计，包含该前缀下的历史附件、清单和未完成发布已上传的对象，也包含已禁用但仍在配置中的仓库。相邻 key 不共享前缀；配置之外的对象不计入。新增白名单仓库后，下次对象采集自动识别，不需修改服务或扩大现有 Publisher 权限。
+对象数量和逻辑字节按仓库前缀低频采集。上传中的部分版本也计入，分页不构成单一时刻的快照；逻辑字节不等于存储底层磁盘占用。
 
-对象数量来自 ListObjectsV2 的 Contents 项数，字节数为 Size 之和，包括零字节对象。不下载对象，不逐对象 HEAD，不枚举桶根路径。该 API 需要既有 Publisher 账号的 s3:ListBucket 权限；沿用其内部 HTTPS、CA 与凭据，不使用存储 root 账号。执行程序只有列表调用，但复用的 Publisher 身份本身仍具有发布写入权限，并非新增的只读 IAM 身份。
-
-这里的大小是对象逻辑大小，不是 OtterIO 的文件系统块、冗余、索引、分片暂存或可回收磁盘空间。仅统计列表中当前可见的对象，不枚举 S3 非当前版本、删除标记和未完成分片。它与本地占用分别展示，不能相加作为磁盘用量。多页或跨轮列表不是事务快照；并发发布或外部修改期间的结果是采集时间范围内的近似统计，不能用来做计费、内容完整性校验或删除判据。[ListObjectsV2 语义](https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html)
-
-### 安装独立定时器
-
-先按升级流程构建并更新 Publisher 和 Info 镜像，使容器包含 object_info 模块和页面，再安装：
+`open-assets-objects.timer` 使用现有 Publisher 列表权限，默认每 15 分钟采集。每轮共享 100 页、110 秒预算，每页最多 1000 个对象，列表请求最多每秒一次。未完成时保持续页，超过 24 小时重新扫描。页面刷新不调用 S3。
 
 ```sh
-cd /app/open-assets
-sudo install -m 0644 config/systemd/open-assets-objects.service /etc/systemd/system/
-sudo install -m 0644 config/systemd/open-assets-objects.timer /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl start open-assets-objects.service
-sudo systemctl enable --now open-assets-objects.timer
 sudo systemctl status open-assets-objects.timer --no-pager
+sudo journalctl -u open-assets-objects.service --since '1 hour ago' --no-pager
 ```
 
-独立 oneshot 服务通过 docker compose exec 在 Publisher 内执行元数据采集，结果经宿主机校验后原子写入 info/objects-cache.json，权限为 root 0600。续页 token 只在私有缓存和内部进程间传输；对页面仅输出稳定 key、对象数、字节数、状态和起止时间，不输出对象名、桶名、endpoint、token 或异常原文。Info 容器无法读取该缓存，只能读取常规采集器过滤后的 snapshot.json。采集不持有发布锁，不改对象、IAM、任务或清理策略。
+对象保留 Tab 显示当前策略、规划中的待清理版本和容量、最近尝试与最近完整预览/执行。规划过期或配置变化时需重新预览；实际删除以收据和执行结果为准。缺失、失败和跳过原因会单独提示。授权及执行方法见[对象保留](object-retention.md)。
 
-首次启动约 2 分钟后执行，此后每次结束约 15 分钟再运行。每仓库距上次尝试不足 900 秒时跳过，即使重复手工启动也不会反复扫描。每轮全仓库共享 100 次列表请求与 110 秒检查预算，每页最多 1000 个对象，请求起点间隔至少 1 秒；连接/读取超时分别为 2/5 秒，关闭 SDK 自动重试。宿主机等待最多 130 秒，systemd 最多 140 秒。预算检查不能中断已开始的阻塞 I/O。
+## 恢复结果与状态核对
 
-仓库间轮流取页；预算耗尽后保存累计值和续页 token，下轮继续。未扫完不发布部分总数，而是显示“分页采集中”及上次完整结果；首次尚无完整结果时显示未知。续采超过 24 小时会重新开始，避免无限沿用旧扫描；此上限也意味着极大前缀可能长期无法完成，需要降低对象规模或另行设计离线统计，不能仅提高刷新频率。
+“恢复结果”显示每仓库最近启动的恢复：对象读回、本地副本校验、是否要求及完成显式回滚、失败阶段和不确定状态。报告中的成功仅描述当时的校验。后续核对或结案不会改写原恢复报告。
 
-失败时保留上次完整结果并显示失败；该仓库出错的续页进度丢弃，下轮重新扫描。完整结果超过 30 分钟标记过期。桶、endpoint 或仓库 key 集合变化时失效旧对象缓存；保留策略改变不导致额外遍历。磁盘容量提示仍依据实际文件系统和本地发布预留，不把对象逻辑大小当作磁盘空间依据。
+“状态核对”显示 `check-restore` 对对象、两份本地副本、current/published 和清理屏障的检查。页面显示当前使用的版本；历史回滚结果请查看对应恢复记录。核对通过后仍需手动结案。
 
-### 检查与手工触发
+每个面板分别取最近报告，因此可能对应不同提交。超过 24 小时或发现相关证据变化会提示重新核对；这不是持续的文件完整性检测。指定版本的调查使用 CLI：
 
 ```sh
-sudo systemctl start open-assets-objects.service
-sudo journalctl -u open-assets-objects.service --since '1 hour ago' --no-pager
-sudo systemctl list-timers open-assets-objects.timer
+sudo ./scripts/open-assets check-restore KEY FULL_SHA
 ```
 
-手工启动同样受缓存间隔限制，不提供绕过限速的网页刷新入口。结果由下一轮常规主机采集进入看板；如需马上合并已有对象缓存，执行 sudo python3 -m open_assets.telemetry。此命令及 --refresh-storage 都不会触发 S3 请求。全进程失败或超时也保留旧完整值；先看服务日志和每行状态，再检查 Publisher 健康、内部证书及列表权限，避免删除缓存来反复重试。
-
-对象历史清理采用独立策略和专用维护账号，默认定时预览，详见[对象保留](object-retention.md)。对象统计会在下一轮完整采集后反映实际删除；本地“最近清理”不包含对象清理结果。
-
-## 对象保留策略与清理记录
-
-“OtterIO 对象保留”独占一行，与上方的本地保留和本地清理区分。页面展示当前配置中的数量、天数、安全间隔、单轮版本/对象/逻辑字节预算、独占写入声明、回滚保护数量与两类固定 SHA 的去重数量。策略启用不代表已经授予 IAM 删除权限，也不代表定时任务带有 --apply；看板不会检查或展示凭据。
-
-候选统计来自最近完整对象规划，不在网页或 30 秒主机采集时调用 S3：
-
-- “待清理”总量是当轮未被引用、保留数量/时间或安全条件保护的版本及其对象、逻辑字节；“单轮候选”另显示预算内选中的部分。两者不是整桶容量，也不保证每个候选的删除前 HEAD 校验都能通过。
-- 规划时间与模式均单独标注。实际执行产生的规划是删除前快照，不能把它当成删除后的实时剩余量。需要更新候选时，按对象保留文档执行一次只读预览；浏览器刷新不重新扫描。
-- 保护原因按受保护 SHA 去重计数，不是任务数量，各原因之间可以重叠；还会展示未知对象数量和因策略/请求预算排除或跳过的版本数。未知对象不会因此成为自动删除候选。
-- 完整规划超过 12 小时或共享保留配置发生变化时标记过期/需重新预览。历史执行记录仍可阅读，但不是对当前状态的保证。
-
-最近一次尝试和两类完整历史分别保存：
-
-- 预览明确显示“仅预览，未调用对象删除”；执行请求如果策略未启用，会说明跳过原因，不能称为实际删除成功。
-- 完整执行展示已确认删除的版本、对象与逻辑字节；这不是磁盘实际释放量。后续预览不会覆盖最近完整执行，单仓库运行也不会覆盖其他仓库摘要。
-- 锁忙、未声明独占写入、桶版本控制、扫描/时间预算、权限失败、引用或元数据冲突、存储/I/O 错误使用固定原因码展示。不输出 SDK 异常原文、对象名、完整 SHA、桶名、endpoint 或 token。
-- 失败或未结案执行可能已删除部分对象；有响应确认的数量单列，未收到响应的删除无法准确计入。最近完整执行不是这次失败的结果。进程被杀、写摘要失败或主机中断时，可能只留下“尝试未结案”，应结合服务状态、私有日志及删除收据排查，不能据此断定未删除。
-
-摘要位于 state_root/object-retention-results/<key>.json，包含 attempt、last_plan、last_preview、last_apply。宿主机按固定 DATA_ROOT/publisher 映射读取并过滤到状态快照；Info 容器仍不挂载发布状态目录。结果缺失、损坏、未知与零候选分开显示。升级前的单份 object-retention-last.json 不自动冒充这四类历史，升级后需执行一次预览初始化摘要。
-
-定时服务状态仅表示进程运行/退出情况，不能证明已经删除。页面只读，没有预览、重试或删除按钮。默认六小时预览和手工操作步骤见[对象保留](object-retention.md)。
-
-## 最近恢复结果
-
-“最近恢复结果”按仓库展示 `restore-objects` 的持久化报告，包括对象读回校验、本地 public 与图片副本校验、本次是否安装副本，以及是否请求并完成显式回滚。默认恢复不切换当前版本；看板不提供恢复或回滚按钮。命令见[恢复 CLI](object-restore.md)。
-
-每仓库选择 `started_at` 最近的一份报告，不按文件修改时间或结束时间选择。相同 SHA 的重试覆盖该 SHA 上次记录，因此这不是完整审计历史。获取维护锁失败的 busy、参数错误等发生在报告创建前的拒绝不会生成恢复报告。没有记录显示“尚无恢复记录”，不是恢复成功。
-
-- 对象校验通过表示该次恢复已完成全部对象读回核验；即使后续本地安装失败，也保留这一阶段结果。本地校验通过表示两份副本均核验通过，安装标志仅说明本次是否重建，重复执行可能两项均为否。
-- “显式回滚完成（当时）”仅来自 `activated=true`，不是当前版本指示。后续正常发布可以再次切换。旧报告没有本地或回滚字段时显示未记录，不推断其取值。
-- failed 显示失败阶段和有限类别（校验、文件读写、权限、缺失、超时、Git、存储、中断或未分类），不公开原始异常、请求或文件名。详细原因需核对私有恢复报告。
-- running 也可能是进程中断后未结案，不据此推断进程仍在运行。存在部分写入/安装可能或 `activation_uncertain` 时显示状态不确定；应检查对象与 current/published。`activated=false` 不证明从未临时切换。
-- 存储 endpoint/bucket 范围变更会提示历史结果不证明当前存储有效。所有校验都是恢复当时的结果，不持续验证外部对象和文件，也不撤销过去的清理记录。
-
-摘要由现有主机采集定时器只读生成，在下一次成功采样后显示；浏览器刷新不遍历 Git、对象或图片目录。每仓库最多检查 512 个目录条目，每份报告最多 16 KiB，总扫描预算两秒。异常报告、目录链接、未知条目、超限或超时会显示“报告不可用”，不回退到较旧成功报告。原子写入的临时文件不作为报告。报告过多时应在确认没有维护进程后归档到私有备份，避免直接删除审计材料。
-
-公开 API 摘要只包含仓库 key、状态、有限阶段/失败类别、计数、时间和布尔标志，不含完整 SHA、对象名、远端地址、凭据或报告原始错误。API 仍受 Stargate 保护。采集过期或刷新失败会提示旧数据；浏览器与主机采集都不修改恢复报告。
-
-## 恢复状态核对
-
-“恢复状态核对”展示显式 `check-restore` 的最近报告，包括对象/public/图片、current/published 一致性、目标是否当前在用、对象清理屏障及原恢复是否不确定。命令与退出码见[核对 CLI](restore-check.md)。当前在用不等于过去回滚成功；原恢复未结案也不会因核对通过自动结案。
-
-每仓库按核对 started_at 选择最新报告，可能与“最近恢复结果”的目标不同。没有记录、坏记录、未结案、检查失败和屏障阻止均独立展示，不回退显示旧成功。摘要沿用每仓库 512 项、每文件 16 KiB、全局两秒读取上限；原子临时文件除外。核对报告与原报告都需纳入私有备份和人工归档。
-
-看板标明核对时点。超过 24 小时，或发现存储范围、原恢复报告、清单、current/published 摘要变化时，提示重新核对；无法比较时提示人工核查。摘要比较不验证对象和目录是否随后损坏，即使没有变化提示也不能视为实时完整性保证。API 仅暴露有限状态、原因、时间、计数及布尔标志，不暴露完整 SHA、摘要值、对象名或原始错误；仍受 Stargate 保护。浏览器刷新和主机采集不修改核对证据，也不会自动运行核对 CLI。
-
-## 恢复结案记录
-
-“恢复结案记录”只读显示 [close-restore](restore-close.md) 的独立结果。它不覆盖“最近恢复结果”或“恢复状态核对”，所以原报告仍可能显示未结案/不确定。成功表示结案当时重新核对通过并显式确认，不证明历史切换成功，不表示内容被永久保留。
-
-每仓库按 started_at 选择最近尝试，目标可能与最近恢复/核对不同。拒绝、失败、未完成 intent 和坏记录不会回退为旧成功。最近尝试为 closed 时，还会验证其原始报告与核对快照的摘要和绑定关系；缺失或损坏显示不可确认。intent/result 各限制 8 KiB、证据快照各限制 16 KiB、每仓库最多 512 个尝试目录，总扫描预算两秒。
-
-页面区分核对时目标当前在用和保留其他当前版本。若当前原报告、存储范围、清单或 current/published 与结案时不同，显示历史记录及变化提示；无法比较时要求人工核对。提示不进行对象遍历或重新校验所有文件。原报告被同 SHA 的后续恢复更新时，旧结案不覆盖新尝试，但私有 source.json 仍保留旧报告。
-
-API 不暴露 SHA、审计 ID、执行 UID、自由文本原因、摘要值、对象名或原始错误。完整记录仅在私有状态目录，仍需独立备份。浏览器刷新和主机采集不修改审计、不运行结案 CLI；访问继续受 Stargate 保护。
-
-恢复结案的在线审计数达到 448 条会提示使用 [restore-audit-archive](restore-audit.md) 预览，超过 512 条会明确显示读取超限。归档保留最新在线记录，Info 不遍历压缩包；在下次主机采样后更新数量。未结案及未覆盖的不确定证据仍受保护，不能靠归档强行隐藏；归档查询、完整性校验和重试步骤见上述文档。
+操作选择见[命令速查](operator.md)，完整条件见[恢复](object-restore.md)、[核对](restore-check.md)和[结案](restore-close.md)。
 
 ## 审计容量缓存与实际归档结果
 
-“结案与审计”tab 展示各仓库恢复审计的在线、已归档、待清理暂存数量，以及逻辑大小和磁盘分配量。相同审计在中断处理期间可以同时存在多个位置，数量按位置分别计数；不是跨位置去重总数。在线和暂存的逻辑大小为原文件长度，归档为压缩包文件长度；磁盘分配量含该仓库对应位置的目录块，不等于可回收容量。私有临时文件的占用计入位置容量，但不作为已归档条数。字段缺失显示未知，不当作零。
+“结案与审计”保留独立结案结果，并展示在线、归档和待清理暂存的数量与占用、默认保护规划和最近实际归档摘要。原始报告、原因为私有材料，页面仅显示有限字段。
 
-容量由独立定时器在 Publisher 内只读采集，默认每 15 分钟一次。采集使用与维护命令相同的非阻塞 Worker 锁，验证既有审计/归档并统计本地文件，不请求 S3 或 Git；每次共享 90 秒预算，单仓库沿用 20000 个目录项/30 秒扫描上限，逐项检查时间并限制固定目录深度。大仓库、坏布局或权限错误会保留旧值并标记采集失败；锁忙跳过不推进采样时间。即使重复手工启动，距离上次尝试不足 900 秒也不重复遍历；超过 1800 秒的样本提示过期。
-
-安装默认路径的服务：
-
-```sh
-cd /app/open-assets
-sudo install -m 0644 config/systemd/open-assets-audits.{service,timer} /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo python3 -m open_assets.audit_info --root /app/open-assets
-sudo systemctl enable --now open-assets-audits.timer
-sudo systemctl status open-assets-audits.timer --no-pager
-```
-
-服务以 root 调用现有 Publisher，不给应用挂载 Docker socket。宿主机过滤缓存位于 `${DATA_ROOT}/info/audit-cache.json`，权限 0600；HTTP 仍只读最终状态快照，不直接提供原缓存。配置示例使用固定 `/app/open-assets`、`/data/asset-stack`；自定义路径时同步修改 systemd 的工作目录、ExecStart、ConditionPathExists 和 ReadWritePaths。服务在维护标记存在时不启动；维护前仍应停止 timer 和已运行的 service。
-
-需要在归档后立即更新容量时，显式执行：
+`open-assets-audits.timer` 默认每 15 分钟采集；普通主机快照只读取缓存和有界的操作摘要。归档后需要立即更新时：
 
 ```sh
 sudo python3 -m open_assets.audit_info --root /app/open-assets --force
 sudo systemctl start open-assets-info.service
 ```
 
---force 绕过统计间隔，但仍获取维护锁并遵守扫描预算，不运行归档。默认定时器不带 force。页面刷新和 tab 切换不会调用上述命令；30 秒主机采集只读取小缓存和每仓库一份实际操作摘要，不遍历归档包。缓存读取/采集失败时继续显示旧值及时间，不以旧值证明当前容量。
-
-“默认规划/保护原因”来自采样时以 keep-last=20、min-age-days=30、max-records=100 计算的只读规划，展示本轮候选、符合条件总数和各主要保护原因。一个记录按规划规则归入一个主要保护/跳过原因；本轮数量上限是未选中，不是永久保护。这些参数不会覆盖用户手工命令，也不自动归档。
-
-“最近实际归档”来自显式 --apply 的有界持久化摘要，包含候选、已完成、保护数量/原因、自定义参数、起止时间和失败类型。初始意图和每条处理完成后保存进度；最终写入前强制结束可能留下 running，表示未结案，计数也可能落后于文件实际位置。失败/未结案不隐藏上次完整执行。完整结束但处理 0 条仍是一轮实际执行；没有旧摘要时不从历史压缩包推断某次命令成功。默认预览、查询和 verify 保持只读，锁忙或参数错误未进入实际归档时不创建操作摘要。
-
-实际结果在下次主机快照中显示；容量仍等待下一轮低频采集。若容量采样早于最新实际归档，会明确提示等待重采样。摘要路径为 `state_root/audit-archive-results/<key>.json`，每仓库只保留最近尝试与最近完整执行，不无限增长；原审计和压缩包不因此删除。它是观测记录，不是事务日志或全部操作的永久审计。部分写入、移动或暂存清理可能已经发生，处理见[归档中断恢复](restore-audit.md#验证归档及中断恢复)。
-
-API 仅展示仓库 key、计数、大小、时间、固定状态/原因和策略参数，不含 SHA、审计 ID、压缩包名、路径、自由文本原因、UID、凭据或原始错误。状态缓存及操作摘要与其他私有状态一起备份。
-
-## 详情 tab
-
-主机概览、容量告警、组件健康、磁盘和证书保持直接可见。下方按“仓库容量、对象保留、恢复结果、状态核对、结案与审计、运维记录”切换，只显示当前面板。默认打开仓库容量；自动刷新更新全部面板的数据，但保持当前选择。方向键左右切换并移动焦点，Home/End 跳转首尾；窄屏横向滚动 tab 栏和表格。切换只操作已取得的快照，不额外请求 API、扫描文件或执行命令；选中面板写入 URL fragment（例如 #audit）；已认证页面重载或复制该地址时回到同一面板，未知 fragment 回到默认仓库容量；经过认证重定向可能回到默认面板，本次不改变回调规则。
-
-## 如何阅读说明与提示
-
-各详情先说明结论与下一步，统计口径放在“统计口径与操作边界”中展开。tab 栏上方汇总值得复核的记录/采样，点击直接进入对应面板；拒绝命令、旧数据或历史失败不等于当前所有服务故障。几个最近记录可能来自不同提交，具体排查使用 CLI 的 key/SHA 筛选。阶段名称提供中文含义，原始状态字段不改写。未来超过五分钟或非法时间的主机快照会被拒绝，不能一直显示为刚更新。使用流程与仍有的边界见[操作速查](operator.md)和[易用性检查](usability.md)。
+采集本身不归档文件。先用 `restore-audit-archive` 预览，未结案和不确定证据继续保护。参数、完整性校验及中断恢复见[审计文档](restore-audit.md)。
 
 ## Git 缓存与全局队列
 
-“Git 与队列”Tab 展示发布端各白名单仓库的 Git 缓存逻辑字节、每仓库预算和使用率，以及全局 Git 缓存、活动记录、合计记录和队列预留字节。全局缓存包含未配置仓库留下的目录，不等于各展示行之和，也不包含 Gitea 源仓库。队列统计复用准入函数：活动目录包括已完成任务，合计还包含归档与隔离文件；隔离原因文件单独计数。实际逻辑字节和按每文件至少 64 KiB 计算的预留字节分别显示，阈值依据预留值，不能与 `du` 的分配块占用直接比较。
+“Git 与队列”展示发布端每仓库的 Git 缓存逻辑字节、预算和使用率，以及全局缓存、活动记录、合计记录与队列预留字节。合计 Git 占用包含未配置仓库残留缓存，不包含 Gitea 源仓库。
 
-用量默认每 900 秒测量一次；systemd 每分钟检查是否需要刷新，间隔内直接复用缓存。总扫描时间限制 60 秒，目录项受 `resource_limits.scan_entries` 限制。采集以非阻塞方式申请 worker、queue 锁：有任务或维护操作占锁时跳过，保留上次完整值，下轮重试；取得锁后的测量期间，新发布和入队可能短暂等待。不要把它设置成高频压测探针。缓存过期、失败和锁忙都会标记为待复查，不以零替代。预算或仓库列表变化后，旧缓存不再作为当前统计，需要重新采集。
+队列口径与准入一致：活动目录包含终态任务；合计还包括归档和隔离文件，每文件至少预留 64 KiB，较大文件按实际逻辑字节计入。页面分别显示实际字节和预留值；仅归档任务不释放合计额度。
 
-宿主机读取固定缓存 `${DATA_ROOT}/info/resource-cache.json`，不让每 30 秒的主机快照或浏览器请求遍历状态目录。HTTP 容器仍只读最终 snapshot，不持有状态目录、Docker socket 或凭据。采集服务不调用 Git、S3 或容器管理 API，也不修改发布状态、版本和预算。
+默认每 900 秒测量，timer 每分钟检查是否需刷新。扫描最多 60 秒，目录项受 `resource_limits.scan_entries` 限制。采集不等待已被占用的 Worker/队列锁；测量期间新发布可能短暂等待，Git 扫描期间仍允许入队。锁忙下轮重试，其他失败保留旧值并标记。
 
-以 root 安装，默认路径如下；自定义安装应同步修改 service 的工作目录、条件和读写路径：
+`.env` 可配置 `INFO_RESOURCE_INTERVAL_SECONDS`（60–86400 秒）和 `INFO_RESOURCE_WARN_PERCENT`（1–99，默认 80）。达到提示比例时显示接近预算，达到 100% 显示达到或超过。预算变更后旧缓存失效。提示不修改准入额度、清理数据或发送通知。
 
 ```sh
-cd /app/open-assets
-sudo install -m 0644 config/systemd/open-assets-resources.{service,timer} /etc/systemd/system/
-sudo systemctl daemon-reload
 sudo python3 -m open_assets.resource_info --root /app/open-assets --force
-sudo systemctl enable --now open-assets-resources.timer
 sudo systemctl start open-assets-info.service
 sudo systemctl status open-assets-resources.timer --no-pager
 ```
 
-服务启动前需先运行 Publisher，使共享锁文件就绪。维护前停止 timer 和已运行的 service，维护标记只阻止下一次启动。采集失败可用 `journalctl -u open-assets-resources.service` 排查；普通刷新不绕过间隔，`--force` 只绕过间隔，不绕过锁和扫描限制。
+最近超限只保存本功能启用后、程序捕获的最近一次队列和 Git 限制代码、key 与时间。它是历史记录，不代表当前仍超限，也不能解释内核直接终止或事件写盘失败。主机快照只读取两个固定槽位，不扫描旧任务。
 
-`.env` 可设置 `INFO_RESOURCE_INTERVAL_SECONDS=900`（60–86400 秒）与 `INFO_RESOURCE_WARN_PERCENT=80`（1–99）。到达提示百分比会显示接近上限，达到 100% 显示达到或超过预算；这些都是采样时的用量。它们不更改准入限制，也不发送外部告警，不自动清理、重试、扩容或切换版本。合计满额时，仅把任务从活动目录归档并不能释放合计额度。预算配置及处置步骤见[资源预算](resource-limits.md)。
+## 数据位置与维护
 
-“最近超限”分别保存最近一次队列和 Git 的固定原因代码、时间和仓库 key；历史记录不是当前仍超限的证明。来源是本功能启用后被程序明确捕获的 `ResourceLimit`，不回溯扫描旧任务，也不能解释内核直接杀进程、Git 非零退出或记录落盘失败。原始异常、请求、remote、路径、域名和秘密不进入事件文件；两个固定槽位不会随失败次数增长。事件文件为 `${DATA_ROOT}/publisher/resource-limit-events.json`，应纳入私有备份。每次主机快照只限量读取该小文件，因此事件更新可早于下一次容量测量。没有记录不等于从未超限；损坏或无法读取时会明确提示原因未知。
+过滤缓存位于 `${DATA_ROOT}/info/`，包括 `repositories-cache.json`、`objects-cache.json`、`audit-cache.json`、`resource-cache.json`。缓存可重建，原始恢复、清理收据、审计及 `publisher/resource-limit-events.json` 应纳入私有备份。HTTP 只读取过滤后的 `snapshot.json`。
+
+维护前设置 `private/maintenance.flag`，停止相关 timer 和已经运行的 service；标记只阻止新任务启动。`--force` 只绕过统计间隔，不绕过锁或扫描预算。数据过期先检查对应服务，不通过重跑初始化或取消删除保护解决。

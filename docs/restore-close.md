@@ -4,7 +4,7 @@
 
 ```sh
 cd /app/open-assets
-sudo docker compose exec -T publisher python -m open_assets \
+sudo ./scripts/open-assets \
   close-restore "$ASSET_KEY" "$ASSET_COMMIT" \
   --reason '已复核数据和引用，保留现有服务版本'
 ```
@@ -57,6 +57,6 @@ audit-id 不使用请求指定的路径。文件先刷盘，再以不覆盖已�
 
 ## Info 展示与备份
 
-[Info](info.md#恢复结案记录)显示每仓库最近启动的结案尝试。成功结案、拒绝、失败、未完成和报告不可用分开表示；保留当前其他版本、原报告不确定以及后续证据变化均有提示。网页不提供结案按钮，不自动执行重新核对。
+[Info](info.md#恢复结果与状态核对)显示每仓库最近启动的结案尝试。成功结案、拒绝、失败、未完成和报告不可用分开表示；保留当前其他版本、原报告不确定以及后续证据变化均有提示。网页不提供结案按钮，不自动执行重新核对。
 
 完整审计目录与原恢复报告、清单一起纳入 Publisher 状态备份。结案审计不参与自动历史版本清理；使用[审计查询与归档 CLI](restore-audit.md) 默认预览，显式 --apply 后才校验并移出在线目录，归档包仍需私有备份。Info 每仓库最多读取 512 个尝试目录，总扫描预算两秒，intent/result 各最多 8 KiB，证据快照各最多 16 KiB。超限、坏记录、链接或缺失证据会显示不可用，不回退到旧成功。归档前确认没有结案进程，保留目录结构和全部文件；不要只保留 result.json。

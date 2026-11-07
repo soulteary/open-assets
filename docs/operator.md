@@ -63,7 +63,7 @@ sudo ./scripts/open-assets links main-images "$ASSET_COMMIT" \
 
 --root 是全局参数，放在子命令前：`./scripts/open-assets --root /app/open-assets repo list`。它只选择部署目录，不将配方变成任意多实例支持。脚本不自动执行 docker compose up，不修复权限，也不创建缺失部署。
 
-转发命令保留 Publisher 的输出和退出码：多数结果为 JSON，status 保持原来的四列文本；用法错误为 2，实际失败通常为 1，锁忙也可能为 2，应结合返回内容区分。原有安全相关异常继续只给固定错误类型，未增加原始 SDK 请求、环境或凭据的输出。
+转发命令保留 Publisher 的输出和退出码：多数结果为 JSON，status 输出四列基本信息，资源超限失败时追加限制代码；用法错误为 2，实际失败通常为 1，锁忙也可能为 2，应结合返回内容区分。原有安全相关异常继续只给固定错误类型，未增加原始 SDK 请求、环境或凭据的输出。
 
 长命令中断或 SSH 断开时，远端操作可能仍在执行。不要立即用第二个写命令“补救”；先查询任务、check-restore 或审计位置，并核对维护锁及私有报告。Ctrl-C 不是跨系统回滚。运行输出含仓库身份、SHA 和 URL，只保存在私有终端，不提交公开仓库。
 

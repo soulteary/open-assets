@@ -8,11 +8,11 @@
 
 ```sh
 # 指定仓库；在线与归档合并，默认返回最近 100 条。
-sudo docker compose exec -T publisher python -m open_assets \
+sudo ./scripts/open-assets \
   restore-audit-list "$ASSET_KEY"
 
 # 指定完整 SHA，并使用分页。
-sudo docker compose exec -T publisher python -m open_assets \
+sudo ./scripts/open-assets \
   restore-audit-list "$ASSET_KEY" "$ASSET_COMMIT" --limit 100 --offset 0
 ```
 
@@ -23,7 +23,7 @@ JSON 含 total、has_more、offset 和 records。记录列出审计 ID、完整 
 ## 默认预览
 
 ```sh
-sudo docker compose exec -T publisher python -m open_assets \
+sudo ./scripts/open-assets \
   restore-audit-archive "$ASSET_KEY"
 ```
 
@@ -32,7 +32,7 @@ sudo docker compose exec -T publisher python -m open_assets \
 可按 SHA 缩小候选，或显式设置保留窗口：
 
 ```sh
-sudo docker compose exec -T publisher python -m open_assets \
+sudo ./scripts/open-assets \
   restore-audit-archive "$ASSET_KEY" "$ASSET_COMMIT" \
   --keep-last 20 --min-age-days 30 --max-records 100
 ```
@@ -56,7 +56,7 @@ keep-last 为 1–1000，不能为零；min-age-days 为 0–36500；max-records
 确认预览后执行相同命令并添加 --apply：
 
 ```sh
-sudo docker compose exec -T publisher python -m open_assets \
+sudo ./scripts/open-assets \
   restore-audit-archive "$ASSET_KEY" \
   --keep-last 20 --min-age-days 30 --max-records 100 --apply
 ```
@@ -81,7 +81,7 @@ state_root/
 ## 验证归档及中断恢复
 
 ```sh
-sudo docker compose exec -T publisher python -m open_assets \
+sudo ./scripts/open-assets \
   restore-audit-verify "$ASSET_KEY" "$ASSET_COMMIT"
 ```
 
@@ -101,4 +101,4 @@ Info 继续只读在线目录，不在每次采样时遍历压缩包。448 条�
 
 归档与查询均不拉取 Git，也不重新读取 S3 对象；verify 验证的是审计包，不是业务内容的当前完整性。归档默认仍在同一数据盘，不替代独立备份。强制终止可能留下私有 tmp 临时文件，CLI 不自动删除无法关联的临时内容；确认没有维护进程后再人工核对。
 
-显式 --apply 现在另存每仓库一份有界的[实际归档观测摘要](info.md#审计容量缓存与实际归档结果)，用于 Info 展示最近结果、参数和保护原因；默认预览、list、verify 仍不写状态。摘要与归档文件不是联合事务，硬终止或结果写入失败可能留下 running；不能仅凭摘要判断没有生成包或移动目录。Info 的容量采用独立 15 分钟缓存，默认保护规划与最近手工参数分开显示；实际归档不会自动触发高频统计。
+显式 --apply 会另存每仓库一份有界的[实际归档观测摘要](info.md#审计容量缓存与实际归档结果)，用于 Info 展示最近结果、参数和保护原因；默认预览、list、verify 仍不写状态。摘要与归档文件不是联合事务，硬终止或结果写入失败可能留下 running；不能仅凭摘要判断没有生成包或移动目录。Info 的容量采用独立 15 分钟缓存，默认保护规划与最近手工参数分开显示；实际归档不会自动触发高频统计。
