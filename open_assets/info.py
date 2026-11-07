@@ -20,7 +20,11 @@ def read_snapshot(path=None):
     if not isinstance(snapshot, dict) or snapshot.get("schema_version") != 1:
         raise ValueError("unsupported snapshot")
     collected = snapshot.get("collected_at")
-    if not isinstance(collected, (int, float)) or not math.isfinite(collected):
+    if (
+        type(collected) not in (int, float)
+        or not math.isfinite(collected)
+        or not 0 <= collected <= time.time() + 300
+    ):
         raise ValueError("invalid collection time")
     snapshot["age_seconds"] = max(0, round(time.time() - snapshot["collected_at"]))
     snapshot["stale"] = snapshot["age_seconds"] > 120

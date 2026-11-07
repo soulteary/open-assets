@@ -222,3 +222,22 @@ test('missing, stale and busy audit measurements never render fabricated zeros',
   ui.context.render(data);const text=ui.get('audit-repositories').textContent;assert.match(text,/尚无完整采样/);assert.match(text,/锁忙跳过/);assert.match(text,/旧数据/);assert.match(text,/归档结果不可用/);assert.doesNotMatch(text,/0 条/);
   ui.context.fetch=async()=>{throw Error('offline')};await ui.context.update();assert.match(ui.get('audit-notice').textContent,/无法刷新/);
 });
+
+test('hidden detail failures stay visible as navigable attention hints', () => {
+  const ui=setup(),data=fixture();data.restorations={status:'ok',repositories:[{key:'assets',result_status:'ok',attempt:{status:'failed',phase:'activate',started_at:1,uncertain:true}}]};
+  ui.context.render(data);assert.equal(ui.get('panel-restore').hidden,true);assert.equal(ui.get('detail-attention').hidden,false);assert.match(ui.get('tab-restore').textContent,/提示/);assert.match(ui.get('detail-attention-links').textContent,/恢复未完成/);
+  const link=ui.get('detail-attention-links').children.find(n=>n.textContent.startsWith('恢复结果'));
+  link.fire('click');assert.equal(ui.get('panel-restore').hidden,false);assert.equal(ui.get('tab-restore').focused,true);
+  assert.match(ui.get('restore-repositories').textContent,/阶段：切换引用/);
+});
+test('help text is collapsible and gives safe next steps without changing operations', () => {
+  assert.ok((html.match(/<details class="section-help">/g)||[]).length>=6);
+  assert.match(html,/check-restore KEY SHA/);assert.match(html,/几个面板可能对应不同提交/);
+  assert.ok(html.indexOf('detail-attention')<html.indexOf('role="tablist"'));
+});
+test('tab fragments survive reload and use only local navigation', () => {
+  const ui=setup();ui.context.location={hash:'#check'};const calls=[];
+  ui.context.history={replaceState(_state,_title,value){calls.push(value);ui.context.location.hash=value;}};
+  ui.context.initializeDetailTabs();assert.equal(ui.get('panel-check').hidden,false);
+  ui.get('tab-audit').fire('click');assert.equal(ui.context.location.hash,'#audit');assert.deepEqual(calls,['#audit']);
+});

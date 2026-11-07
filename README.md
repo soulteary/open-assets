@@ -43,7 +43,18 @@ https://oss-node-name.lab.dev/attachments/repositories/main-images/releases/<完
 
 ## 日常操作
 
-以下命令在已经完成初始化的服务器执行：
+以下命令在已经完成初始化的服务器执行。先查看部署状态和仓库 key：
+
+```sh
+cd /app/open-assets
+sudo ./scripts/open-assets doctor
+sudo ./scripts/open-assets repo list
+sudo ./scripts/open-assets --help
+```
+
+日常发布、恢复和审计命令都可通过此入口调用，不必记住 Docker 前缀；`子命令 --help` 只显示该命令适用的参数。`doctor` 只读检查，不重启服务或重置环境。常见任务的选择方法见[操作速查](docs/operator.md)。
+
+新增仓库：
 
 ```sh
 cd /app/open-assets
@@ -58,7 +69,7 @@ sudo ./scripts/open-assets repo ensure content/project-b \
 
 ```sh
 cd /app/open-assets
-sudo docker compose exec -T publisher python -m open_assets status
+sudo ./scripts/open-assets status --key project-b
 ```
 
 只有目标仓库与 SHA 对应的任务显示 `published`，才表示该次发布完成。`git push` 成功和 Webhook 返回 202 都不是发布成功的标志。
@@ -75,7 +86,7 @@ sudo docker compose exec -T publisher python -m open_assets status
 
 宿主机仓库接入 CLI 使用本机 Docker 和私有管理员配置。应用容器不挂载 Docker socket，也不获得这项管理权限。
 
-宿主机另有两个独立定时任务：采集器写入过滤后的状态快照；恢复程序只处理明确项目/服务范围内的持续 unhealthy 容器。重启不是数据修复，维护时应设置标记，持续故障仍需人工处理。内部证书使用 Certs Maker 3.8.2，叶证书与 CA 均为 3650 天；公网证书继续由原 Traefik 的 ACME 管理。
+宿主机定时任务分别处理状态采集、对象与审计缓存、保留清理、日志轮转及受限恢复；恢复程序只处理明确项目/服务范围内的持续 unhealthy 容器。重启不是数据修复，维护时应设置标记，持续故障仍需人工处理。内部证书使用 Certs Maker 3.8.2，叶证书与 CA 均为 3650 天；公网证书继续由原 Traefik 的 ACME 管理。
 
 图中仓库接入命令 `repo ensure` 负责协调仓库、只读 Deploy Key、Webhook、S3 权限和 Nginx 映射，支持重复执行。具体参数见 [仓库接入 CLI](docs/cli.md)；发布状态、故障恢复和跨系统操作的限制见 [发布流程](docs/architecture.md)。
 
@@ -106,28 +117,11 @@ python -m unittest discover -s tests -v
 
 普通测试使用临时目录和回环 HTTP 端口，不连接生产服务器。独立的 [从零部署脚本](tests/e2e/README.md) 仅用于可丢弃的空环境；执行结果见 [隔离部署记录](docs/fresh-install.md)。仓库中的 [CI](.github/workflows/test.yml) 另外运行 Ruff 和镜像构建。一次部署的成功记录不代表所有浏览器、硬件或升级路径均已验证。
 
-日志保存与磁盘占用控制见 [日志管理](docs/logging.md)。
+## 恢复、审计与容量
 
-本地历史版本的数量/时间保留、固定回滚点和终态任务归档见 [历史清理](docs/retention.md)；默认只预览，OSS 历史附件继续保留。
-
-Info 看板提供各仓库本地版本数、占用、保留策略和最近完整清理结果，并提示空间、inode 及发布预留不足。采样范围和阈值配置见 [Info 说明](docs/info.md)。
-
-Info 同时展示仓库的本地容量和 OtterIO 对象数量、逻辑大小。对象统计独立定时采集、分页限速并缓存，页面刷新不会遍历存储；安装与统计边界见 [Info 文档](docs/info.md#otterio-对象统计)。
-
-历史容量管理分为[本地版本保留](docs/retention.md)和[OtterIO 对象保留](docs/object-retention.md)。对象清理默认只预览，使用独立账号，保护当前版本、回滚点、固定版本与在途任务引用。
-
-Info 的对象保留区域区分最近完整预览、完整执行和最近尝试，展示规划时的候选数量/容量及失败、跳过原因。页面读取缓存摘要，不触发 S3 遍历；字段含义见[Info 文档](docs/info.md#对象保留策略与清理记录)。
-
-已清理的对象可用 restore-objects 从 Git 和原始清单恢复，不受已完成任务去重影响，也不切换当前图片入口。完整校验、重试和操作边界见[对象恢复](docs/object-restore.md)。
-
-restore-objects 追加 --with-local 可从 Git 重建已清理的 public 和图片副本；默认保持当前入口。追加 --rollback 才在对象与本地副本全部校验后显式切换，见[本地恢复与回滚](docs/object-restore.md#重建本地-public--图片副本)。
-
-Info 看板提供[各仓库最近恢复结果](docs/info.md#最近恢复结果)：对象与本地副本校验、显式回滚结果，以及失败、未结案和状态不确定提示。
-
-恢复未结案或状态不确定时，可使用[恢复状态核对 CLI](docs/restore-check.md)重新检查对象、本地副本与 current/published；核对默认不修复、不切换，Info 展示独立结果与时效提示。
-
-需要人工确认恢复已处理时，使用[显式结案 CLI](docs/restore-close.md)：同锁重新核对通过后记录结案，保留原始报告和审计，不自动切换版本或解除清理屏障；Info 单独展示结案结果。
-
-[恢复审计查询与归档](docs/restore-audit.md)支持按仓库、SHA 查询，默认预览归档，校验压缩包完整性后才移出在线目录。未结案记录继续保护，Info 提示在线记录接近读取上限。
-
-Info 在“结案与审计”tab 展示[审计容量缓存和最近实际归档](docs/info.md#审计容量缓存与实际归档结果)：在线/归档/待清理数量与占用、默认保护原因、执行进度和失败提示。容量独立定时采集，切换 tab 不遍历文件；主机、组件、磁盘和证书信息保持直接可见。
+- 内容缺失：使用[对象与本地副本恢复](docs/object-restore.md)，默认不切换版本；`--with-local --rollback` 才明确切换。
+- 状态不确定：先[重新核对](docs/restore-check.md)，再按需要[显式结案](docs/restore-close.md)，原报告与审计保留。
+- 审计增长：按仓库/SHA [查询与预览归档](docs/restore-audit.md)，校验后才移出在线目录，未结案记录继续保护。
+- 历史容量：配置[本地版本保留](docs/retention.md)及[对象保留](docs/object-retention.md)；对象清理默认预览，启用实际删除后旧链接可能失效。
+- 运行观察：[Info](docs/info.md)显示各自采样时间、恢复/核对/结案结果与审计占用，主机信息常显，详情按 tab 切换。页面保持只读。
+- 日志与长期维护：参考[日志管理](docs/logging.md)、[备份与运行维护](docs/operations.md)及[现有缺陷与改进范围](docs/usability.md)。

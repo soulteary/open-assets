@@ -2,6 +2,8 @@
 
 本指南对应单节点部署：代码位于 `/app/open-assets`，运行数据位于 `/data/asset-stack`。公开示例使用 `lab.dev`。请在自己的终端替换 SSH 主机别名和域名，不要修改公开文档为生产值。
 
+日常运维先用 `sudo ./scripts/open-assets repo list` 确认 key，`doctor` 检查部署；生成正确编码的访问链接可用 `links KEY SHA PATH`。这些命令不读取管理员密码或初始化环境，详见[操作速查](operator.md)。本页涉及密码的命令只在需要登录时执行。
+
 ## 1. 查看地址和登录凭据
 
 在自己的电脑设置部署主机的 SSH 别名：

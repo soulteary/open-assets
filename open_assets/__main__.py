@@ -5,7 +5,6 @@ or storage-admin access; publication uses only the configured repository and S3
 identity. Task recovery is replay-based, not a cross-system transaction.
 """
 
-import argparse
 import contextlib
 import fcntl
 import hashlib
@@ -54,9 +53,9 @@ def atomic(path, value):
             os.unlink(tmp)
 
 
-def load():
+def load(path=None):
     """Read and validate the shared configuration; paths are container paths."""
-    raw = P(CONFIG).read_bytes()
+    raw = P(path or CONFIG).read_bytes()
     c = yaml.safe_load(raw)
     if c.get("schema_version") != 1:
         raise ValueError("unsupported schema")
@@ -64,6 +63,9 @@ def load():
     ids = set()
     mounts = []
     for r in c["repositories"]:
+        for flag in ("enabled", "serve"):
+            if flag in r and type(r[flag]) is not bool:
+                raise ValueError("repository flags must be YAML booleans")
         if not re.fullmatch(r"[a-z][a-z0-9-]{0,47}", r["key"]):
             raise ValueError("invalid key")
         if r["key"] in keys or r["repository_id"] in ids:
@@ -104,7 +106,9 @@ def load():
 
 
 def repo(c, key):
-    r = next(x for x in c["repositories"] if x["key"] == key)
+    r = next((x for x in c["repositories"] if x["key"] == key), None)
+    if r is None:
+        raise ValueError("unknown repository key")
     if not r.get("enabled", False):
         raise ValueError("repository disabled")
     return r
@@ -767,64 +771,41 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 def main():
-    a = argparse.ArgumentParser()
-    a.add_argument(
-        "command",
-        choices=[
-            "validate",
-            "render",
-            "serve",
-            "worker",
-            "once",
-            "publish",
-            "restore-objects",
-            "check-restore",
-            "close-restore",
-            "restore-audit-list",
-            "restore-audit-archive",
-            "restore-audit-verify",
-            "retry",
-            "rollback-images",
-            "status",
-        ],
-    )
-    a.add_argument("args", nargs="*")
-    a.add_argument(
-        "--with-local",
-        action="store_true",
-        help="also rebuild verified local version copies",
-    )
-    a.add_argument(
-        "--rollback",
-        action="store_true",
-        help="explicitly activate a fully restored version; requires --with-local",
-    )
-    a.add_argument("--reason", help="private audit reason for close-restore")
-    a.add_argument("--apply", action="store_true", help="apply restore audit archival")
-    a.add_argument("--keep-last", type=int)
-    a.add_argument("--min-age-days", type=int)
-    a.add_argument("--max-records", type=int)
-    a.add_argument("--limit", type=int)
-    a.add_argument("--offset", type=int)
-    o = a.parse_args()
-    if (
-        o.apply
-        or any(v is not None for v in (o.keep_last, o.min_age_days, o.max_records))
-    ) and o.command != "restore-audit-archive":
-        a.error("archive options require restore-audit-archive")
-    if any(v is not None for v in (o.limit, o.offset)) and o.command not in (
-        "restore-audit-list",
-        "restore-audit-verify",
-    ):
-        a.error("pagination requires an audit list or verify command")
-    if o.command == "close-restore" and o.reason is None:
-        a.error("close-restore requires --reason")
-    if o.reason is not None and o.command != "close-restore":
-        a.error("--reason requires close-restore")
-    if (o.with_local or o.rollback) and o.command != "restore-objects":
-        a.error("restoration flags require restore-objects")
-    if o.rollback and not o.with_local:
-        a.error("--rollback requires --with-local")
+    from .cli import parse
+
+    a, o = parse()
+    try:
+        execute(a, o)
+    except KeyboardInterrupt:
+        print(
+            json.dumps(
+                dict(
+                    status="interrupted",
+                    command=o.command,
+                    hint="先查询任务或核对报告，确认状态后再重试。",
+                ),
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
+        raise SystemExit(130) from None
+    except Exception as error:
+        print(
+            json.dumps(
+                dict(
+                    status="failed",
+                    command=o.command,
+                    error=type(error).__name__,
+                    hint="先核对仓库 key/任务 ID，并在宿主机运行 scripts/open-assets doctor；原始异常不输出。",
+                ),
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from None
+
+
+def execute(a, o):
     try:
         c = load()
     except Exception as error:
@@ -984,6 +965,10 @@ def main():
                 RecursionError,
             ) as error:
                 queue_notice("invalid-job-record", error)
+                continue
+            if o.status_key and j["key"] != o.status_key:
+                continue
+            if o.status_sha and j["sha"] != o.status_sha:
                 continue
             print(j["id"], j["key"], j["sha"], j["status"])
 

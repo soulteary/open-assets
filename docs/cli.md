@@ -1,4 +1,8 @@
-# 仓库自动接入 CLI
+# 命令行使用
+
+日常命令统一从 `sudo ./scripts/open-assets` 调用。先运行 `repo list` 查稳定 key，`doctor` 查配置/运行状态；发布、恢复、结案和审计命令可直接接在脚本后。每个子命令支持独立 --help，完整速查见[日常操作入口](operator.md)。原容器命令继续兼容，下面保留其等价形式与接入细节。
+
+## 仓库自动接入 CLI
 
 此命令在部署服务器宿主机上执行，自动协调 Gitea 仓库、只读 Deploy Key、签名 Push Webhook、Publisher 的 S3 前缀权限、发布白名单和 Nginx 图片映射。不需要把 Docker socket 或管理员凭据挂到应用容器里。
 

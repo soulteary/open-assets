@@ -102,6 +102,8 @@ function retentionHistory(row, name, label) {
 }
 const detailTabs = ['storage','policy','restore','check','audit','operations'];
 let activeDetailTab = 'storage';
+const detailTabLabels = {storage:'仓库容量',policy:'对象保留',restore:'恢复结果',check:'状态核对',audit:'结案与审计',operations:'运维记录'};
+const phaseLabel = value => ({validate:'前提检查',git:'读取 Git',export:'导出内容','local-preflight':'本地预检查',preflight:'对象预检查',upload:'上传对象',verify:'对象读回校验','local-install':'本地副本安装',activate:'切换引用',complete:'流程结束',objects:'对象核对',full:'完整副本核对',images:'图片副本核对',references:'引用核对',barrier:'清理屏障核对'})[value] || '未识别阶段';
 function selectDetailTab(key, focus = false) {
   if (!detailTabs.includes(key)) return;
   activeDetailTab = key;
@@ -110,6 +112,7 @@ function selectDetailTab(key, focus = false) {
     button.setAttribute('aria-selected',String(selected)); button.tabIndex=selected?0:-1;
     byId('panel-'+name).hidden=!selected;
   }
+  if (globalThis.location && globalThis.history && globalThis.location.hash !== '#'+key) globalThis.history.replaceState(null,'','#'+key);
   if(focus)byId('tab-'+key).focus();
 }
 function initializeDetailTabs() {
@@ -121,7 +124,22 @@ function initializeDetailTabs() {
       if(target){event.preventDefault();selectDetailTab(target,true);}
     });
   }
-  selectDetailTab(activeDetailTab);
+  const fromHash = globalThis.location?.hash.slice(1);
+  selectDetailTab(detailTabs.includes(fromHash) ? fromHash : activeDetailTab);
+  globalThis.addEventListener?.('hashchange',()=>{const key=globalThis.location?.hash.slice(1);if(detailTabs.includes(key))selectDetailTab(key);});
+}
+function renderDetailAttention(data) {
+  const issues={};
+  const any=(name,predicate)=>(data[name]?.repositories||[]).some(predicate);
+  if(data.storage?.status!=='ok'||any('storage',r=>r.measurement_stale||r.measurement_status!=='ok'||r.partial_versions||r.unusual_entries)||any('object_storage',r=>r.stale||r.status!=='ok'))issues.storage='本地或对象统计待更新，或存在未配对/异常条目';
+  if(data.object_retention?.status!=='ok'||any('object_retention',r=>r.result_status==='unavailable'||['failed','busy','running'].includes(r.attempt?.status)||r.last_plan?.stale||(r.invalid_fields||[]).length))issues.policy='对象规划有失败、跳过、未完成或过期记录';
+  if(data.restorations?.status!=='ok'||any('restorations',r=>r.result_status==='unavailable'||(r.attempt&&(r.attempt.status!=='complete'||r.attempt.uncertain||r.attempt.scope_changed))))issues.restore='存在恢复未完成、不确定或无法读取的结果';
+  if(data.restoration_checks?.status!=='ok'||any('restoration_checks',r=>r.result_status==='unavailable'||(r.attempt&&(r.attempt.status!=='complete'||r.attempt.diagnosis!=='verified'||['source_uncertain','stale','source_changed','scope_changed','manifest_changed','references_changed','observation_unavailable'].some(k=>r.attempt[k])))))issues.check='核对有问题、原报告仍不确定或结果需重新确认';
+  if(data.restoration_audits?.status!=='ok'||any('restoration_audits',r=>r.status!=='ok'||r.stale||r.changed_since_sample||r.invalid_records||(r.retired?.records||0)>0||r.archival?.status==='unavailable'||(r.archival?.attempt&&r.archival.attempt.status!=='complete'))||any('restoration_closures',r=>r.result_status==='unavailable'||r.archive_hint==='near-limit'||r.archive_hint==='scan-limit'||(r.attempt&&(r.attempt.status!=='closed'||['source_changed','scope_changed','manifest_changed','references_changed','observation_unavailable'].some(k=>r.attempt[k])))))issues.audit='审计有待清理、旧采样、结案拒绝或未完成的操作记录';
+  if((data.repairs||[]).some(r=>r.result==='failed')||(data.performance?.scenarios||[]).some(r=>r.errors>0))issues.operations='健康恢复或限量测试记录中存在失败';
+  const box=byId('detail-attention'),links=byId('detail-attention-links');links.replaceChildren();box.hidden=!Object.keys(issues).length;
+  for(const key of detailTabs){const button=byId('tab-'+key);button.textContent=detailTabLabels[key]+(issues[key]?' · 提示':'');button.className=issues[key]?'tab-attention':'';
+    if(issues[key]){const link=el('button',detailTabLabels[key]+'：'+issues[key]);link.type='button';link.addEventListener('click',()=>selectDetailTab(key,true));links.append(link);}}
 }
 function renderAuditStorage(data) {
   const source=data.restoration_audits||{}, notice=byId('audit-notice');
@@ -188,7 +206,7 @@ function renderRestoreChecks(data) {
       if(a.status==='running')notes.push('可能仍在执行或已中断，未确认完成');
       notes.push('不改写原恢复结论、不自动修复');
       tr.append(storageCell(check(a,'barrier'),notes));
-      if(a.diagnosis!=='verified'||a.status!=='complete'||a.scope_changed||a.source_changed||a.manifest_changed||a.references_changed||a.observation_unavailable||a.stale)tr.className='warning';
+      if(a.diagnosis!=='verified'||a.status!=='complete'||a.source_uncertain||a.scope_changed||a.source_changed||a.manifest_changed||a.references_changed||a.observation_unavailable||a.stale)tr.className='warning';
     }
     table.append(tr);
   }
@@ -207,7 +225,7 @@ function renderRestorations(data) {
       const td = storageCell(row.result_status === 'never' ? '尚无恢复记录' : '报告不可用，不能确认最近结果'); td.colSpan = 4; tr.append(td);
       if (row.result_status !== 'never') tr.className = 'warning';
     } else {
-      tr.append(storageCell(({complete:'恢复完整结束', failed:'恢复失败', running:'运行中 / 尚未结案'})[a.status] || '未知', ['开始 ' + date(a.started_at), a.finished_at ? '结束 ' + date(a.finished_at) : '未记录结束时间', '阶段 ' + a.phase]));
+      tr.append(storageCell(({complete:'恢复完整结束', failed:'恢复失败', running:'运行中 / 尚未结案'})[a.status] || '未知', ['开始 ' + date(a.started_at), a.finished_at ? '结束 ' + date(a.finished_at) : '未记录结束时间', '阶段：' + phaseLabel(a.phase)]));
       tr.append(storageCell(a.objects_verified ? '对象校验通过（当时）' : '对象尚未完整校验', ['已读回 ' + (a.verified_objects ?? '—') + ' / ' + (a.files ?? '—'), '上传 ' + (a.uploaded_objects ?? '—') + ' · 修复 ' + (a.repaired_objects ?? '—')]));
       tr.append(storageCell(a.with_local === false ? '未要求本地恢复' : a.local_verified ? '两份本地副本校验通过（当时）' : a.with_local ? '本地校验未完成' : '旧报告未记录本地模式', ['本次安装：public ' + (a.local_full_rebuilt === true ? '是' : a.local_full_rebuilt === false ? '否' : '未知') + ' / 图片 ' + (a.local_images_rebuilt === true ? '是' : a.local_images_rebuilt === false ? '否' : '未知')]));
       const notes = [];
@@ -255,6 +273,7 @@ function render(data) {
   renderRestoreChecks(data);
   renderRestoreClosures(data);
   renderAuditStorage(data);
+  renderDetailAttention(data);
   const h = data.host, overview = byId('overview'); overview.replaceChildren();
   for (const [label, value, detail] of [
     ['CPU', pct(h.cpu_percent), h.cpu_count + ' 个逻辑核 · 采集窗口总利用率'],

@@ -427,7 +427,7 @@ class Manager:
         )
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description="Host-only Open Assets administration")
     parser.add_argument("--root", default="/app/open-assets")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -443,7 +443,7 @@ def main():
     objects.add_parser(
         "setup", help="reconcile separate S3 retention credentials and scope"
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if os.geteuid() != 0:
         parser.error(
             "run host administration with sudo; application containers remain unprivileged"

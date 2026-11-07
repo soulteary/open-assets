@@ -23,6 +23,14 @@ class Info(unittest.TestCase):
             with self.assertRaises(ValueError):
                 info.read_snapshot(path)
 
+    def test_future_and_boolean_timestamps_do_not_look_fresh(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "snapshot.json"
+            for value in (time.time() + 301, True, -1):
+                path.write_text(json.dumps(dict(schema_version=1, collected_at=value)))
+                with self.assertRaises(ValueError):
+                    info.read_snapshot(path)
+
     def test_only_known_read_routes_and_no_cache(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "snapshot.json"
