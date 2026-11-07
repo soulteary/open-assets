@@ -97,3 +97,7 @@ sudo docker compose exec -T publisher python -m open_assets publish project-b FU
 在 Publisher 中执行 python -m open_assets restore-objects <仓库key> <完整SHA>，从固定 Git 分支历史重建并核验对象。它同步执行，不依赖任务重放；获取不到 Worker 锁时返回 busy 和退出码 2。命令及前提见[对象恢复](object-restore.md)。
 
 本地副本也已清理时，添加 `--with-local` 重建完整 public 与图片副本，默认保持当前版本。确认需要切换后，使用 `--with-local --rollback` 在完整校验后显式回滚。已有副本冲突会停止，不强制覆盖；详见[恢复与切换](object-restore.md#完整恢复后显式切换)。
+
+## 核对恢复状态
+
+`python -m open_assets check-restore <仓库key> <完整SHA>` 只读核对对象、本地两份副本、current/published 与清理屏障，并保存独立诊断报告。默认不修复、不切换，也不结案原恢复。完整前提、结果与退出码见[恢复状态核对](restore-check.md)。

@@ -11,6 +11,8 @@ from unittest.mock import patch
 from botocore.exceptions import ClientError
 
 from open_assets import object_restore as restore
+from open_assets import restore_check as check
+from open_assets import restore_check_info as check_info
 from open_assets import __main__ as core
 
 assert os.environ.get("OPEN_ASSETS_OBJECT_RESTORE_TEST") == "1"
@@ -33,8 +35,11 @@ try:
     (host / "private").mkdir(exist_ok=True)
     (host / "data").mkdir(exist_ok=True)
     (host / "data/publisher").symlink_to(fixture.state, target_is_directory=True)
+    (host / "data/images").symlink_to(fixture.images, target_is_directory=True)
     (host / "private/repositories.yaml").write_text(
-        yaml.safe_dump(dict(config, schema_version=1, state_root="/state"))
+        yaml.safe_dump(
+            dict(config, schema_version=1, state_root="/state", images_root="/images")
+        )
     )
 
     def observation():
@@ -118,6 +123,11 @@ try:
         "partial_possible"
     ]
     assert observation()["status"] == "failed" and observation()["uncertain"]
+    diagnosed = check.run(config, "assets", fixture.sha, writer)
+    assert (
+        diagnosed["diagnosis"] == "issues"
+        and diagnosed["checks"]["barrier"]["status"] == "blocked"
+    )
     resumed = restore.run(config, "assets", fixture.sha, writer)
     assert resumed["uploaded_objects"] == len(fixture.manifests[0]["files"]) - 1
     key = fixture.prefix() + "images/pic.png"
@@ -150,6 +160,32 @@ try:
     fixture.assert_current()
     repeated = restore.run(config, "assets", fixture.sha, writer, with_local=True)
     assert not repeated["local_full_rebuilt"] and not repeated["local_images_rebuilt"]
+    # Failure after durable activation intent leaves genuine uncertain evidence.
+    try:
+        with patch.object(
+            core,
+            "rollback_images_locked",
+            side_effect=OSError("fixture activation interrupted"),
+        ):
+            restore.run(
+                config, "assets", fixture.sha, writer, with_local=True, rollback=True
+            )
+    except OSError:
+        pass
+    else:
+        raise AssertionError("Expected activation interruption")
+    evidence = restore.report_path(config, "assets", fixture.sha).read_bytes()
+    assert json.loads(evidence)["activation_uncertain"]
+    diagnosed = check.run(config, "assets", fixture.sha, writer)
+    assert diagnosed["diagnosis"] == "verified" and not diagnosed["current_is_target"]
+    assert restore.report_path(config, "assets", fixture.sha).read_bytes() == evidence
+    fixture.assert_current()
+    observed = check_info.summary(host, host / "data")["repositories"][0]
+    assert (
+        observed["result_status"] == "ok"
+        and observed["attempt"]["diagnosis"] == "verified"
+    )
+    assert not observed["attempt"].get("observation_unavailable")
     activated = restore.run(
         config, "assets", fixture.sha, writer, with_local=True, rollback=True
     )
@@ -164,8 +200,14 @@ try:
         == fixture.manifests[0]
     )
     assert fixture.job_bytes() == fixture.original_jobs
+    diagnosed = check.run(config, "assets", fixture.sha, writer)
+    assert (
+        diagnosed["diagnosis"] == "verified"
+        and diagnosed["current_is_target"]
+        and diagnosed["published_is_target"]
+    )
     print(
-        "Isolated restore: S3 bytes, metadata, retry and no-delete identity verified; both local copies rebuilt and repeated without activation; explicit rollback activated verified version; filtered Info success/partial-failure/local/activation observations verified; jobs unchanged"
+        "Isolated restore: S3 bytes, metadata, retry and no-delete identity verified; both local copies rebuilt and repeated without activation; explicit rollback activated verified version; filtered Info success/partial-failure/local/activation observations verified; read-only diagnostic checks and Info snapshots verified; jobs unchanged"
     )
 finally:
     fixture.doCleanups()

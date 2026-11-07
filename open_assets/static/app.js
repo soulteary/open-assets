@@ -100,6 +100,37 @@ function retentionHistory(row, name, label) {
   if (!value) return label + '：暂无完整记录';
   return label + '：' + date(value.finished_at) + (name === 'last_apply' ? ' · 已确认删除 ' + value.removed_versions + ' 版 / ' + value.removed_objects + ' 个 / ' + bytes(value.removed_bytes) : ' · 仅预览') + ' · ' + (retentionReasons[value.reason] || '状态待核对') + (value.policy_changed ? '（配置已变更）' : value.stale ? '（历史记录，已过期）' : '');
 }
+function renderRestoreChecks(data) {
+  const source = data.restoration_checks || {}, notice = byId('restore-check-notice');
+  notice.textContent = data.stale || source.status !== 'ok' ? '核对摘要不可用或快照过期，请检查采集时间。' : '每仓库最近启动的核对，目标可能不同于最近恢复；不会自动重新核验。';
+  notice.className = data.stale || source.status !== 'ok' ? 'warning' : 'muted';
+  const table = byId('restore-check-repositories'); table.replaceChildren();
+  const rows = source.repositories || [];
+  if (!rows.length) { const tr=el('tr'),td=storageCell('暂无核对摘要');td.colSpan=5;tr.append(td);table.append(tr); }
+  const reasons = {'not-checked':'未检查',verified:'校验通过', 'target-current':'目标当前在用','other-current':'其他版本当前在用','not-published':'尚未发布',none:'无删除屏障',deleting:'仍有删除中屏障',complete:'仍有已删除屏障',restored:'恢复屏障已标记解除',missing:'缺失',permission:'权限不足',timeout:'超时',mismatch:'内容、元数据或引用不一致',io:'读写失败',storage:'存储请求失败',interrupted:'中断',unavailable:'无法确认'};
+  const check = (a,name) => { const c=a.checks?.[name]; return c ? (({ok:'通过',blocked:'阻止',failed:'失败',unavailable:'待确认'})[c.status] || '未知') + ' · ' + (reasons[c.reason] || '未知原因') : '未检查'; };
+  for (const row of rows) {
+    const tr=el('tr'),a=row.attempt;tr.append(storageCell(row.key));
+    if (row.result_status !== 'ok' || !a) { const td=storageCell(row.result_status === 'never' ? '尚无核对记录' : '核对报告不可用，不能确认结果');td.colSpan=4;tr.append(td);if(row.result_status!=='never')tr.className='warning'; }
+    else {
+      tr.append(storageCell(a.status === 'running' ? '核对未结案' : a.diagnosis === 'verified' && a.status === 'complete' ? '核对通过（当时）' : '核对发现问题 / 未完整完成', ['开始 '+date(a.started_at),a.finished_at ? '结束 '+date(a.finished_at) : '未记录结束时间','原恢复：'+({missing:'无报告',unavailable:'无法读取',running:'未结案',failed:'失败',complete:'完整结束'})[a.source_status || 'unavailable'] + (a.source_uncertain ? '（存在不确定状态，原报告未改写）' : '')]));
+      tr.append(storageCell('对象：'+check(a,'objects'),['已读回 '+(a.verified_objects ?? '—')+' / '+(a.files ?? '—'),'public：'+check(a,'full'),'图片：'+check(a,'images')]));
+      tr.append(storageCell(check(a,'references'),['current 指向目标：'+(a.current_is_target === true ? '是' : a.current_is_target === false ? '否' : '未知'),'published 指向目标：'+(a.published_is_target === true ? '是' : a.published_is_target === false ? '否' : '未知')]));
+      const notes=[];
+      if(a.scope_changed)notes.push('存储范围已变化，需要重新核对');
+      if(a.source_changed)notes.push('原恢复报告已变化，需要重新核对');
+      if(a.manifest_changed)notes.push('清单已变化，需要重新核对');
+      if(a.references_changed)notes.push('current/published 已变化，旧引用结论不代表现状');
+      if(a.observation_unavailable)notes.push('无法比较当前报告、清单或引用，请人工核对');
+      if(a.stale)notes.push('核对已超过 24 小时，不能据此确认当前状态');
+      if(a.status==='running')notes.push('可能仍在执行或已中断，未确认完成');
+      notes.push('不改写原恢复结论、不自动修复');
+      tr.append(storageCell(check(a,'barrier'),notes));
+      if(a.diagnosis!=='verified'||a.status!=='complete'||a.scope_changed||a.source_changed||a.manifest_changed||a.references_changed||a.observation_unavailable||a.stale)tr.className='warning';
+    }
+    table.append(tr);
+  }
+}
 function renderRestorations(data) {
   const source = data.restorations || {}, notice = byId('restore-notice');
   notice.textContent = data.stale || source.status !== 'ok' ? '恢复报告快照不可用或过期，请核对采集时间。' : '来自持久化报告；默认恢复不切换当前版本。';
@@ -159,6 +190,7 @@ function render(data) {
   renderStorage(data);
   renderObjectRetention(data);
   renderRestorations(data);
+  renderRestoreChecks(data);
   const h = data.host, overview = byId('overview'); overview.replaceChildren();
   for (const [label, value, detail] of [
     ['CPU', pct(h.cpu_percent), h.cpu_count + ' 个逻辑核 · 采集窗口总利用率'],
@@ -194,6 +226,6 @@ function render(data) {
 }
 async function update() {
   try { const r = await fetch('/api/status', {cache: 'no-store'}); if (!r.ok) throw new Error(); render(await r.json()); byId('error').hidden = true; }
-  catch { byId('restore-notice').textContent = '恢复报告无法刷新，下表可能是旧结果，请复核采样时间。'; byId('restore-notice').className = 'warning'; byId('object-retention-notice').textContent = '对象保留数据无法刷新，下表保留旧结果，请复核采样时间。'; byId('object-retention-notice').className = 'warning'; byId('error').hidden = false; byId('error').textContent = '无法读取最新状态，请检查登录会话与采集定时器。下方可能是上次成功读取的数据。'; const notice = byId('capacity-notice'); notice.className = 'capacity-notice capacity-unknown'; notice.replaceChildren(el('strong', '容量状态待确认'), el('p', '无法取得最新状态，下方保留上次采样，不能作为实时容量依据。')); }
+  catch { byId('restore-check-notice').textContent = '核对结果无法刷新，下表可能是旧数据。'; byId('restore-check-notice').className = 'warning'; byId('restore-notice').textContent = '恢复报告无法刷新，下表可能是旧结果，请复核采样时间。'; byId('restore-notice').className = 'warning'; byId('object-retention-notice').textContent = '对象保留数据无法刷新，下表保留旧结果，请复核采样时间。'; byId('object-retention-notice').className = 'warning'; byId('error').hidden = false; byId('error').textContent = '无法读取最新状态，请检查登录会话与采集定时器。下方可能是上次成功读取的数据。'; const notice = byId('capacity-notice'); notice.className = 'capacity-notice capacity-unknown'; notice.replaceChildren(el('strong', '容量状态待确认'), el('p', '无法取得最新状态，下方保留上次采样，不能作为实时容量依据。')); }
 }
 update(); setInterval(update, 30000);

@@ -323,6 +323,8 @@ def verify_tree(root, files, check=None):
             digest = hashlib.sha256()
             with path.open("rb") as stream:
                 for block in iter(lambda: stream.read(1048576), b""):
+                    if check is not None:
+                        check()
                     digest.update(block)
             if digest.hexdigest() != item["sha256"]:
                 raise ValueError("version bytes mismatch")
@@ -776,6 +778,7 @@ def main():
             "once",
             "publish",
             "restore-objects",
+            "check-restore",
             "retry",
             "rollback-images",
             "status",
@@ -800,7 +803,7 @@ def main():
     try:
         c = load()
     except Exception as error:
-        if o.command == "restore-objects":
+        if o.command in ("restore-objects", "check-restore"):
             print(
                 json.dumps(dict(status="failed", error=type(error).__name__)),
                 file=sys.stderr,
@@ -864,6 +867,24 @@ def main():
         print(json.dumps(report))
         if report["status"] == "busy":
             raise SystemExit(2)
+    elif o.command == "check-restore":
+        if len(o.args) != 2:
+            a.error("check-restore requires a repository key and full commit SHA")
+        from .restore_check import run as check_restore
+
+        try:
+            report = check_restore(c, *o.args)
+        except (Exception, KeyboardInterrupt) as error:
+            print(
+                json.dumps(dict(status="failed", error=type(error).__name__)),
+                file=sys.stderr,
+            )
+            raise SystemExit(1) from None
+        print(json.dumps(report))
+        if report["status"] == "busy":
+            raise SystemExit(2)
+        if report.get("diagnosis") != "verified":
+            raise SystemExit(1)
     elif o.command == "retry":
         if not re.fullmatch("[0-9a-f]{64}", o.args[0]):
             raise ValueError("invalid job ID")

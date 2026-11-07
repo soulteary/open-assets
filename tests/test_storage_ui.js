@@ -152,3 +152,22 @@ test('missing legacy or unreadable restoration records never imply success', asy
   ui.context.fetch=async()=>{throw Error('offline')};await ui.context.update();
   assert.match(ui.get('restore-notice').textContent,/无法刷新/);
 });
+
+test('restore checks distinguish current selection, barriers and unresolved evidence', () => {
+  const ui=setup(),data=fixture();
+  const a={status:'complete',diagnosis:'verified',started_at:1,finished_at:2,source_status:'running',files:2,verified_objects:2,current_is_target:false,published_is_target:false,checks:{objects:{status:'ok',reason:'verified'},full:{status:'ok',reason:'verified'},images:{status:'ok',reason:'verified'},references:{status:'ok',reason:'other-current'},barrier:{status:'ok',reason:'restored'}}};
+  data.restoration_checks={status:'ok',repositories:[{key:'assets',result_status:'ok',attempt:a}]};
+  ui.context.render(data);
+  let text=ui.get('restore-check-repositories').textContent;
+  assert.match(text,/核对通过（当时）/);assert.match(text,/原恢复：未结案/);assert.match(text,/其他版本当前在用/);assert.doesNotMatch(text,/显式回滚完成/);
+  Object.assign(a,{diagnosis:'issues',references_changed:true,source_changed:true,stale:true});a.checks.barrier={status:'blocked',reason:'complete'};
+  ui.context.render(data);text=ui.get('restore-check-repositories').textContent;
+  assert.match(text,/核对发现问题/);assert.match(text,/仍有已删除屏障/);assert.match(text,/原恢复报告已变化/);assert.match(text,/current\/published 已变化/);assert.match(text,/超过 24 小时/);
+});
+test('unavailable and interrupted check reports do not imply successful reconciliation', async () => {
+  const ui=setup(),data=fixture();
+  data.restoration_checks={status:'ok',repositories:[{key:'none',result_status:'never'},{key:'bad',result_status:'unavailable'},{key:'running',result_status:'ok',attempt:{status:'running',diagnosis:'unresolved',started_at:1,observation_unavailable:true,checks:{}}}]};
+  ui.context.render(data);const text=ui.get('restore-check-repositories').textContent;
+  assert.match(text,/尚无核对记录/);assert.match(text,/不能确认结果/);assert.match(text,/核对未结案/);assert.match(text,/无法比较当前报告/);assert.doesNotMatch(text,/核对通过/);
+  ui.context.fetch=async()=>{throw Error('offline')};await ui.context.update();assert.match(ui.get('restore-check-notice').textContent,/无法刷新/);
+});
