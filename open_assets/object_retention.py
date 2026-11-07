@@ -326,15 +326,30 @@ def plan(config, repository, jobs, budget, now):
             protected.setdefault(v["sha"], []).append("recent")
     candidates = []
     count = size = 0
+    eligible_versions = eligible_objects = eligible_bytes = skipped_versions = 0
+    skip_counts = {}
     for v in reversed(ordered):
         n = len(v["objects"])
         b = sum(o["size"] for o in v["objects"].values())
+        if v["sha"] in protected:
+            continue
+        eligible_versions += 1
+        eligible_objects += n
+        eligible_bytes += b
         if (
-            v["sha"] in protected
-            or len(candidates) >= settings["max_delete_versions"]
+            len(candidates) >= settings["max_delete_versions"]
             or count + n > settings["max_delete_objects"]
             or size + b > settings["max_delete_bytes"]
         ):
+            skipped_versions += 1
+            reason = (
+                "versions-limit"
+                if len(candidates) >= settings["max_delete_versions"]
+                else "objects-limit"
+                if count + n > settings["max_delete_objects"]
+                else "bytes-limit"
+            )
+            skip_counts[reason] = skip_counts.get(reason, 0) + 1
             continue
         candidates.append(v)
         count += n
@@ -346,10 +361,15 @@ def plan(config, repository, jobs, budget, now):
         protected=protected,
         unknown_objects=unknown,
         candidates=candidates,
+        eligible_versions=eligible_versions,
+        eligible_objects=eligible_objects,
+        eligible_bytes=eligible_bytes,
+        skipped_versions=skipped_versions,
+        skip_counts=skip_counts,
     )
 
 
-def remove(config, repository, version, budget):
+def remove(config, repository, version, budget, progress=None):
     from .__main__ import atomic
 
     key = repository["key"]
@@ -390,6 +410,8 @@ def remove(config, repository, version, budget):
     for name, obj in observed.items():
         # Current OtterIO ignores If-Match. This header is only extra protection
         # for compatible implementations, never the exclusive-writer safety gate.
+        if progress is not None:
+            progress["partial_possible"] = True
         response = budget.call(
             "delete_object", Bucket=config["bucket"], Key=name, IfMatch=obj["etag"]
         )
@@ -398,6 +420,9 @@ def remove(config, repository, version, budget):
             "null",
         ):
             raise ValueError("unexpected versioned deletion")
+        if progress is not None:
+            progress["removed_objects"] += 1
+            progress["removed_bytes"] += obj["size"]
     if listing(config, key, budget, sha):
         raise ValueError("object retention prefix not empty")
     # Completed receipts retain no object names and cannot authorize future deletion.
@@ -411,6 +436,8 @@ def remove(config, repository, version, budget):
             completed_at=time.time(),
         ),
     )
+    if progress is not None:
+        progress["removed_versions"] += 1
     return dict(
         status="complete",
         objects=len(observed),
@@ -418,7 +445,7 @@ def remove(config, repository, version, budget):
     )
 
 
-def run(config, key=None, apply=False, s3=None, now=None):
+def _run(config, key=None, apply=False, s3=None, now=None, progress=None):
     from .__main__ import atomic
 
     repositories = [r for r in config["repositories"] if key is None or r["key"] == key]
@@ -461,7 +488,18 @@ def run(config, key=None, apply=False, s3=None, now=None):
                 ] = 0
                 if apply and value["enabled"]:
                     for version in value["candidates"]:
-                        removed = remove(config, repository, version, budget)
+                        removed = remove(
+                            config,
+                            repository,
+                            version,
+                            budget,
+                            progress.get(repository["key"]) if progress else None,
+                        )
+                        if removed["status"] == "budget":
+                            row["skipped_versions"] += 1
+                            row["skip_counts"]["request-budget"] = (
+                                row["skip_counts"].get("request-budget", 0) + 1
+                            )
                         row["removed_objects"] += removed["objects"]
                         row["removed_bytes"] += removed["bytes"]
                         row["removed_versions"] += removed["status"] == "complete"
@@ -476,6 +514,49 @@ def run(config, key=None, apply=False, s3=None, now=None):
             return report
     except BlockingIOError:
         return dict(status="busy", apply=apply, repositories=[])
+
+
+def run(config, key=None, apply=False, s3=None, now=None):
+    from .object_retention_info import observe, error_reason
+
+    repositories = [r for r in config["repositories"] if key is None or r["key"] == key]
+    if not repositories:
+        raise ValueError("unknown object retention repository")
+    started = time.time()
+    mode = "apply" if apply else "preview"
+    progress = {
+        r["key"]: dict(
+            removed_versions=0,
+            removed_objects=0,
+            removed_bytes=0,
+            partial_possible=False,
+        )
+        for r in repositories
+    }
+    observe(config, repositories, started, mode, "running", "started")
+    try:
+        report = _run(config, key, apply, s3, now, progress)
+    except Exception as error:
+        observe(
+            config,
+            repositories,
+            started,
+            mode,
+            "failed",
+            error_reason(error),
+            progress=progress,
+        )
+        raise
+    observe(
+        config,
+        repositories,
+        started,
+        mode,
+        report["status"],
+        "busy" if report["status"] == "busy" else "preview-only",
+        report=report,
+    )
+    return report
 
 
 def main():

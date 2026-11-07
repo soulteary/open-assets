@@ -64,6 +64,7 @@ test('failed refresh replaces a previous green capacity notice', async () => {
   assert.doesNotMatch(ui.get('capacity-notice').textContent, /容量检查正常/);
   assert.match(ui.get('capacity-notice').textContent, /无法取得最新状态/);
   assert.equal(ui.get('error').hidden, false);
+  assert.match(ui.get('object-retention-notice').textContent,/数据无法刷新/);
 });
 
 test('object totals show complete measurements, pending and failed scans keep explicit status', () => {
@@ -83,4 +84,42 @@ test('object totals show complete measurements, pending and failed scans keep ex
   ui.context.render(data);
   assert.match(ui.get('repositories').textContent, /尚无完整统计/);
   assert.doesNotMatch(ui.get('repositories').textContent, /0 个 \/ 0 B/);
+});
+
+function retentionFixture() {
+  const data = fixture(), now = Date.now()/1000;
+  const plan = {mode:'preview',status:'complete',reason:'preview-only',started_at:now-2,finished_at:now,eligible_versions:4,eligible_objects:20,eligible_bytes:8192,candidate_versions:2,candidate_objects:10,candidate_bytes:4096,skip_counts:{'bytes-limit':2},skipped_versions:2,unknown_objects:1,removed_versions:0,removed_objects:0,removed_bytes:0,protection_counts:{current:1,rollback:2,pinned:1},stale:false,policy_changed:false};
+  data.object_retention = {status:'ok',service:{status:'success'},repositories:[{key:'assets',result_status:'ok',policy:{enabled:false,exclusive_writer:false,keep_last:10,keep_days:90,min_age_hours:24,rollback_versions:2,pinned_count:1,max_delete_versions:2,max_delete_objects:100,max_delete_bytes:268435456},attempt:plan,last_plan:plan,last_preview:plan}]};
+  return data;
+}
+test('object retention preview never appears as actual deletion and policy/candidate counts render', () => {
+  const ui = setup(), data = retentionFixture(); ui.context.render(data);
+  const text = ui.get('object-retention-repositories').textContent;
+  assert.match(text,/实际删除未启用/); assert.match(text,/4 版 \/ 8.0 KiB/);
+  assert.match(text,/单轮候选 2 版 \/ 10 个 \/ 4.0 KiB/);
+  assert.match(text,/仅预览，未调用对象删除/); assert.match(text,/逻辑字节上限：2 版/);
+  assert.match(text,/最近完整执行：暂无完整记录/);
+  assert.doesNotMatch(text,/本次已确认删除/);
+});
+test('object retention failed apply retains last success and warns about partial deletion', () => {
+  const ui = setup(), data = retentionFixture(), row = data.object_retention.repositories[0];
+  row.last_apply = {...row.last_plan,mode:'apply',reason:'applied',removed_versions:1,removed_objects:3,removed_bytes:1024};
+  row.attempt = {mode:'apply',status:'failed',reason:'storage-error',started_at:Date.now()/1000,partial_possible:true,removed_objects:1,removed_bytes:128};
+  data.object_retention.service.status = 'failed';ui.context.render(data);
+  assert.match(ui.get('object-retention-notice').textContent,/定时进程失败/);
+  const text = ui.get('object-retention-repositories').textContent;
+  assert.match(text,/可能有部分对象已删除/);assert.match(text,/已确认 1 个 \/ 128 B/);
+  assert.match(text,/最近完整执行.*已确认删除 1 版 \/ 3 个/);
+  assert.doesNotMatch(text,/本次未进入删除阶段/);
+});
+test('busy, configuration changes and corrupt or missing planning data are explicit', () => {
+  const ui = setup(), data = retentionFixture(), row = data.object_retention.repositories[0];
+  row.attempt = {mode:'preview',status:'busy',reason:'busy',started_at:Date.now()/1000};
+  row.last_plan.policy_changed = true;row.last_plan.stale = true;ui.context.render(data);
+  let text = ui.get('object-retention-repositories').textContent;
+  assert.match(text,/锁忙，本次跳过/);assert.match(text,/配置已变更，需重新预览/);
+  row.last_plan = undefined;row.invalid_fields = ['last_plan','last_apply'];ui.context.render(data);
+  text = ui.get('object-retention-repositories').textContent;
+  assert.match(text,/规划记录损坏或不可用/);assert.match(text,/最近完整执行：记录损坏/);
+  assert.doesNotMatch(text,/0 版 \/ 0 B/);
 });

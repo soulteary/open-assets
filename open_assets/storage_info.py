@@ -256,9 +256,10 @@ def cleanup_results(data_root, keys):
     return result
 
 
-def cleanup_service():
+def cleanup_service(service="open-assets-retention.service"):
     fields = (
         "LoadState",
+        "ConditionResult",
         "ActiveState",
         "Result",
         "ExecMainStatus",
@@ -269,7 +270,7 @@ def cleanup_service():
             [
                 "systemctl",
                 "show",
-                "open-assets-retention.service",
+                service,
                 *["--property=" + name for name in fields],
             ],
             stderr=subprocess.DEVNULL,
@@ -278,6 +279,8 @@ def cleanup_service():
         values = dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
         if values.get("LoadState") == "not-found":
             return dict(status="not-installed")
+        if values.get("ConditionResult") == "no":
+            return dict(status="condition-skipped")
         if values.get("ActiveState") in (
             "active",
             "activating",

@@ -52,7 +52,7 @@ function renderStorage(data) {
   const storage = data.storage || {};
   const service = storage.cleanup_service?.status || 'unavailable';
   const cleanupNotice = byId('cleanup-notice');
-  cleanupNotice.textContent = ({failed: '最近定时清理失败；下表保留上次完整执行结果，请检查服务日志。', running: '定时清理正在运行；下表显示上次完整执行结果。', success: '定时进程上次正常退出；忙碌跳过也会正常退出，请以各仓库的完成时间和结果为准。', never: '定时清理尚未执行。', 'not-installed': '尚未安装定时清理服务；手工执行结果仍会在下表显示。', unavailable: '无法读取定时清理服务状态。'})[service];
+  cleanupNotice.textContent = '本地：' + ({'condition-skipped': '启动条件未满足，本地清理服务未运行。', failed: '最近定时清理失败；下表保留上次完整执行结果，请检查服务日志。', running: '定时清理正在运行；下表显示上次完整执行结果。', success: '定时进程上次正常退出；忙碌跳过也会正常退出，请以各仓库的完成时间和结果为准。', never: '定时清理尚未执行。', 'not-installed': '尚未安装定时清理服务；手工执行结果仍会在下表显示。', unavailable: '无法读取定时清理服务状态。'})[service];
   cleanupNotice.className = service === 'failed' || service === 'unavailable' ? 'warning' : 'muted';
   const rows = storage.repositories || [];
   const table = byId('repositories'); table.replaceChildren();
@@ -81,10 +81,56 @@ function renderStorage(data) {
     tr.append(storageCell(labels[cleanup.status] || '结果不可用', details)); table.append(tr);
   }
 }
+const retentionReasons = {
+  'started': '尚未结案，请结合定时服务状态判断是否仍在运行',
+  'preview-only': '仅预览，未调用对象删除', 'disabled': '策略未启用，本次未调用对象删除',
+  'no-candidates': '没有可执行的候选，本次未删除', 'applied': '实际执行已完整结束',
+  'budget-skipped': '部分版本因单轮策略或请求预算跳过', 'busy': '发布、入队或清理锁忙，本次跳过',
+  'exclusive-writer-required': '未声明独占写入，执行已阻止', 'versioned-bucket': '桶启用或暂停了版本控制，不支持清理',
+  'time-budget': '超过时间预算', 'scan-limit': '超过扫描、请求或元数据条目上限',
+  'changed-objects': '对象、清单或收据不一致，需人工核对', 'permission-denied': '存储权限或凭据校验失败',
+  'storage-error': '存储 API 失败', 'unsafe-state': '引用、任务、配置或元数据不安全',
+  'io-error': '网络或本地 I/O 失败', 'unknown-error': '未分类错误，请检查私有服务日志'
+};
+const protectionLabels = {'current':'当前', 'rollback':'回滚', 'pinned':'固定', 'previous-job':'任务前一版本', 'keep-last':'最近数量', 'recent':'保留时间', 'no-current-reference':'无当前引用', 'missing-manifest':'无清单', 'incomplete-or-extra-objects':'对象不完整或额外对象', 'manifest-size-mismatch':'大小不符', 'job-pending':'待执行任务', 'job-running':'运行任务', 'job-images_prepared':'待切换任务', 'job-failed':'失败任务'};
+function retentionHistory(row, name, label) {
+  if (row.result_status === 'unavailable') return label + '：记录不可用，无法判断历史执行';
+  if ((row.invalid_fields || []).includes(name)) return label + '：记录损坏 / 不可用';
+  const value = row[name];
+  if (!value) return label + '：暂无完整记录';
+  return label + '：' + date(value.finished_at) + (name === 'last_apply' ? ' · 已确认删除 ' + value.removed_versions + ' 版 / ' + value.removed_objects + ' 个 / ' + bytes(value.removed_bytes) : ' · 仅预览') + ' · ' + (retentionReasons[value.reason] || '状态待核对') + (value.policy_changed ? '（配置已变更）' : value.stale ? '（历史记录，已过期）' : '');
+}
+function renderObjectRetention(data) {
+  const source = data.object_retention || {}, notice = byId('object-retention-notice');
+  const service = source.service?.status || 'unavailable';
+  const states = {'condition-skipped':'定时服务启动条件未满足，该次未启动进程；手工尝试另见各仓库。', success:'定时进程上次正常退出；可能是预览或锁忙跳过，执行模式以各仓库记录为准。', failed:'对象保留定时进程失败；旧完整结果仍保留，不能据此判断本次未删除。', running:'对象保留定时进程运行中；下表显示历史完整规划及最新尝试。', never:'定时进程尚未执行。', 'not-installed':'尚未安装对象保留定时服务。', unavailable:'无法读取对象保留定时服务状态。'};
+  notice.textContent = (data.stale ? '状态快照已过期。' : '') + (source.status === 'unavailable' ? '对象保留配置或摘要不可用。' : '') + (states[service] || states.unavailable);
+  notice.className = data.stale || ['failed','unavailable'].includes(service) || source.status === 'unavailable' ? 'warning' : 'muted';
+  const table = byId('object-retention-repositories'); table.replaceChildren();
+  const rows = source.repositories || [];
+  if (!rows.length) { const tr = el('tr'), td = storageCell('尚无可用对象保留摘要'); td.colSpan = 5; tr.append(td); table.append(tr); }
+  for (const row of rows) {
+    const tr = el('tr'), policy = row.policy, plan = row.last_plan, attempt = row.attempt;
+    const old = data.stale || plan?.stale || row.result_status !== 'ok';
+    if (old || (row.invalid_fields || []).length || ['failed','busy','running'].includes(attempt?.status)) tr.className = 'warning';
+    tr.append(storageCell(row.key));
+    tr.append(!policy ? storageCell('策略不可用') : storageCell(policy.enabled ? policy.exclusive_writer ? '策略启用 · 已声明独占写入' : '策略启用 · 未声明独占写入' : '实际删除未启用', ['最近 ' + policy.keep_last + ' 版 / ' + policy.keep_days + ' 天（取并集）· 最少 ' + policy.min_age_hours + ' 小时', '回滚保护 ' + policy.rollback_versions + ' 版 · 两类固定 SHA 去重 ' + policy.pinned_count + ' 版', '单轮 ' + policy.max_delete_versions + ' 版 / ' + policy.max_delete_objects + ' 个 / ' + bytes(policy.max_delete_bytes), '仍需专用 IAM 与显式 --apply']));
+    const candidateLines = plan ? ['单轮候选 ' + plan.candidate_versions + ' 版 / ' + plan.candidate_objects + ' 个 / ' + bytes(plan.candidate_bytes), (plan.mode === 'preview' ? '预览规划于 ' : '执行前规划于 ') + date(plan.finished_at), plan.policy_changed ? '配置已变更，需重新预览' : old ? '历史采样，需复查' : '规划快照，不是实时剩余量', '预算排除或跳过 ' + plan.skipped_versions + ' 版 · 未知对象 ' + plan.unknown_objects + ' 个', ...Object.entries(plan.skip_counts || {}).map(([reason,count]) => ({'versions-limit':'版本数上限', 'objects-limit':'对象数上限', 'bytes-limit':'逻辑字节上限', 'request-budget':'请求预算不足'})[reason] + '：' + count + ' 版'), ...Object.entries(plan.protection_counts || {}).map(([reason,count]) => (protectionLabels[reason] || '其他保护') + ' ' + count)] : [row.result_status === 'unavailable' || (row.invalid_fields || []).includes('last_plan') ? '规划记录损坏或不可用' : '等待完整规划，不用零代替未知'];
+    tr.append(storageCell(plan ? plan.eligible_versions + ' 版 / ' + bytes(plan.eligible_bytes) + '（' + plan.eligible_objects + ' 个）' : '—', candidateLines));
+    const attemptLines = attempt ? [(attempt.mode === 'preview' ? '预览' : '执行请求') + ' · ' + date(attempt.started_at), retentionReasons[attempt.reason] || '状态待核对'] : [(row.invalid_fields || []).includes('attempt') ? '最近尝试记录损坏 / 不可用' : row.result_status === 'unavailable' ? '尝试记录不可用' : '尚无有效尝试记录'];
+    if (attempt?.mode === 'apply' && attempt.status === 'complete') attemptLines.push('本次已确认删除 ' + attempt.removed_versions + ' 版 / ' + attempt.removed_objects + ' 个 / ' + bytes(attempt.removed_bytes));
+    if (attempt?.partial_possible) attemptLines.push('可能有部分对象已删除，未结案；已确认 ' + (attempt.removed_objects ?? '—') + ' 个 / ' + bytes(attempt.removed_bytes) + '，也可能有响应未确认的删除');
+    else if (attempt?.status === 'failed') attemptLines.push('本次未进入删除阶段');
+    tr.append(storageCell(({complete:'完整结束', failed:'失败', busy:'跳过', running:'尝试未结案'})[attempt?.status] || '未知', attemptLines));
+    tr.append(storageCell('完整历史结果', [retentionHistory(row, 'last_preview', '最近完整预览'), retentionHistory(row, 'last_apply', '最近完整执行')]));
+    table.append(tr);
+  }
+}
 function render(data) {
   byId('freshness').textContent = (data.stale ? '采集已过期 · ' : '更新于 ') + date(data.collected_at) + ' · ' + data.age_seconds + ' 秒前';
   byId('freshness').className = data.stale ? 'warning' : '';
   renderStorage(data);
+  renderObjectRetention(data);
   const h = data.host, overview = byId('overview'); overview.replaceChildren();
   for (const [label, value, detail] of [
     ['CPU', pct(h.cpu_percent), h.cpu_count + ' 个逻辑核 · 采集窗口总利用率'],
@@ -120,6 +166,6 @@ function render(data) {
 }
 async function update() {
   try { const r = await fetch('/api/status', {cache: 'no-store'}); if (!r.ok) throw new Error(); render(await r.json()); byId('error').hidden = true; }
-  catch { byId('error').hidden = false; byId('error').textContent = '无法读取最新状态，请检查登录会话与采集定时器。下方可能是上次成功读取的数据。'; const notice = byId('capacity-notice'); notice.className = 'capacity-notice capacity-unknown'; notice.replaceChildren(el('strong', '容量状态待确认'), el('p', '无法取得最新状态，下方保留上次采样，不能作为实时容量依据。')); }
+  catch { byId('object-retention-notice').textContent = '对象保留数据无法刷新，下表保留旧结果，请复核采样时间。'; byId('object-retention-notice').className = 'warning'; byId('error').hidden = false; byId('error').textContent = '无法读取最新状态，请检查登录会话与采集定时器。下方可能是上次成功读取的数据。'; const notice = byId('capacity-notice'); notice.className = 'capacity-notice capacity-unknown'; notice.replaceChildren(el('strong', '容量状态待确认'), el('p', '无法取得最新状态，下方保留上次采样，不能作为实时容量依据。')); }
 }
 update(); setInterval(update, 30000);

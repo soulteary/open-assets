@@ -362,6 +362,12 @@ def collect(root, refresh_storage=False):
     from .object_info import summary
 
     result["object_storage"] = summary(root, data_root)
+    from .object_retention_info import summary as retention_summary
+
+    result["object_retention"] = retention_summary(root, data_root)
+    result["object_retention"]["service"] = cleanup_service(
+        "open-assets-object-retention.service"
+    )
     result["capacity"] = capacity(disks, result["storage"], env, image_disk_index)
     result["collection_seconds"] = round(time.monotonic() - started, 3)
     performance = root / "private/performance/latest-summary.json"

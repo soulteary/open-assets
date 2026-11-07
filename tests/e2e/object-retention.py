@@ -179,6 +179,13 @@ try:
         json.loads(r.receipt_path(c, "assets", partial).read_text())["status"]
         == "deleting"
     )
+    observation = json.loads(
+        (f.state / "object-retention-results/assets.json").read_text()
+    )
+    assert observation["attempt"]["status"] == "failed"
+    assert observation["attempt"]["partial_possible"]
+    assert observation["attempt"]["removed_objects"] == 1
+    assert observation["last_preview"]["mode"] == "preview"
     r.run(c, "assets", apply=True, s3=cleaner, now=now)
     assert (
         cleaner.list_objects_v2(Bucket=c["bucket"], Prefix=r.prefix("assets", partial))[
@@ -190,6 +197,12 @@ try:
         json.loads(r.receipt_path(c, "assets", partial).read_text())["status"]
         == "complete"
     )
+    observation = json.loads(
+        (f.state / "object-retention-results/assets.json").read_text()
+    )
+    assert observation["last_apply"]["status"] == "complete"
+    assert observation["last_apply"]["removed_objects"] == 1
+    assert observation["last_preview"]["mode"] == "preview"
     try:
         fixture.core.rollback_images(c, "assets", partial)
     except ValueError as error:
