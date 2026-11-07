@@ -94,8 +94,37 @@ def disk(path, label):
         used_percent=round((total - free) / total * 100, 2),
         inode_used_percent=round((v.f_files - v.f_ffree) / v.f_files * 100, 2)
         if v.f_files
-        else 0,
+        else None,
     )
+
+
+def filesystems(data_root):
+    """Deduplicate mounted filesystems and use the actual image volume for reserve."""
+    disks, devices = [], {}
+    data_device = data_root.stat().st_dev
+    system_device = os.stat("/").st_dev
+    locations = [
+        (
+            Path("/"),
+            "系统 / 数据（同一文件系统）" if data_device == system_device else "系统",
+        ),
+        (data_root, "数据"),
+        (data_root / "images", "图片存储"),
+        (data_root / "publisher", "Git / 发布状态"),
+        (data_root / "otterio", "对象存储"),
+    ]
+    image_device = data_device
+    for path, label in locations:
+        try:
+            device = path.stat().st_dev
+        except FileNotFoundError:
+            continue
+        if path == data_root / "images":
+            image_device = device
+        if device not in devices:
+            devices[device] = len(disks)
+            disks.append(disk(path, label))
+    return disks, devices[image_device]
 
 
 def probe(address, port, path="/healthz", hostname=None, ca=None):
@@ -152,7 +181,7 @@ def certificate(label, pem=None, address=None, hostname=None, tls_context=None):
         return dict(label=label, error="unavailable")
 
 
-def collect(root):
+def collect(root, refresh_storage=False):
     started = time.monotonic()
     env, domains = (
         environment(root),
@@ -270,10 +299,7 @@ def collect(root):
                 )
             except (OSError, ValueError, KeyError, TypeError):
                 row["probe"] = "failed"
-    same_disk = os.stat("/").st_dev == data_root.stat().st_dev
-    disks = [disk("/", "系统 / 数据（同一文件系统）" if same_disk else "系统")]
-    if not same_disk:
-        disks.append(disk(data_root, "数据"))
+    disks, image_disk_index = filesystems(data_root)
     certificates = []
     for name, label in [
         ("storage/public.crt", "内部 / OtterIO"),
@@ -329,6 +355,12 @@ def collect(root):
         certificates=certificates,
         collection_seconds=round(time.monotonic() - started, 3),
     )
+    from .storage_info import collect_storage, cleanup_service, capacity
+
+    result["storage"] = collect_storage(root, data_root, force=refresh_storage)
+    result["storage"]["cleanup_service"] = cleanup_service()
+    result["capacity"] = capacity(disks, result["storage"], env, image_disk_index)
+    result["collection_seconds"] = round(time.monotonic() - started, 3)
     performance = root / "private/performance/latest-summary.json"
     if performance.exists():
         source = json.loads(performance.read_text())
@@ -382,6 +414,11 @@ def main():
         description="Collect a filtered host status snapshot"
     )
     parser.add_argument("--root", type=Path, default=Path("/app/open-assets"))
+    parser.add_argument(
+        "--refresh-storage",
+        action="store_true",
+        help="refresh bounded repository disk measurements",
+    )
     args = parser.parse_args()
     if os.geteuid() != 0:
         parser.error("run the host collector as root")
@@ -390,7 +427,7 @@ def main():
     output.parent.mkdir(parents=True, exist_ok=True)
     with (output.parent / ".collector.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        write_snapshot(output, collect(root))
+        write_snapshot(output, collect(root, args.refresh_storage))
     print("Filtered status snapshot updated")
 
 

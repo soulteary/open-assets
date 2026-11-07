@@ -501,9 +501,27 @@ def _run_locked(config, key=None, apply=False, now=None):
     if apply:
         from . import __main__ as core
 
+        completed_at = time.time()
+        for row in plans:
+            if row["enabled"]:
+                core.atomic(
+                    Path(config["state_root"])
+                    / "retention-results"
+                    / (row["key"] + ".json"),
+                    dict(
+                        schema_version=1,
+                        key=row["key"],
+                        status="complete",
+                        apply=True,
+                        completed_at=completed_at,
+                        claimed_versions=len(row["candidates"]),
+                        removed_directories=row.get("trash_removed", 0),
+                        archived_jobs=len(row["archive_jobs"]),
+                    ),
+                )
         core.atomic(
             Path(config["state_root"]) / "retention-last.json",
-            dict(report, completed_at=time.time()),
+            dict(report, completed_at=completed_at),
         )
     return report
 

@@ -310,6 +310,21 @@ class Retention(unittest.TestCase):
             self.plan(True)
         self.assertEqual(set((self.base / "releases").iterdir()), before)
 
+    def test_repository_summary_survives_another_repository_run(self):
+        self.config["repositories"].append(dict(key="other", enabled=True))
+        first = r.run(self.config, "assets", True, self.now)
+        self.assertEqual(first["status"], "complete")
+        path = self.state / "retention-results/assets.json"
+        original = path.read_bytes()
+        summary = json.loads(original)
+        self.assertEqual(summary["key"], "assets")
+        self.assertNotIn("candidates", summary)
+        r.run(self.config, "other", True, self.now)
+        self.assertEqual(path.read_bytes(), original)
+        self.assertTrue((self.state / "retention-results/other.json").exists())
+        latest = json.loads((self.state / "retention-last.json").read_text())
+        self.assertEqual([row["key"] for row in latest["repositories"]], ["other"])
+
     def test_policy_rejects_unknown_or_unsafe_values_and_keeps_repo_override(self):
         for change in (
             dict(keep_last=0),

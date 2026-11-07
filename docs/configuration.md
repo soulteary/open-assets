@@ -76,3 +76,5 @@ Worker 在导出前要求 images_root 文件系统的可用空间至少为 `2 ×
 宿主机接入 CLI 使用 private/admin_password、Publisher 公钥、Webhook Secret 和 private/oc-cli。当前实现假设 Gitea content 管理账号、本机 13000 HTTP API、asset-stack_admin 网络及 assets-publish 专用策略；它不是任意 Git 平台的通用管理接口。
 
 全局和仓库级 `retention` 控制本地版本保留及任务归档，默认禁用实际清理，配置项和保护规则见 [历史清理](retention.md)。
+
+`INFO_DISK_*` 与 `INFO_INODE_*` 控制 Info 的容量提示阈值，由宿主机采集器读取；默认值与统计范围见 [Info 说明](info.md#容量提示)。

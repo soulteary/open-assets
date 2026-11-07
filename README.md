@@ -109,3 +109,5 @@ python -m unittest discover -s tests -v
 日志保存与磁盘占用控制见 [日志管理](docs/logging.md)。
 
 本地历史版本的数量/时间保留、固定回滚点和终态任务归档见 [历史清理](docs/retention.md)；默认只预览，OSS 历史附件继续保留。
+
+Info 看板提供各仓库本地版本数、占用、保留策略和最近完整清理结果，并提示空间、inode 及发布预留不足。采样范围和阈值配置见 [Info 说明](docs/info.md)。

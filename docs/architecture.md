@@ -49,6 +49,7 @@ Worker 重启会重做 pending、running 和 images_prepared。已有对象和�
 ├── jobs/<job-id>.json             # 任务状态
 ├── job-archive/<prefix>/<id>.json # 保留去重身份的终态任务
 ├── rollback-protection/<key>.json # 最近回滚点
+├── retention-results/<key>.json   # 每仓库最近完整清理计数摘要
 ├── quarantine/<id>/             # 原始坏记录和隔离原因
 ├── manifests/<key>/<sha>.json     # 完整文件清单
 └── published/<key>               # 最近激活版本的记录

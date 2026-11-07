@@ -69,7 +69,7 @@ docker compose exec -T publisher python -m open_assets.retention --apply
 
 返回 `busy` 表示发布、入队或其他清理正在持锁，本次不清理。返回 `blocked` 且非零退出表示遇到不安全状态或 I/O 错误；不输出私有文件内容。规划最多读取 10,000 份活动任务，保留必要字段参与计算，超限会停止而不是继续消耗内存。规划阶段另设 30 秒检查预算，超时在移动版本前退出；该检查不能中断阻塞的内核 I/O。不要反复重启进程或手工修改 current 来跳过检查。
 
-执行后的最近完整结果保存在 `state_root/retention-last.json`，下次覆盖，不无限累计。定时服务结果进入宿主机 journal，使用已有日志保留策略；手工执行时需自行保存输出。
+执行后的最近完整全局结果保存在 `state_root/retention-last.json`，下次覆盖，不无限累计。已启用仓库另写 `state_root/retention-results/<key>.json` 的计数摘要；单仓库执行不会覆盖其他仓库摘要，禁用、忙碌或失败不会冒充该仓库的完整成功。定时服务结果进入宿主机 journal，使用已有日志保留策略；手工执行时需自行保存输出。
 
 ## 原子移动、中断与归档
 
@@ -109,3 +109,5 @@ sudo systemctl stop open-assets-retention.timer open-assets-retention.service
 ```
 
 中断可能留下待删除暂存区或已归档任务，属于可重试状态；它不具备数据库、文件系统与 S3 的联合事务或整机断电保证。清理前的快照和原始业务备份应由独立策略保留。
+
+Info 看板可查看本地版本数、占用、保留策略及最近完整清理摘要，带独立的统计时间和采集失败提示；占用不包含 OSS 总量。详见 [看板口径与容量提示](info.md#仓库容量保留策略和清理结果)。
