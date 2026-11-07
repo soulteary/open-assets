@@ -102,3 +102,14 @@ These fixes close the two issues that remained open in the earlier stage records
 - Public image/object bytes, Range, four management authentication flows, gzip and fresh Info data passed regression checks. All nine containers were healthy.
 
 The application does not automatically repair damaged versions or replay quarantined records. Disk/power failure, concurrent trusted administrators, cross-system commit windows, unbounded historical retention and external alerting remain outside these fixes. See [operations](operations.md) and the updated [risk record](risks.md).
+
+## Configurable local history retention — 2026-11-07
+
+- The final candidate passed all 60 tests in an independent container with network disabled, a read-only root, temporary writable space and no production data or credentials. Eighteen retention tests cover protection sets, age/count policy, opt-in application, bounded scans/deletions, archive deduplication, lock conflicts, symlinks, invalid references and interrupted claims followed by recreation of the same SHA.
+- Previous images and a readable, hashed application/private/publisher/image snapshot were retained before installation. Only Publisher and Webhook were recreated. The private deployment policy explicitly enables keep_last=5, keep_days=30, min_age_hours=24 and rollback_versions=2; public examples continue to default to disabled.
+- Deployed CLI acceptance used disposable data under separate mounted subdirectories, without public routes or S3 calls. It deleted one eligible local version pair, archived its terminal task byte-for-byte, and preserved current, rollback, pinned, pending, running, images_prepared and failed references. Preview, repeated execution, invalid-job refusal, busy locking and archived-task deduplication passed; test directories were removed afterward.
+- Real SSH Push, signed Hook publication, corrupt/missing-copy refusal, valid image rollback/roll-forward and retained historical attachment reads passed on the dedicated content fixture. The temporary personal Push key was revoked. Four management authentication and gzip checks, public byte/Range checks and fresh Info status also passed.
+- A full production apply checked four configured repositories and found no eligible old versions/tasks: zero newly claimed versions and zero archived production tasks. Actual deletion was proven only on the disposable CLI fixture; no claim is made that production disk use fell substantially.
+- The six-hour retention timer is enabled; its service completed successfully. All nine containers were healthy, and the existing Info, repair and log rotation timers remained active.
+
+This mechanism retains S3 objects, Git history, manifests, archive records, quarantine data and backups. It is not a global disk quota, external capacity alert, off-host backup or hard resource limit. See [retention operations](retention.md) and the remaining [capacity risks](risks.md#3-容量限制不能约束整个部署).

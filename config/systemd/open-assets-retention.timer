@@ -1,0 +1,10 @@
+[Unit]
+Description=Check Open Assets local history retention every six hours
+
+[Timer]
+OnBootSec=20min
+OnUnitActiveSec=6h
+RandomizedDelaySec=15min
+
+[Install]
+WantedBy=timers.target

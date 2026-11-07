@@ -107,3 +107,5 @@ python -m unittest discover -s tests -v
 普通测试使用临时目录和回环 HTTP 端口，不连接生产服务器。独立的 [从零部署脚本](tests/e2e/README.md) 仅用于可丢弃的空环境；执行结果见 [隔离部署记录](docs/fresh-install.md)。仓库中的 [CI](.github/workflows/test.yml) 另外运行 Ruff 和镜像构建。一次部署的成功记录不代表所有浏览器、硬件或升级路径均已验证。
 
 日志保存与磁盘占用控制见 [日志管理](docs/logging.md)。
+
+本地历史版本的数量/时间保留、固定回滚点和终态任务归档见 [历史清理](docs/retention.md)；默认只预览，OSS 历史附件继续保留。

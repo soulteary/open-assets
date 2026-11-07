@@ -74,3 +74,5 @@ Worker 在导出前要求 images_root 文件系统的可用空间至少为 `2 ×
 应用镜像通过 `OPEN_ASSETS_CONFIG` 定位配置，通过 `S3_ACCESS_KEY_FILE`、`S3_SECRET_KEY_FILE` 和 `WEBHOOK_SECRET_FILE` 读取秘密。`GIT_SSH_COMMAND` 指定 Publisher 私钥和固定 known_hosts；不要关闭 StrictHostKeyChecking。
 
 宿主机接入 CLI 使用 private/admin_password、Publisher 公钥、Webhook Secret 和 private/oc-cli。当前实现假设 Gitea content 管理账号、本机 13000 HTTP API、asset-stack_admin 网络及 assets-publish 专用策略；它不是任意 Git 平台的通用管理接口。
+
+全局和仓库级 `retention` 控制本地版本保留及任务归档，默认禁用实际清理，配置项和保护规则见 [历史清理](retention.md)。

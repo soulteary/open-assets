@@ -46,17 +46,19 @@ class Recovery(unittest.TestCase):
         m.atomic(
             self.root / "state/manifests/fixture" / (self.sha + ".json"), self.manifest
         )
-        self.old = self.base / "releases/images-old"
+        self.old = self.base / "releases" / ("images-" + "f" * 40)
         self.old.mkdir()
         (self.old / "pic.png").write_bytes(b"old")
-        m.switch(self.base, "images-old")
+        m.switch(self.base, "images-" + "f" * 40)
         m.atomic(self.root / "state/published/fixture", dict(sha="old"))
 
     def tearDown(self):
         self.tmp.cleanup()
 
     def assert_old(self):
-        self.assertEqual(os.readlink(self.base / "current"), "releases/images-old")
+        self.assertEqual(
+            os.readlink(self.base / "current"), "releases/images-" + "f" * 40
+        )
         self.assertEqual(
             json.loads((self.root / "state/published/fixture").read_text()),
             dict(sha="old"),

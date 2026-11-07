@@ -10,7 +10,7 @@ docker compose exec -T publisher python -m open_assets status
 docker compose logs --tail=100 publisher webhook
 ```
 
-status 依次输出有效任务的 ID、仓库 key、SHA 和状态；遇到坏记录只报告固定错误类型并跳过，不修改文件。任务 JSON 位于 `/data/asset-stack/publisher/jobs/`，失败时只保存异常类型，不保存完整请求或秘密。日志为空不代表没有任务，也不代表发布成功。
+status 默认列活动目录，`status archived` 列归档，`status all` 列两者。依次输出有效任务的 ID、仓库 key、SHA 和状态；遇到坏记录只报告固定错误类型并跳过，不修改文件。任务 JSON 位于 `/data/asset-stack/publisher/jobs/`，失败时只保存异常类型，不保存完整请求或秘密。日志为空不代表没有任务，也不代表发布成功。
 
 容器健康与最近的受限恢复动作可在 [Info](info.md) 查看。自动重启有作用域、冷却和次数上限，不会替代坏配置、坏任务或存储数据的处理。维护和有意暂停服务前按 [健康恢复说明](health.md) 设置 maintenance.flag 并暂停恢复定时器，确认在途恢复已结束。
 
@@ -88,3 +88,7 @@ Worker 对每份任务最多读取 64 KiB，拒绝符号链接、非普通文件
 隔离记录保存在 `/data/asset-stack/publisher/quarantine/<随机标识>/`：`record` 保留原始文件或原始文件系统条目，`reason.json` 记录原文件名、时间和异常类型。不要跟随隔离的符号链接或尝试把 FIFO 当文本读取。查看容器日志中的 `job-quarantined`、`job-quarantine-failed`、`job-state-write-failed`、`queue-io-failed`，检查私有隔离目录并备份。当前没有默认外部告警或自动清理。
 
 不要把未经修复的记录移回 jobs，否则会再次隔离。先确认根因（磁盘、人工编辑或恢复），然后核对固定仓库和完整 SHA；需要重新发布时使用 `publish KEY FULL_COMMIT_SHA` 创建有效人工任务。该命令可以切换到历史版本，必须先确认预期版本。隔离不等于任务发布失败，也不会自动撤销已上传对象或现有图片。
+
+## 历史版本保留
+
+本地版本保留、固定回滚点、终态任务归档及可选定时器见 [历史清理](retention.md)。默认只预览，策略显式启用后才清理；不删除 OSS 对象。计划维护时一并暂停清理 timer/service。

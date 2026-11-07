@@ -47,6 +47,8 @@ Worker 重启会重做 pending、running 和 images_prepared。已有对象和�
 /data/asset-stack/publisher/
 ├── git/<key>/                    # 裸仓库缓存
 ├── jobs/<job-id>.json             # 任务状态
+├── job-archive/<prefix>/<id>.json # 保留去重身份的终态任务
+├── rollback-protection/<key>.json # 最近回滚点
 ├── quarantine/<id>/             # 原始坏记录和隔离原因
 ├── manifests/<key>/<sha>.json     # 完整文件清单
 └── published/<key>               # 最近激活版本的记录
@@ -66,3 +68,5 @@ Nginx 只读挂载 images 父目录，按仓库前缀读取 current。图片切�
 附件入口只转发 GET/HEAD 和固定桶前缀，OtterIO 另用桶策略限制匿名读取。公开 URL 指向的内容本身就是公开数据，不能把不想公开的文件放进 public。OC 下载地址依赖管理会话，不等同于公开附件链接。
 
 图片回滚先校验清单身份及完整 public 快照，再通过同一图片激活函数校验并切换实际图片副本。不自动重建损坏目录，具体操作与隔离记录处理见 [运行维护](operations.md)。
+
+本地历史保留按数量、时间和引用集合判断，只清理未受保护的版本，终态任务可归档但保留去重身份，OSS 对象继续保留。实际删除前先把目录移到仓库内 `.retention-trash/`，中断恢复只处理已认领目录；完整规则与定时运行见 [历史清理](retention.md)。

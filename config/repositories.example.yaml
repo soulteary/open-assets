@@ -3,6 +3,18 @@ state_root: /state
 images_root: /images
 bucket: attachments
 endpoint: http://otterio:9000
+# Cleanup is opt-in. Per-repository retention values override these defaults.
+retention:
+  enabled: false
+  keep_last: 5
+  keep_days: 30
+  min_age_hours: 24
+  rollback_versions: 2
+  pinned_shas: []
+  archive_jobs_after_days: 30
+  max_delete_versions: 10
+  max_delete_bytes: 268435456
+  max_archive_jobs: 100
 repositories:
   - key: main-images
     repository_id: 1

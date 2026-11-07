@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import http.server
 import json
+import itertools
 import mimetypes
 import math
 import os
@@ -91,6 +92,10 @@ def load():
             or ".." in r["branch"]
         ):
             raise ValueError("invalid branch")
+    from .retention import policy
+
+    for r in c["repositories"]:
+        policy(c, r)
     c["revision"] = hashlib.sha256(raw).hexdigest()
     return c
 
@@ -115,7 +120,10 @@ def enqueue(c, key, sha, delivery, kind="auto"):
         raise ValueError("invalid commit")
     jid = hashlib.sha256((key + ":" + sha + ":" + kind).encode()).hexdigest()
     path = P(c["state_root"]) / "jobs" / f"{jid}.json"
-    if not path.exists():
+    from .retention import archive_path
+
+    archived = archive_path(c, jid)
+    if not path.exists() and not archived.exists() and not archived.is_symlink():
         atomic(
             path,
             dict(
@@ -357,6 +365,9 @@ def rollback_images(c, key, sha):
             raise ValueError("manifest identity mismatch")
         base = P(c["images_root"]) / "repos" / key
         verify_tree(base / "releases" / sha, manifest["files"])
+        from .retention import remember_previous
+
+        remember_previous(c, key, sha)
         activate_images(base, "images-" + sha, image_files(manifest["files"]))
         atomic(state / "published" / key, manifest)
 
@@ -467,6 +478,9 @@ def publish(c, j):
         )
         j.update(status="images_prepared", previous=previous)
         atomic(state / "jobs" / (j["id"] + ".json"), j)
+        from .retention import remember_previous
+
+        remember_previous(c, r["key"], j["sha"])
         activate_images(base, "images-" + j["sha"], image_files(files))
         j["status"] = "published"
         j["finished"] = time.time()
@@ -755,7 +769,14 @@ def main():
     elif o.command == "rollback-images":
         rollback_images(c, *o.args)
     else:
-        for p in (P(c["state_root"]) / "jobs").glob("*.json"):
+        if o.args not in ([], ["all"], ["archived"]):
+            raise ValueError("status accepts all or archived")
+        active = (P(c["state_root"]) / "jobs").glob("*.json")
+        archived = (P(c["state_root"]) / "job-archive").glob("*/*.json")
+        paths = archived if o.args == ["archived"] else active
+        if o.args == ["all"]:
+            paths = itertools.chain(active, archived)
+        for p in paths:
             try:
                 j = read_job(p)
             except (
