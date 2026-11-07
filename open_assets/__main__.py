@@ -96,6 +96,9 @@ def load():
 
     for r in c["repositories"]:
         policy(c, r)
+        from .object_retention import policy as object_policy
+
+        object_policy(c, r)
     c["revision"] = hashlib.sha256(raw).hexdigest()
     return c
 
@@ -359,6 +362,9 @@ def rollback_images(c, key, sha):
     if not SHA.fullmatch(sha):
         raise ValueError("invalid SHA")
     with lock(c):
+        from .object_retention import restoration_record
+
+        restoration_record(c, key, sha)
         state = P(c["state_root"])
         manifest = json.loads((state / "manifests" / key / (sha + ".json")).read_text())
         if manifest.get("key") != key or manifest.get("sha") != sha:
@@ -433,6 +439,9 @@ def publish(c, j):
             if hashlib.sha256(actual).hexdigest() != item["sha256"]:
                 raise ValueError("object verification failed")
         manifest = dict(key=r["key"], sha=j["sha"], files=files, config=c["revision"])
+        from .object_retention import restoration_record
+
+        restoration_record(c, r["key"], j["sha"], restored=True)
         atomic(state / "manifests" / r["key"] / (j["sha"] + ".json"), manifest)
         final = base / "releases" / j["sha"]
         if final.exists():

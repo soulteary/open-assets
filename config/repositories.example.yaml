@@ -15,6 +15,17 @@ retention:
   max_delete_versions: 10
   max_delete_bytes: 268435456
   max_archive_jobs: 100
+# Separate object retention: preview by default; never inherits local enabled.
+object_retention:
+  enabled: false
+  exclusive_writer: false
+  keep_last: 10
+  keep_days: 90
+  min_age_hours: 24
+  pinned_shas: []
+  max_delete_versions: 2
+  max_delete_objects: 100
+  max_delete_bytes: 268435456
 repositories:
   - key: main-images
     repository_id: 1

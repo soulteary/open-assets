@@ -2,7 +2,9 @@
 
 ## 清理范围
 
-本功能清理各仓库本地的 `releases/<sha>/` 完整 public 副本和 `releases/images-<sha>/` 图片副本，并把较旧的 published/superseded 任务移到归档。**不删除 OSS 对象**，已分享的附件 SHA URL 继续保留；不修改 Git 仓库、Gitea 数据、证书、备份、清单、异常任务隔离目录或普通 staging 目录。
+本功能清理各仓库本地的 `releases/<sha>/` 完整 public 副本和 `releases/images-<sha>/` 图片副本，并把较旧的 published/superseded 任务移到归档。**本地清理不删除 OSS 对象**，仅运行本功能时，已分享的附件 SHA URL 继续保留；不修改 Git 仓库、Gitea 数据、证书、备份、清单、异常任务隔离目录或普通 staging 目录。
+
+对象需要单独治理时，使用[对象历史保留](object-retention.md)。它默认只预览，不继承本地 enabled；实际删除可能使旧附件链接失效。两类清理共享保护引用，也保护在途/失败任务的 previous，避免清理其恢复引用。
 
 清单和归档任务仍会占用少量空间，Git 历史及 S3 对象也会继续增长。这是本地版本保留机制，不是整个部署的磁盘配额。发布前仍需检查空间，并配置独立容量告警和备份。没有可清理版本时，即使磁盘紧张也不会突破保护规则强制删除。
 

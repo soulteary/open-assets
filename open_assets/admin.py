@@ -437,6 +437,12 @@ def main():
     ensure.add_argument("--key", required=True)
     ensure.add_argument("--mount-path", required=True)
     ensure.add_argument("--branch", default="main")
+    objects = commands.add_parser("objects").add_subparsers(
+        dest="operation", required=True
+    )
+    objects.add_parser(
+        "setup", help="reconcile separate S3 retention credentials and scope"
+    )
     args = parser.parse_args()
     if os.geteuid() != 0:
         parser.error(
@@ -446,7 +452,12 @@ def main():
     with (manager.private / "onboarding.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         try:
-            manager.ensure(args.name, args.key, args.mount_path, args.branch)
+            if args.command == "objects":
+                from .object_retention_setup import setup
+
+                setup(manager)
+            else:
+                manager.ensure(args.name, args.key, args.mount_path, args.branch)
         except (Conflict, RuntimeError, OSError, KeyError, ValueError) as error:
             # Deliberately omit raw remote responses and subprocess arguments.
             print(

@@ -1,0 +1,18 @@
+[Unit]
+Description=Open Assets S3 history preview (no deletion)
+After=docker.service
+Requires=docker.service
+ConditionPathExists=!/app/open-assets/private/maintenance.flag
+
+[Service]
+Type=oneshot
+WorkingDirectory=/app/open-assets
+ExecStart=/usr/bin/docker compose run --rm --no-deps object-cleaner
+Environment=DOCKER_CONFIG=/tmp/open-assets-docker
+UMask=0077
+Nice=15
+TimeoutStartSec=120
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true

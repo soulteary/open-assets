@@ -209,6 +209,54 @@ def load_jobs(config, deadline=None):
     return result
 
 
+def protected_references(config, key, jobs, pins, deadline=None):
+    """Shared safety references for local and object retention; invalid state blocks both."""
+    base = Path(config["images_root"]) / "repos" / key
+    for parent in (Path(config["images_root"]), base.parent, base):
+        if parent.exists() or parent.is_symlink():
+            real_directory(parent)
+    current = current_sha(base)
+    published_path = Path(config["state_root"]) / "published" / key
+    if published_path.exists() or published_path.is_symlink():
+        published = read_json(published_path)
+        if (
+            not isinstance(published, dict)
+            or published.get("key") != key
+            or not valid_sha(published.get("sha"))
+            or published.get("sha") != current
+        ):
+            raise ValueError("current and published record disagree")
+    elif current is not None:
+        raise ValueError("current has no published record")
+    protected = {}
+
+    def protect(sha, reason):
+        protected.setdefault(sha, []).append(reason)
+
+    if current:
+        protect(current, "current")
+    for sha in history(config, key):
+        protect(sha, "rollback")
+    for sha in pins:
+        protect(sha, "pinned")
+    for _, job in jobs:
+        check_deadline(deadline)
+        if job["key"] != key:
+            continue
+        if job["status"] in ("pending", "running", "images_prepared", "failed"):
+            protect(job["sha"], "job-" + job["status"])
+        # Bootstrap protection for deployments predating activation history.
+        if (
+            job["sha"] == current
+            or job["status"] in ("pending", "running", "images_prepared", "failed")
+        ) and job.get("previous"):
+            previous = re.fullmatch(r"releases/images-([0-9a-f]{40})", job["previous"])
+            if not previous:
+                raise ValueError("invalid previous version reference")
+            protect(previous[1], "previous-job")
+    return current, protected
+
+
 def plan_repository(config, repository, jobs, now, deadline=None):
     check_deadline(deadline)
     key = repository["key"]
@@ -235,42 +283,13 @@ def plan_repository(config, repository, jobs, now, deadline=None):
         for folder in trash.iterdir():
             check_deadline(deadline)
             inspect_claim(folder, key, deadline)
-    current = current_sha(base)
-    published_path = Path(config["state_root"]) / "published" / key
-    if published_path.exists() or published_path.is_symlink():
-        published = read_json(published_path)
-        if (
-            not isinstance(published, dict)
-            or published.get("key") != key
-            or not valid_sha(published.get("sha"))
-            or published.get("sha") != current
-        ):
-            raise ValueError("current and published record disagree")
-    elif current is not None:
-        raise ValueError("current has no published record")
-    protected = {}
+    current, protected = protected_references(
+        config, key, jobs, settings["pinned_shas"], deadline
+    )
 
     def protect(sha, reason):
         protected.setdefault(sha, []).append(reason)
 
-    if current:
-        protect(current, "current")
-    for sha in history(config, key):
-        protect(sha, "rollback")
-    for sha in settings["pinned_shas"]:
-        protect(sha, "pinned")
-    for _, job in jobs:
-        check_deadline(deadline)
-        if job["key"] != key:
-            continue
-        if job["status"] in ("pending", "running", "images_prepared", "failed"):
-            protect(job["sha"], "job-" + job["status"])
-        # Bootstrap protection for deployments predating activation history.
-        if job["sha"] == current and job.get("previous"):
-            previous = re.fullmatch(r"releases/images-([0-9a-f]{40})", job["previous"])
-            if not previous:
-                raise ValueError("invalid previous version reference")
-            protect(previous[1], "previous-job")
     releases = base / "releases"
     if not releases.exists():
         result["protected"] = protected

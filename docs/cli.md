@@ -87,3 +87,7 @@ sudo docker compose exec -T publisher python -m open_assets publish project-b FU
 ```
 
 查看凭据、SSH 密钥、链接编码及禁用仓库，见 [实际使用指南](usage.md)。手工接入步骤保留在该指南中，供排查和定制部署使用。
+
+## 对象清理账号
+
+完成初始化后，执行 sudo scripts/open-assets objects setup 可创建或收敛专用清理身份。重复执行保留凭据，仅为显式启用且声明独占写入的仓库授予删除权限。仓库或开关变化后需重新执行；Publisher 不增加 DeleteObject。完整步骤见[对象保留](object-retention.md)。

@@ -133,3 +133,5 @@ sudo systemctl list-timers open-assets-objects.timer
 ```
 
 手工启动同样受缓存间隔限制，不提供绕过限速的网页刷新入口。结果由下一轮常规主机采集进入看板；如需马上合并已有对象缓存，执行 sudo python3 -m open_assets.telemetry。此命令及 --refresh-storage 都不会触发 S3 请求。全进程失败或超时也保留旧完整值；先看服务日志和每行状态，再检查 Publisher 健康、内部证书及列表权限，避免删除缓存来反复重试。
+
+对象历史清理采用独立策略和专用维护账号，默认定时预览，详见[对象保留](object-retention.md)。对象统计会在下一轮完整采集后反映实际删除；本地“最近清理”不包含对象清理结果。

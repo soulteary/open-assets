@@ -30,6 +30,22 @@ x-app: &app
     GIT_SSH_COMMAND: ssh -i /run/private/deploy_key -o UserKnownHostsFile=/run/private/known_hosts -o StrictHostKeyChecking=yes
   networks: [git, publish]
 services:
+  object-cleaner:
+    <<: *app
+    profiles: [maintenance]
+    entrypoint: [python, -m, open_assets.object_retention]
+    command: []
+    restart: 'no'
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 64
+    networks: [publish]
+    environment:
+      OPEN_ASSETS_CONFIG: /config/repositories.yaml
+      S3_ACCESS_KEY_FILE: /run/private/cleaner_access
+      S3_SECRET_KEY_FILE: /run/private/cleaner_secret
+      S3_CA_FILE: /run/private/ca.crt
+    volumes: ['./private/repositories.yaml:/config/repositories.yaml:ro','./private/object-cleaner:/run/private:ro','${DATA_ROOT}/publisher:/state','${DATA_ROOT}/images:/images:ro']
   webhook:
     <<: *app
     command: [serve]

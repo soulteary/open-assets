@@ -40,3 +40,7 @@ OPEN_ASSETS_FRESH_TEST=1 sh tests/e2e/fresh-stack.sh
 objects.py 只用于专用临时网络中的 OtterIO，目标固定为 http://objects-fixture:9000 和 statistics-fixture 桶，必须设置 OPEN_ASSETS_OBJECTS_TEST=1。用临时凭据文件提供 S3_ACCESS_KEY_FILE、S3_SECRET_KEY_FILE；测试容器需能导入候选 open_assets 模块。不要连接生产网络、挂载生产 private 或发布服务端口。
 
 脚本创建 1003 个带中文和特殊字符的主前缀对象、2 个相邻前缀对象、空前缀及范围外对象，检查数量和字节总和。每轮限制 1 页，验证跨轮续采；只在测试内调整尝试时间以模拟间隔，最后确认间隔内重复执行没有列表调用。测试完成后只删除专用测试容器和网络，不执行全局 prune。
+
+## 对象历史清理
+
+object-retention.py 需要 OPEN_ASSETS_OBJECT_RETENTION_TEST=1，仅使用 http://objects-fixture:9000 和 retention-fixture 桶。提供临时 root 与受限清理账号的凭据文件；清理账号只授权该测试桶的 assets/releases 前缀，按 object_retention_setup.iam_policy 生成。脚本验证默认预览、显式应用、重复执行、保护对象内容和越权拒绝，并实测错误 If-Match 的行为。测试时间只通过内部函数参数注入，CLI 没有绕过年龄的选项。所有对象删除仅作用于可销毁的测试实例。

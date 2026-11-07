@@ -1,0 +1,11 @@
+[Unit]
+Description=Preview S3 history retention every six hours
+
+[Timer]
+OnBootSec=25min
+OnUnitInactiveSec=6h
+RandomizedDelaySec=15min
+Unit=open-assets-object-retention.service
+
+[Install]
+WantedBy=timers.target

@@ -28,7 +28,7 @@ https://img-node-name.lab.dev/2026/11/07/logo.png
 https://oss-node-name.lab.dev/attachments/repositories/main-images/releases/<完整SHA>/documents/manual.pdf
 ```
 
-图片地址在下一次成功发布后指向新版本，默认缓存 300 秒。附件地址包含完整 SHA，适合在文章或版本说明中引用；项目不会自动删除历史附件。文档中的 `lab.dev` 是占位域名，不能原样用于生产配置。
+图片地址在下一次成功发布后指向新版本，默认缓存 300 秒。附件地址包含完整 SHA，适合在文章或版本说明中引用；默认不自动删除历史附件，显式启用[对象保留策略](docs/object-retention.md)并执行清理后，过期附件链接会失效。文档中的 `lab.dev` 是占位域名，不能原样用于生产配置。
 
 ## 阅读顺序
 
@@ -113,3 +113,5 @@ python -m unittest discover -s tests -v
 Info 看板提供各仓库本地版本数、占用、保留策略和最近完整清理结果，并提示空间、inode 及发布预留不足。采样范围和阈值配置见 [Info 说明](docs/info.md)。
 
 Info 同时展示仓库的本地容量和 OtterIO 对象数量、逻辑大小。对象统计独立定时采集、分页限速并缓存，页面刷新不会遍历存储；安装与统计边界见 [Info 文档](docs/info.md#otterio-对象统计)。
+
+历史容量管理分为[本地版本保留](docs/retention.md)和[OtterIO 对象保留](docs/object-retention.md)。对象清理默认只预览，使用独立账号，保护当前版本、回滚点、固定版本与在途任务引用。
