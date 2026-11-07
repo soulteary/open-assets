@@ -158,6 +158,23 @@ class Webhook(unittest.TestCase):
                 with request(sig) as response:
                     self.assertEqual(response.status, 202)
                 self.assertEqual(len(list((p / "state/jobs").glob("*.json"))), 1)
+                cfg["resource_limits"] = dict(
+                    queue_active_records=1, queue_total_records=1
+                )
+                cp.write_text(yaml.safe_dump(cfg))
+                with request(sig) as response:
+                    self.assertEqual(response.status, 202)
+                body = body.replace(b"a" * 40, b"b" * 40)
+                sig = hmac.new(b"test-secret", body, hashlib.sha256).hexdigest()
+                with self.assertRaises(urllib.error.HTTPError) as refused:
+                    request(sig)
+                self.assertEqual(refused.exception.code, 503)
+                self.assertEqual(refused.exception.headers["Retry-After"], "60")
+                self.assertEqual(
+                    json.loads(refused.exception.read())["limit"],
+                    "queue_active_records",
+                )
+                self.assertEqual(len(list((p / "state/jobs").glob("*.json"))), 1)
             finally:
                 server.shutdown()
                 server.server_close()

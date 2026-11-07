@@ -3,6 +3,20 @@ state_root: /state
 images_root: /images
 bucket: attachments
 endpoint: http://otterio:9000
+# Global admission budgets. All values are positive integers; bytes are logical.
+# Omitted keys use these defaults. Git virtual-memory limits apply on Linux.
+resource_limits:
+  git_repository_bytes: 2147483648
+  git_total_bytes: 8589934592
+  git_fetch_bytes: 536870912
+  git_min_free_bytes: 536870912
+  git_timeout_seconds: 120
+  git_process_memory_bytes: 536870912
+  git_output_bytes: 8388608
+  scan_entries: 200000
+  queue_active_records: 1000
+  queue_total_records: 10000
+  queue_reserved_bytes: 1073741824
 # Cleanup is opt-in. Per-repository retention values override these defaults.
 retention:
   enabled: false

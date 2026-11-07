@@ -1,5 +1,7 @@
 # 配置说明
 
+Git 拉取和队列准入预算配置在 `private/repositories.yaml` 顶层的 `resource_limits`，缺省也生效。完整参数和变更步骤见[发布资源预算](resource-limits.md)。
+
 ## 配置放在哪里
 
 `.env` 保存 Compose 的镜像引用、DATA_ROOT、节点元数据和应用域名。`private/repositories.yaml` 保存接收器与 Publisher 共同使用的发布规则。`private/stargate.env`、密钥、CA 和 OC alias 也属于私有运行配置，不提交 Git。

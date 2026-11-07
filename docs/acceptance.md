@@ -2,6 +2,18 @@
 
 This file records checks performed at each implementation stage. Counts and component versions belong to their respective stage; documentation-only revisions do not imply a new production acceptance run.
 
+## Publication resource budgets — 2026-11-08
+
+- 215 Python tests pass in a network-isolated Linux container with a read-only root and 256 MiB memory limit; 21 UI tests and Ruff checks also pass. Coverage includes concurrent queue admission, deduplication at capacity, archived/quarantined record budgets, HTTP 503 with Retry-After, Git output/time limits and an actual refused transfer retaining the prior source ref.
+- A disposable Git/OtterIO instance publishes a 96 MiB incompressible file, repeats publication against existing objects and verifies complete streamed readback. The test container has a 384 MiB memory limit and includes the simulated source Git packing processes. Publisher peak RSS is 58,101,760 bytes (55.4 MiB), below the single-file size of 100,663,296 bytes. This is Publisher RSS, not total deployment memory.
+- The earlier 192 MiB combined fixture budget killed source-side pack-objects before upload. The production host was not used for exhaustion testing. Source Git/Gitea packing and aggregate container memory remain separate operational limits.
+- The real isolated restore suite also passes object/metadata verification, interruption retry, local reconstruction, explicit rollback, read-only checks, closure, audit archival and cached Info observations without changing original jobs.
+- Deployment first backs up application and Publisher/Info state, then recreates only Publisher, Webhook and Info. Private configuration, credentials, CA and the five other application container identities are unchanged; existing Traefik certificate configuration is retained.
+- Eight focused tests pass against the deployed image. A real signed SSH Push reaches published in the dedicated acceptance repository; corrupt/missing inactive images are refused, valid rollback/roll-forward works, and the historical attachment remains readable. Temporary personal Push credentials are revoked.
+- Live CLI discovery/doctor/status/link checks pass. Public image/attachment byte and Range checks, all four management authentication routes and the fresh Info snapshot pass.
+
+Budget configuration and refusal handling are documented in [resource-limits.md](resource-limits.md). Directory checks are periodic logical budgets, not strict filesystem quotas; Git address-space limits apply per process, not to all service memory. No automatic task deletion, Git history pruning or business object deletion was enabled.
+
 Platform: Ubuntu Linux amd64, single host, Docker Compose. Public examples use lab.dev; production identifiers and credentials are excluded.
 
 Initial deployment versions: OtterIO RELEASE.2026-10-28T07-52-43Z; OC RELEASE.2026-10-28T07-34-44Z; Stargate 1.2.7; Gitea 28.0.0-rootless; Traefik 3.7.13; Nginx 1.28. The current example environment has since been updated; the upgrade section below records the later baseline.

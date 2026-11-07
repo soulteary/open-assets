@@ -2,6 +2,8 @@
 
 Open Assets 将 Gitea 仓库中的文件发布到 OtterIO 和 Nginx。开发者通过 SSH Push 更新内容；发布程序导出指定提交的 `public/`，把附件保存到带 commit SHA 的对象路径，再切换图片服务的当前版本。
 
+发布默认启用 Git 拉取、缓存与队列总量预算，普通发布以文件流上传并分块读回校验。配置和限制触发后的处理见[发布资源预算](docs/resource-limits.md)。
+
 项目适用于自己维护图片、文档和下载文件的单机环境。它包含发布程序、仓库接入 CLI、Docker Compose 配置，以及接入现有 Traefik 的脚本。许可证为 [Apache-2.0](LICENSE)。
 
 Info 看板通过 Stargate 查看组件健康、CPU/内存、磁盘、证书到期时间和最近压测结果。容器带健康检查；宿主机可以按冷却时间与次数上限重启持续不健康的服务。网页容器只读快照，不持有 Docker 管理权限。

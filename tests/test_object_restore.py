@@ -75,6 +75,7 @@ class ObjectRestore(unittest.TestCase):
         self.images = self.root / "images"
         self.images.mkdir()
         self.config = dict(
+            resource_limits=dict(git_min_free_bytes=1),
             state_root=str(self.state),
             images_root=str(self.images),
             endpoint="http://fixture:9000",
@@ -303,8 +304,10 @@ class ObjectRestore(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.run_restore()
         core.atomic(manifest, self.manifests[0])
+        from open_assets.resources import ResourceLimit
+
         with patch("shutil.disk_usage", return_value=SimpleNamespace(free=0)):
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ResourceLimit):
                 self.run_restore()
         manifest.unlink()
         with self.assertRaises(FileNotFoundError):
@@ -678,6 +681,7 @@ class ObjectRestore(unittest.TestCase):
         self.assertEqual((self.state / "published/assets").read_bytes(), before)
 
     def test_local_mode_reserves_three_times_quota_without_filling_disk(self):
+        self.config["resource_limits"] = dict(git_min_free_bytes=1)
         quota = self.config["repositories"][0]["max_bytes"]
         with patch("shutil.disk_usage", return_value=SimpleNamespace(free=quota * 2)):
             with self.assertRaises(ValueError):

@@ -20,6 +20,7 @@ class Recovery(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.c = dict(
+            resource_limits=dict(git_min_free_bytes=1),
             state_root=str(self.root / "state"),
             images_root=str(self.root / "images"),
             revision="fixture",
@@ -265,7 +266,7 @@ class Recovery(unittest.TestCase):
                 return dict(Body=io.BytesIO(self.objects[Key]))
 
             def put_object(self, Bucket, Key, Body, **kwargs):
-                self.objects[Key] = Body
+                self.objects[Key] = Body.read() if hasattr(Body, "read") else Body
 
         store = Store()
         versions = []

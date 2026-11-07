@@ -13,7 +13,7 @@ Git SSH 默认使用 2222，个人公钥需添加到 Gitea 账号并拥有仓库
 查看 Gitea 仓库设置中的 Webhook 最近投递：
 
 - 403：检查 Gitea 类型 Push 事件、仓库实际 ID、refs/heads 分支、enabled 和 Secret；Secret 必须与私有文件一致。
-- 503：接收器处理失败，例如配置不可读或队列写入失败；检查容器状态、配置、目录权限和磁盘。
+- 503：接收器处理失败或资源预算拒绝。响应包含 `resource_limit` 时，按[发布资源预算](resource-limits.md)检查容量，再重投事件；其他情况检查配置、目录权限和磁盘。
 - 连接失败：确认 webhook 与 Gitea 在同一内部网络，Gitea 允许 webhook 目标，不要改成公网接收器。
 - 202：任务已入队。按仓库 key 和 SHA 查询 status，不只看 Gitea 的“投递成功”。
 
@@ -23,7 +23,8 @@ Git SSH 默认使用 2222，个人公钥需添加到 Gitea 账号并拥有仓库
 
 先看任务 JSON 的 error 类型，再检查相关服务。程序有意不保存原始请求和完整异常：
 
-- CalledProcessError：Git 初始化、拉取或提交历史检查失败；检查固定 remote、只读 Deploy Key 和 known_hosts。
+- ResourceLimit：检查任务的 `resource_limit` 代码及[预算说明](resource-limits.md)，解除原因后再 retry。
+- CalledProcessError：Git 初始化、拉取或提交历史检查失败；检查固定 remote、只读 Deploy Key、known_hosts 和进程资源限额。
 - ValueError：可能是路径、图片扩展名、LFS、大小/数量限制、空发布、缺少 images、不可变版本冲突或空间预留不足；该类型不能单独确定具体原因。
 - ClientError 等存储异常：检查内部 HTTPS/CA、发布账号是否启用以及目标前缀权限。
 - PermissionError / OSError：核对数据目录所属 UID、挂载和磁盘状态。

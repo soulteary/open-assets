@@ -57,6 +57,9 @@ def load(path=None):
     """Read and validate the shared configuration; paths are container paths."""
     raw = P(path or CONFIG).read_bytes()
     c = yaml.safe_load(raw)
+    from .resources import policy
+
+    policy(c)
     if c.get("schema_version") != 1:
         raise ValueError("unsupported schema")
     keys = set()
@@ -114,13 +117,18 @@ def repo(c, key):
     return r
 
 
-def git(path, *args):
-    return subprocess.check_output(
-        ["git", "--git-dir", str(path), *args], stderr=subprocess.PIPE, timeout=120
-    )
+def git(path, *args, c=None):
+    from .resources import run_git
+
+    return run_git(path, list(args), c)
 
 
 def enqueue(c, key, sha, delivery, kind="auto"):
+    with lock(c, "queue"):
+        return _enqueue(c, key, sha, delivery, kind)
+
+
+def _enqueue(c, key, sha, delivery, kind="auto"):
     """Deduplicate by repository/SHA/kind without resetting an existing failure."""
     repo(c, key)
     if not SHA.fullmatch(sha) or sha == "0" * 40:
@@ -130,7 +138,15 @@ def enqueue(c, key, sha, delivery, kind="auto"):
     from .retention import archive_path
 
     archived = archive_path(c, jid)
-    if not path.exists() and not archived.exists() and not archived.is_symlink():
+    if (
+        not path.exists()
+        and not path.is_symlink()
+        and not archived.exists()
+        and not archived.is_symlink()
+    ):
+        from .resources import admit_queue
+
+        admit_queue(c)
         atomic(
             path,
             dict(
@@ -195,7 +211,11 @@ def export(c, r, g, sha, dest, check=None):
     Image checks use extensions, not file signatures. Other public files are
     attachments and remain subject to the same path and size limits.
     """
-    entries = git(g, "ls-tree", "-rz", sha, "--", r["source_directory"]).split(b"\0")
+    from .resources import run_git
+
+    entries = run_git(
+        g, ["ls-tree", "-rz", sha, "--", r["source_directory"]], c, check=check
+    ).split(b"\0")
     files = []
     total = 0
     reserved = {
@@ -221,17 +241,12 @@ def export(c, r, g, sha, dest, check=None):
             and rel.parts[1] in reserved
         ):
             raise ValueError("reserved URL prefix")
-        size = int(git(g, "cat-file", "-s", oid.decode()))
+        size = int(run_git(g, ["cat-file", "-s", oid.decode()], c, check=check))
         if size > r.get("max_file_bytes", 104857600):
             raise ValueError("file limit exceeded")
-        data = git(g, "cat-file", "blob", oid.decode())
-        if data.startswith(b"version https://git-lfs.github.com/spec/v1"):
-            raise ValueError("LFS unsupported")
-        total += len(data)
-        if (
-            len(data) > r.get("max_file_bytes", 104857600)
-            or total > r.get("max_bytes", 1073741824)
-            or len(files) >= r.get("max_files", 10000)
+        total += size
+        if total > r.get("max_bytes", 1073741824) or len(files) >= r.get(
+            "max_files", 10000
         ):
             raise ValueError("publication limit exceeded")
         if rel.parts[0] == "images" and rel.suffix.lower() not in {
@@ -246,14 +261,33 @@ def export(c, r, g, sha, dest, check=None):
             raise ValueError("image format not allowed")
         out = dest / rel
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_bytes(data)
-        with out.open("rb") as syncfile:
-            os.fsync(syncfile.fileno())
+        with out.open("wb") as stream:
+            run_git(
+                g, ["cat-file", "blob", oid.decode()], c, output=stream, check=check
+            )
+            stream.flush()
+            os.fsync(stream.fileno())
+        digest = hashlib.sha256()
+        actual_size = 0
+        with out.open("rb") as stream:
+            first = True
+            while block := stream.read(1024 * 1024):
+                if check is not None:
+                    check()
+                if first and block.startswith(
+                    b"version https://git-lfs.github.com/spec/v1"
+                ):
+                    raise ValueError("LFS unsupported")
+                first = False
+                actual_size += len(block)
+                digest.update(block)
+        if actual_size != size:
+            raise ValueError("Git blob size mismatch")
         files.append(
             dict(
                 path=rel.as_posix(),
-                size=len(data),
-                sha256=hashlib.sha256(data).hexdigest(),
+                size=size,
+                sha256=digest.hexdigest(),
                 content_type=mimetypes.guess_type(path)[0]
                 or "application/octet-stream",
             )
@@ -441,6 +475,8 @@ def publish(c, j):
     A failure may leave uploaded objects or staging data. Never compensate by
     deleting them: a preceding attempt may already have made them readable.
     """
+    from .resources import fetch, verify_body
+
     r = repo(c, j["key"])
     state = P(c["state_root"])
     g = state / "git" / r["key"]
@@ -449,18 +485,12 @@ def publish(c, j):
         subprocess.run(
             ["git", "init", "--bare", str(g)], check=True, stdout=subprocess.DEVNULL
         )
-    git(
-        g,
-        "fetch",
-        "--no-tags",
-        r["remote"],
-        "+refs/heads/" + r["branch"] + ":refs/heads/source",
-    )
-    head = git(g, "rev-parse", "refs/heads/source").decode().strip()
+    fetch(c, r, g)
+    head = git(g, "rev-parse", "refs/heads/source", c=c).decode().strip()
     if j["kind"] == "auto" and head != j["sha"]:
         j["status"] = "superseded"
         return
-    git(g, "merge-base", "--is-ancestor", j["sha"], head)
+    git(g, "merge-base", "--is-ancestor", j["sha"], head, c=c)
     if shutil.disk_usage(c["images_root"]).free < r.get("max_bytes", 1073741824) * 2:
         raise ValueError("insufficient staging capacity")
     base = P(c["images_root"]) / "repos" / r["key"]
@@ -468,33 +498,28 @@ def publish(c, j):
     staging = P(tempfile.mkdtemp(prefix=".staging-", dir=base))
     try:
         files = export(c, r, g, j["sha"], staging)
-        s = s3client(c)
+        s = s3client(c, bounded=True)
         prefix = f"repositories/{r['key']}/releases/{j['sha']}/"
         for item in files:
-            data = (staging / item["path"]).read_bytes()
             key = prefix + item["path"]
             try:
-                # ETag is not a content hash for all S3 upload modes. Compare bytes.
-                existing = s.get_object(Bucket=c["bucket"], Key=key)["Body"].read()
+                existing = s.get_object(Bucket=c["bucket"], Key=key)
             except s.exceptions.NoSuchKey:
                 existing = None
-            if (
-                existing is not None
-                and hashlib.sha256(existing).hexdigest() != item["sha256"]
-            ):
-                raise ValueError("immutable object conflict")
-            if existing is None:
-                s.put_object(
-                    Bucket=c["bucket"],
-                    Key=key,
-                    Body=data,
-                    ContentType=item["content_type"],
-                    CacheControl="public, max-age=31536000, immutable",
-                    Metadata={"sha256": item["sha256"]},
-                )
-            actual = s.get_object(Bucket=c["bucket"], Key=key)["Body"].read()
-            if hashlib.sha256(actual).hexdigest() != item["sha256"]:
-                raise ValueError("object verification failed")
+            if existing is not None:
+                verify_body(existing["Body"], item)
+            else:
+                with (staging / item["path"]).open("rb") as stream:
+                    s.put_object(
+                        Bucket=c["bucket"],
+                        Key=key,
+                        Body=stream,
+                        ContentLength=item["size"],
+                        ContentType=item["content_type"],
+                        CacheControl="public, max-age=31536000, immutable",
+                        Metadata={"sha256": item["sha256"]},
+                    )
+            verify_body(s.get_object(Bucket=c["bucket"], Key=key)["Body"], item)
         manifest = dict(key=r["key"], sha=j["sha"], files=files, config=c["revision"])
         from .object_retention import restoration_record
 
@@ -502,12 +527,7 @@ def publish(c, j):
         atomic(state / "manifests" / r["key"] / (j["sha"] + ".json"), manifest)
         final = base / "releases" / j["sha"]
         if final.exists():
-            for item in files:
-                if (
-                    hashlib.sha256((final / item["path"]).read_bytes()).hexdigest()
-                    != item["sha256"]
-                ):
-                    raise ValueError("local immutable conflict")
+            verify_tree(final, files)
         else:
             sync_tree(staging)
             os.rename(staging, final)
@@ -526,16 +546,11 @@ def publish(c, j):
             os.rename(image_tmp, image_final)
         # Recheck before activation. A Push can still race after this check;
         # Git head and the filesystem link do not share a commit boundary.
-        git(
-            g,
-            "fetch",
-            "--no-tags",
-            r["remote"],
-            "+refs/heads/" + r["branch"] + ":refs/heads/source",
-        )
+        fetch(c, r, g)
         if (
             j["kind"] == "auto"
-            and git(g, "rev-parse", "refs/heads/source").decode().strip() != j["sha"]
+            and git(g, "rev-parse", "refs/heads/source", c=c).decode().strip()
+            != j["sha"]
         ):
             j["status"] = "superseded"
             return
@@ -611,6 +626,11 @@ def queue_notice(event, error):
 
 
 def quarantine_job(c, path, error):
+    with lock(c, "queue"):
+        _quarantine_job(c, path, error)
+
+
+def _quarantine_job(c, path, error):
     folder = P(c["state_root"]) / "quarantine" / uuid.uuid4().hex
     folder.mkdir(parents=True, mode=0o700)
     os.replace(path, folder / "record")
@@ -674,6 +694,10 @@ def work_once(c, heartbeat=None):
                     publish(c, j)
                 except Exception as error:
                     j.update(status="failed", error=type(error).__name__)
+                    from .resources import ResourceLimit
+
+                    if isinstance(error, ResourceLimit):
+                        j["resource_limit"] = str(error)
                 atomic(path, j)
             except OSError as error:
                 queue_notice("job-state-write-failed", error)
@@ -751,13 +775,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             )
             if payload["ref"] != "refs/heads/" + r["branch"]:
                 raise ValueError()
-            with lock(c, "queue"):
-                jid = enqueue(
-                    c,
-                    r["key"],
-                    payload["after"],
-                    self.headers.get("X-Gitea-Delivery", ""),
-                )
+            jid = enqueue(
+                c,
+                r["key"],
+                payload["after"],
+                self.headers.get("X-Gitea-Delivery", ""),
+            )
             # enqueue() has fsynced the task and directory before acknowledging.
             self.send_response(202)
             self.end_headers()
@@ -765,9 +788,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (ValueError, KeyError, StopIteration, json.JSONDecodeError):
             self.send_response(403)
             self.end_headers()
-        except Exception:
+        except Exception as error:
+            from .resources import ResourceLimit
+
             self.send_response(503)
+            self.send_header("Retry-After", "60")
             self.end_headers()
+            if isinstance(error, ResourceLimit):
+                self.wfile.write(
+                    json.dumps(
+                        {"error": "resource_limit", "limit": str(error)}
+                    ).encode()
+                )
 
 
 def main():
@@ -790,10 +822,15 @@ def main():
         )
         raise SystemExit(130) from None
     except Exception as error:
+        from .resources import ResourceLimit
+
         print(
             json.dumps(
                 dict(
                     status="failed",
+                    resource_limit=str(error)
+                    if isinstance(error, ResourceLimit)
+                    else None,
                     command=o.command,
                     error=type(error).__name__,
                     hint="先核对仓库 key/任务 ID，并在宿主机运行 scripts/open-assets doctor；原始异常不输出。",
@@ -855,8 +892,7 @@ def execute(a, o):
     elif o.command == "once":
         work_once(c)
     elif o.command == "publish":
-        with lock(c, "queue"):
-            print(enqueue(c, *o.args, "manual", kind="manual"))
+        print(enqueue(c, *o.args, "manual", kind="manual"))
     elif o.command == "restore-objects":
         if len(o.args) != 2:
             a.error("restore-objects requires a repository key and full commit SHA")
@@ -942,6 +978,7 @@ def execute(a, o):
             if j["status"] != "failed":
                 raise ValueError("only failed jobs may retry")
             j["status"] = "pending"
+            j.pop("resource_limit", None)
             atomic(p, j)
     elif o.command == "rollback-images":
         rollback_images(c, *o.args)
@@ -970,7 +1007,10 @@ def execute(a, o):
                 continue
             if o.status_sha and j["sha"] != o.status_sha:
                 continue
-            print(j["id"], j["key"], j["sha"], j["status"])
+            values = [j["id"], j["key"], j["sha"], j["status"]]
+            if j.get("resource_limit") and j["status"] == "failed":
+                values.append(j["resource_limit"])
+            print(*values)
 
 
 if __name__ == "__main__":

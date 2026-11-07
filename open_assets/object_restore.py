@@ -256,17 +256,13 @@ def restore_locked(config, repository, sha, report, s3, budget):
         )
     report["phase"] = "git"
     budget.check()
-    core.git(
-        git_dir,
-        "fetch",
-        "--no-tags",
-        repository["remote"],
-        "+refs/heads/" + repository["branch"] + ":refs/heads/source",
-    )
+    from .resources import fetch
+
+    fetch(config, repository, git_dir, check=budget.check)
     budget.check()
-    if core.git(git_dir, "cat-file", "-t", sha).strip() != b"commit":
+    if core.git(git_dir, "cat-file", "-t", sha, c=config).strip() != b"commit":
         raise ValueError("restoration target must be a commit")
-    core.git(git_dir, "merge-base", "--is-ancestor", sha, "refs/heads/source")
+    core.git(git_dir, "merge-base", "--is-ancestor", sha, "refs/heads/source", c=config)
     quota = repository.get("max_bytes", 1073741824)
     if (
         type(quota) is not int
