@@ -316,6 +316,10 @@ def main():
         (checkout / "public/images").mkdir(parents=True)
         (checkout / "public/documents").mkdir()
         (checkout / "public/images/图片 +%.png").write_bytes(png)
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>'
+        dated = checkout / "public/images/2026/10/10/image.svg"
+        dated.parent.mkdir(parents=True)
+        dated.write_bytes(svg)
         body = ("Fresh deployment: " + key_name + "\n").encode()
         (checkout / "public/documents/manual.txt").write_bytes(body)
         import re
@@ -370,6 +374,15 @@ def main():
         )
         assert urllib.request.urlopen(image_url, context=context).read() == png
         assert urllib.request.urlopen(object_url, context=context).read() == body
+        svg_url = "https://" + domains["img"] + "/" + mount + "2026/10/10/image.svg"
+        with urllib.request.urlopen(svg_url, context=context) as response:
+            assert response.read() == svg
+            assert response.headers.get_content_type() == "image/svg+xml"
+            assert response.headers["X-Content-Type-Options"] == "nosniff"
+            assert "sandbox" in response.headers["Content-Security-Policy"]
+            assert "default-src 'none'" in response.headers["Content-Security-Policy"]
+        with urllib.request.urlopen(object_url, context=context) as response:
+            assert "sandbox" in response.headers["Content-Security-Policy"]
         request = urllib.request.Request(image_url, headers={"Range": "bytes=0-7"})
         with urllib.request.urlopen(request, context=context) as response:
             assert response.status == 206 and response.read() == png[:8]
@@ -412,6 +425,7 @@ def main():
             "explicit image rollback and return",
             "HTTPS object bytes",
             "encoded image path",
+            "dated SVG image MIME bytes and CSP",
             "Range",
             "management authentication",
         ],

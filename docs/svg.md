@@ -1,13 +1,28 @@
-# SVG 使用范围
+# SVG 图片发布
 
-| 路径 | 当前行为 | 访问方式 |
-| --- | --- | --- |
-| Git `public/images/diagram.svg`（含大写扩展名） | 拒绝，`image format not allowed` | 无固定图片链接 |
-| Git `public/diagram.svg` | 作为附件原样发布；版本仍须含至少一张允许格式的图片 | 包含 SHA 的版本对象链接，MIME 为 `image/svg+xml` |
-| OC 网页上传 | 独立对象存储上传，不调用 Git 格式白名单；本轮未实测部署中的 OC SVG 预览 | 桶/前缀策略允许的对象链接；预览和响应头须实测 |
+支持 `public/images/2026/10/10/image.svg`，初始根图片仓库的固定地址是：
 
-因此当前不能宣称“Git 图片发布支持 SVG”。普通附件或网页对象能保存 SVG 字节，也不代表图片固定链接、网页预览、内容净化和安全策略均已支持。
+```text
+https://<图片域名>/2026/10/10/image.svg
+```
 
-发布器不执行 SVG 净化。SVG 可包含脚本、事件、外部引用和嵌入内容；把它放到附件路径不会消除这些内容。仅由可信发布者上传准备公开的文件，资源域名与管理域名分离，避免跨域共享认证 Cookie。需要展示流程图时，目前可将 SVG 作为版本附件；需要固定图片地址则导出 PNG/WebP。
+其他仓库在该路径前添加其 mount_path。日期目录不限制文件类型；旧版本拒绝 SVG 是发布器的图片扩展名白名单所致，Gitea 与对象存储本身能保存 SVG 字节。
 
-若下一步要正式支持 SVG 图片，需要单独实现并验证：受限的 SVG/XML 解析和资源预算、主动内容与外部引用策略、准确 MIME、CSP 与 nosniff 响应头，以及 Git、恢复、网页上传和浏览器展示的端到端测试。只往扩展名白名单添加 `.svg` 不满足这些要求。
+## 内容约束
+
+Git 发布对所有 `.svg`（包括附件及大写扩展名）执行验证，不改写原字节：UTF-8、最多 2 MiB、20,000 个元素、128 层深度，根节点须带 SVG 命名空间。拒绝 DTD/实体声明、非 XML 声明的处理指令、非 SVG 元素、script/foreignObject 等主动元素、on* 事件属性以及外部 href/xlink:href。允许片段引用 `#id` 与内嵌 PNG/JPEG/GIF/WebP/AVIF 的 base64 图片，支持常规形状、路径、文字、内联样式和渐变。
+
+这是一套受限静态图片协议，不是任意 SVG 应用或通用净化器。带外部字体、外链图片、HTML foreignObject 或编辑器专用 XML 节点的文件可能需要导出为普通静态 SVG。XML 校验不渲染图片，也不替代浏览器测试。
+
+公开图片响应和 OSS 路由设置 `X-Content-Type-Options: nosniff` 与沙箱 CSP：禁用脚本、外部加载、表单及框架嵌入；允许内联样式及 data 图片。CSS 外部 url/@import 不会被当作可信资源加载。需要在正文中展示时使用 `<img src="...">`，不依赖 iframe/object 或脚本。图片入口 MIME 为 `image/svg+xml`。CSP 同时限制公开附件中的主动 HTML，可能改变原有交互附件行为。
+
+网页 OC 上传绕过 Git 验证，不保证上传内容符合上述静态子集。公开 uploads 路由也应引用 `public-assets@file` 中间件；管理界面预览、直连 S3、自定义绕过入口的 URL 不在此响应策略保证内。仅向可信发布者授权，资源域名与管理域名分离，不共享认证 Cookie。
+
+## 升级
+
+1. 更新并重建 Publisher/Webhook；重新生成 Nginx 图片配置、执行 nginx 配置检查后 reload。
+2. 重新运行 configure-edge.py 生成入口路由并由 file provider 加载，使公开 OSS 路由使用 public-assets 策略；保持既有域名、私有 CA 和定制配置。
+3. 已配置网页公开分享的部署，在独立 uploads 路由中增加 `middlewares: [public-assets@file]`；先更新提供该中间件的主路由文件。
+4. 上传后核对字节、Content-Type、nosniff 与 CSP，再检查正文 `<img>` 展示。
+
+仅更新 Python 白名单而不更新公开响应配置，不是完整升级。旧历史版本不会自动重写；包含新验证规则不接受的 SVG 附件，重新发布或从 Git 恢复时会被拒绝，需先生成符合规则的新版本。

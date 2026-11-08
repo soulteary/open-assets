@@ -250,6 +250,11 @@ def export(c, r, g, sha, dest, check=None):
         size = int(run_git(g, ["cat-file", "-s", oid.decode()], c, check=check))
         if size > r.get("max_file_bytes", 104857600):
             raise ValueError("file limit exceeded")
+        if rel.suffix.lower() == ".svg":
+            from .svg import MAX_BYTES
+
+            if size > MAX_BYTES:
+                raise ValueError("SVG size limit exceeded")
         total += size
         if total > r.get("max_bytes", 1073741824) or len(files) >= r.get(
             "max_files", 10000
@@ -263,6 +268,7 @@ def export(c, r, g, sha, dest, check=None):
             ".webp",
             ".avif",
             ".ico",
+            ".svg",
         }:
             raise ValueError("image format not allowed")
         out = dest / rel
@@ -273,6 +279,10 @@ def export(c, r, g, sha, dest, check=None):
             )
             stream.flush()
             os.fsync(stream.fileno())
+        if rel.suffix.lower() == ".svg":
+            from .svg import validate
+
+            validate(out)
         digest = hashlib.sha256()
         actual_size = 0
         with out.open("rb") as stream:
@@ -719,6 +729,8 @@ def work_once(c, heartbeat=None):
 
 def render(c, directory):
     """Write a candidate Nginx file; the caller owns validation and reload."""
+    from .svg import CSP
+
     directory = P(directory)
     directory.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -726,6 +738,7 @@ def render(c, directory):
         "default_type application/octet-stream;",
         "server { listen 8080; server_tokens off; autoindex off; open_file_cache off;",
         "add_header X-Content-Type-Options nosniff always;",
+        f'add_header Content-Security-Policy "{CSP}" always;',
         'add_header Cache-Control "public, max-age=300, must-revalidate";',
         "location ~ (^|/)\\. { deny all; }",
     ]

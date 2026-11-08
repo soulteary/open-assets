@@ -3,6 +3,10 @@
 import argparse
 import json
 import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from open_assets.svg import CSP  # noqa: E402
 
 p = argparse.ArgumentParser()
 p.add_argument("--domains", required=True)
@@ -45,6 +49,8 @@ for key, service in [
         "service": service,
         "tls": {"certResolver": "le"},
     }
+    if key == "oss":
+        routers[key]["middlewares"] = ["public-assets"]
     if key in ["git", "storage", "traefik", "info"]:
         routers[key]["middlewares"] = ["console-auth", "console-gzip"]
 # This exact endpoint must reach Stargate before a host-only session exists.
@@ -80,6 +86,14 @@ config = {
         "routers": routers,
         "services": services,
         "middlewares": {
+            "public-assets": {
+                "headers": {
+                    "customResponseHeaders": {
+                        "Content-Security-Policy": CSP,
+                        "X-Content-Type-Options": "nosniff",
+                    }
+                }
+            },
             "console-gzip": {
                 "compress": {
                     "encodings": ["gzip"],
