@@ -370,13 +370,26 @@ def collect(root, refresh_storage=False):
     )
     from .restore_info import summary as restore_summary
 
-    result["restorations"] = restore_summary(root, data_root)
+    evidence = {
+        name: {}
+        for name in ("restorations", "restoration_checks", "restoration_closures")
+    }
+    result["restorations"] = restore_summary(
+        root, data_root, evidence=evidence["restorations"]
+    )
     from .restore_check_info import summary as check_summary
 
-    result["restoration_checks"] = check_summary(root, data_root)
+    result["restoration_checks"] = check_summary(
+        root, data_root, evidence=evidence["restoration_checks"]
+    )
     from .restore_close_info import summary as close_summary
 
-    result["restoration_closures"] = close_summary(root, data_root)
+    result["restoration_closures"] = close_summary(
+        root, data_root, evidence=evidence["restoration_closures"]
+    )
+    from .reminder_info import annotate
+
+    annotate(result, evidence)
     from .audit_info import summary as audit_summary
 
     result["restoration_audits"] = audit_summary(root, data_root)

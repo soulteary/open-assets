@@ -1,6 +1,8 @@
 """Filtered snapshots of explicit restoration checks; never rerun verification."""
 
 import os
+import hashlib
+import json
 import re
 import stat
 import time
@@ -10,7 +12,7 @@ import yaml
 from .object_info import scope
 from .object_retention import bucket_scope
 from .restore_check import CHECKS, fingerprint, reference_fingerprint
-from .storage_info import finite_time, read_json
+from .storage_info import finite_time, read_json, read_bytes
 
 MAX_REPORTS = 512
 SCAN_SECONDS = 2
@@ -104,7 +106,7 @@ def clean(value, key, sha):
     return result
 
 
-def summary(root, data_root, now=None):
+def summary(root, data_root, now=None, evidence=None):
     now = time.time() if now is None else now
     try:
         config, keys, _ = scope(root / "private/repositories.yaml")
@@ -141,15 +143,16 @@ def summary(root, data_root, now=None):
                             continue
                         if not re.fullmatch(r"[0-9a-f]{40}\.json", entry.name):
                             raise ValueError("unexpected check entry")
-                        value = read_json(directory / entry.name, 16384)
+                        raw = read_bytes(directory / entry.name, 16384)
+                        value = json.loads(raw)
                         record = clean(value, key, entry.name[:-5])
                         if (
                             latest is None
                             or record["started_at"] > latest[0]["started_at"]
                         ):
-                            latest = (record, value)
+                            latest = (record, value, hashlib.sha256(raw).hexdigest())
                 if latest:
-                    record, value = latest
+                    record, value, report_digest = latest
                     sha = value["sha"]
                     record["scope_changed"] = value.get("scope_digest") != digest
                     record["age_seconds"] = max(
@@ -175,6 +178,12 @@ def summary(root, data_root, now=None):
                     except (OSError, ValueError, TypeError, KeyError, RecursionError):
                         record["observation_unavailable"] = True
                     row.update(result_status="ok", attempt=record)
+                    if evidence is not None:
+                        evidence[key] = dict(
+                            sha=sha,
+                            report_digest=report_digest,
+                            source_digest=value.get("source_report_digest"),
+                        )
         except (
             OSError,
             ValueError,

@@ -165,16 +165,63 @@ function initializeDetailTabs() {
   selectDetailTab(detailTabs.includes(fromHash) ? fromHash : activeDetailTab);
   globalThis.addEventListener?.('hashchange',()=>{const key=globalThis.location?.hash.slice(1);if(detailTabs.includes(key))selectDetailTab(key);});
 }
+function repairResolved(row,data) {
+  const healthy=(data.components||[]).some(c=>c.service===row.service&&c.state==='running'&&c.health==='healthy'&&['ok','healthy','not-probed'].includes(c.probe));
+  return !data.stale&&row.result==='failed'&&healthy&&(data.repairs||[]).some(r=>r.service===row.service&&r.time>row.time&&r.time<=data.collected_at-data.collection_seconds&&r.result==='restarted');
+}
+function recordState(row,kind,data={}) {
+  if(data.stale)return 'active';
+  if(row.result_status==='never')return 'none';
+  if(row.result_status!=='ok'||!row.attempt)return 'active';
+  if(['active','resolved','historical','none'].includes(row.reminder?.state))return row.reminder.state;
+  const a=row.attempt,stable=!['scope_changed','source_changed','manifest_changed','observation_unavailable'].some(k=>a[k]);
+  if(kind==='check'&&a.status==='complete'&&a.diagnosis==='verified'&&stable&&!a.source_uncertain)return a.references_changed||a.stale?'historical':'none';
+  if(kind==='close'&&a.status==='closed'&&stable)return 'resolved';
+  if(kind==='restore'&&a.status==='complete'&&!a.uncertain&&!a.scope_changed)return 'none';
+  return 'active';
+}
+function recordGuidance(tr,row,kind,data) {
+  const state=recordState(row,kind,data),a=row.attempt||{},key=/^[a-z][a-z0-9-]{0,47}$/.test(row.key)?row.key:'KEY';
+  const td=tr.children[tr.children.length-1];
+  const command='sudo ./scripts/open-assets ',check=command+'check-restore '+key+' FULL_SHA';
+  let title='',notes=[],commands=[];
+  if(state==='resolved'){
+    title=row.reminder?.reason==='later-verified'?'已处理：后续核对通过，原失败记录保留':'已处理：已显式结案，原始记录保留';
+    notes=['结案覆盖对应原恢复，不表示当前数据永久有效；无需重复结案。'];
+  }else if(state==='historical'){
+    title=row.reminder?.reason==='close-not-needed'?'历史记录：原恢复已完成，无需结案':'历史记录：当时核对通过，不代表当前状态';
+    notes=['不是新的失败，也不能据此宣称已修复。需要确认当前状态时可重新核对。'];commands=[check];
+  }else if(state==='active'){
+    title='待处理：先核对证据，再决定操作';
+    if(data.stale||row.result_status!=='ok'||!row.attempt){notes=['先运行 doctor，检查 Info 采集日志和报告读取错误；不要用旧结果判断已修复。'];commands=[command+'doctor'];}
+    else if(row.reminder?.reason==='needs-close'||(kind==='check'&&a.diagnosis==='verified'&&a.source_uncertain&&!['stale','references_changed','source_changed','scope_changed','manifest_changed','observation_unavailable'].some(k=>a[k]))){
+      notes=['数据核对通过，但原恢复仍未结案或不确定。人工复核后显式结案；命令会重新完整核对，不直接采纳缓存。'];commands=[command+'close-restore '+key+' FULL_SHA --reason "填写人工复核原因"'];
+    }else{
+      notes=['先重新核对对应版本，逐项查看失败原因。锁忙时等待已有任务结束；不要删除锁或原始报告。'];commands=[check];
+      if(kind==='check'&&['objects','full','images','barrier'].some(k=>a.checks?.[k]&&a.checks[k].status!=='ok')){
+        notes.push('确认对象或副本缺失后可从 Git 恢复；遇到内容冲突先调查，不强制覆盖。默认不切换版本。');commands.push(command+'restore-objects '+key+' FULL_SHA --with-local');
+      }
+      if(kind==='check'&&a.checks?.references?.status!=='ok')notes.push('current/published 不一致时先检查可信清单和切换记录，不手工改写其中一个文件来消除提示。');
+      if(kind==='close')notes.push('核对通过且原恢复符合结案条件后，才运行 close-restore；已完整完成的恢复无需结案。');
+      if(a.scope_changed||a.source_changed||a.manifest_changed)notes.push('配置或原始证据已变化，先确认应处理的那次恢复；旧结案不覆盖新尝试。');
+    }
+  }
+  if(title)td.append(el('strong',title,'record-state'));
+  for(const note of notes)td.append(el('small',note,'storage-detail'));
+  for(const text of commands)td.append(el('code',text,'action-command'));
+  if(commands.some(c=>c.includes('FULL_SHA')))td.append(el('small','FULL_SHA 须替换为这条报告对应的完整提交：在服务器 publisher/object-restores、restore-checks 或 restore-closures 对应仓库的私有报告中核对，不能直接使用当前 HEAD。','storage-detail'));
+  if(state==='active')tr.className='warning';else if(state==='resolved'||state==='historical')tr.className='record-resolved';else tr.className='';
+}
 function renderDetailAttention(data) {
   const issues={};
   const any=(name,predicate)=>(data[name]?.repositories||[]).some(predicate);
   if(data.storage?.status!=='ok'||any('storage',r=>r.measurement_stale||r.measurement_status!=='ok'||r.partial_versions||r.unusual_entries)||any('object_storage',r=>r.stale||r.status!=='ok'))issues.storage='本地或对象统计待更新，或存在未配对/异常条目';
   if(data.resources?.status!=='ok'||data.resources?.stale||(data.resources?.alerts||[]).length||data.resources?.event_status==='unavailable'||data.resources?.service?.status==='failed')issues.resources='Git 或队列接近预算，或采样需要复核';
   if(data.object_retention?.status!=='ok'||any('object_retention',r=>r.result_status==='unavailable'||['failed','busy','running'].includes(r.attempt?.status)||r.last_plan?.stale||(r.invalid_fields||[]).length))issues.policy='对象规划有失败、跳过、未完成或过期记录';
-  if(data.restorations?.status!=='ok'||any('restorations',r=>r.result_status==='unavailable'||(r.attempt&&(r.attempt.status!=='complete'||r.attempt.uncertain||r.attempt.scope_changed))))issues.restore='存在恢复未完成、不确定或无法读取的结果';
-  if(data.restoration_checks?.status!=='ok'||any('restoration_checks',r=>r.result_status==='unavailable'||(r.attempt&&(r.attempt.status!=='complete'||r.attempt.diagnosis!=='verified'||['source_uncertain','stale','source_changed','scope_changed','manifest_changed','references_changed','observation_unavailable'].some(k=>r.attempt[k])))))issues.check='核对有问题、原报告仍不确定或结果需重新确认';
-  if(data.restoration_audits?.status!=='ok'||any('restoration_audits',r=>r.status!=='ok'||r.stale||r.changed_since_sample||r.invalid_records||(r.retired?.records||0)>0||r.archival?.status==='unavailable'||(r.archival?.attempt&&r.archival.attempt.status!=='complete'))||any('restoration_closures',r=>r.result_status==='unavailable'||r.archive_hint==='near-limit'||r.archive_hint==='scan-limit'||(r.attempt&&(r.attempt.status!=='closed'||['source_changed','scope_changed','manifest_changed','references_changed','observation_unavailable'].some(k=>r.attempt[k])))))issues.audit='审计有待清理、旧采样、结案拒绝或未完成的操作记录';
-  if((data.repairs||[]).some(r=>r.result==='failed')||(data.performance?.scenarios||[]).some(r=>r.errors>0))issues.operations='健康恢复或限量测试记录中存在失败';
+  if(data.restorations?.status!=='ok'||any('restorations',r=>recordState(r,'restore',data)==='active'))issues.restore='恢复未完成、不确定或结果待核对；查看记录中的下一步操作';
+  if(data.restoration_checks?.status!=='ok'||any('restoration_checks',r=>recordState(r,'check',data)==='active'))issues.check='存在未解决的核对或结案事项；查看记录中的下一步操作';
+  if(data.restoration_audits?.status!=='ok'||any('restoration_audits',r=>r.status!=='ok'||r.stale||r.changed_since_sample||r.invalid_records||(r.retired?.records||0)>0||r.archival?.status==='unavailable'||(r.archival?.attempt&&r.archival.attempt.status!=='complete'))||any('restoration_closures',r=>r.archive_hint==='near-limit'||r.archive_hint==='scan-limit'||recordState(r,'close',data)==='active'))issues.audit='审计容量或结案仍需处理；先核对，再预览归档';
+  if((data.repairs||[]).some(r=>r.result==='failed'&&!repairResolved(r,data))||(data.performance?.scenarios||[]).some(r=>r.errors>0))issues.operations='健康恢复或限量测试记录中存在失败';
   if(data.diagnostics?.status!=='ok'||data.diagnostics?.stale||data.diagnostics?.report?.status!=='ok'||['failed','unavailable','condition-skipped','not-installed','never'].includes(data.diagnostics?.service?.status))issues.diagnostics='诊断存在待处理项，或采集结果不可用/过期';
   const box=byId('detail-attention'),links=byId('detail-attention-links');links.replaceChildren();box.hidden=!Object.keys(issues).length;
   for(const key of detailTabs){const button=byId('tab-'+key);button.textContent=detailTabLabels[key]+(issues[key]?' · 提示':'');button.className=issues[key]?'tab-attention':'';
@@ -196,7 +243,7 @@ function renderAuditStorage(data) {
     const archive=row.archival||{}, a=archive.attempt, details=[];
     if(a){details.push('开始 '+date(a.started_at));if(a.finished_at)details.push('结束 '+date(a.finished_at));details.push('候选 '+a.candidate_records+' / 已完成 '+a.archived_records+' / 保护 '+a.protected_records);details.push('参数：最近 '+a.keep_last+' 条 / '+a.min_age_days+' 天 / 单轮 '+a.max_records+' 条');if(a.partial_possible)details.push('可能已生成归档或移动/清理部分暂存，请核对后重试');for(const [name,count] of Object.entries(a.protection_counts||{}))if(count)details.push('本次保护：'+(protections[name]||'未知保护')+' '+count+' 条');if(a.failure_reason)details.push('失败原因：'+({missing:'文件缺失',permission:'权限不足',timeout:'超时',mismatch:'文件或证据不一致',io:'读写失败',storage:'存储请求失败',interrupted:'中断',unavailable:'无法确认'})[a.failure_reason]);if(archive.last_complete&&a.status!=='complete')details.push('上次完整执行 '+date(archive.last_complete.finished_at)+' · '+archive.last_complete.archived_records+' 条');}
     tr.append(storageCell(archive.status==='never'?'尚无实际归档记录':archive.status!=='ok'?'归档结果不可用':({running:'归档未结案 / 可能中断',complete:'实际归档完整结束',failed:'实际归档失败'})[a?.status]||'结果未知',details));
-    if(old||row.invalid_records||archive.status==='unavailable'||(a&&a.status!=='complete'))tr.className='warning';table.append(tr);
+    if(old||row.invalid_records||archive.status==='unavailable'||(a&&a.status!=='complete')||(row.retired?.records||0)>0){tr.className='warning';const td=tr.children[tr.children.length-1],key=/^[a-z][a-z0-9-]{0,47}$/.test(row.key)?row.key:'KEY';td.append(el('small',old?'先刷新审计统计：sudo systemctl start open-assets-audits.service':'先校验已有归档，再预览候选；未结案和不确定证据继续保留。','storage-detail'));td.append(el('code','sudo ./scripts/open-assets restore-audit-verify '+key,'action-command'),el('code','sudo ./scripts/open-assets restore-audit-archive '+key,'action-command'));}table.append(tr);
   }
 }
 function renderRestoreClosures(data) {
@@ -216,7 +263,7 @@ function renderRestoreClosures(data) {
       const notes=[];if(row.online_attempts!=null)notes.push('在线审计 '+row.online_attempts+' 条 / 512 上限');if(row.archive_hint==='near-limit')notes.push('接近读取上限，可用 restore-audit-archive 预览归档');if(a.source_changed)notes.push('原恢复报告已变化，此结案不涵盖新尝试');if(a.scope_changed)notes.push('存储范围已变化');if(a.manifest_changed)notes.push('清单已变化');if(a.references_changed)notes.push('current/published 已变化；结案是历史记录');if(a.observation_unavailable)notes.push('无法比较当前证据，请人工核对');if(a.status==='running')notes.push('可能仍在执行或进程已中断，不能视为结案');
       tr.append(storageCell(reasons[a.reason]||'未记录最终结果',notes));
       if(a.status!=='closed'||a.source_changed||a.scope_changed||a.manifest_changed||a.references_changed||a.observation_unavailable)tr.className='warning';
-    }table.append(tr);
+    }recordGuidance(tr,row,'close',data);if(row.archive_hint==='near-limit'||row.archive_hint==='scan-limit'){tr.className='warning';const td=tr.children[tr.children.length-1];td.append(el('code','sudo ./scripts/open-assets restore-audit-archive '+(/^[a-z][a-z0-9-]{0,47}$/.test(row.key)?row.key:'KEY'),'action-command'));td.append(el('small','先预览归档，保护未结案证据；确认候选后再按文档决定是否执行。','storage-detail'));}table.append(tr);
   }
 }
 function renderRestoreChecks(data) {
@@ -247,6 +294,7 @@ function renderRestoreChecks(data) {
       tr.append(storageCell(check(a,'barrier'),notes));
       if(a.diagnosis!=='verified'||a.status!=='complete'||a.source_uncertain||a.scope_changed||a.source_changed||a.manifest_changed||a.references_changed||a.observation_unavailable||a.stale)tr.className='warning';
     }
+    recordGuidance(tr,row,'check',data);
     table.append(tr);
   }
 }
@@ -274,6 +322,7 @@ function renderRestorations(data) {
       tr.append(storageCell(a.activation_uncertain ? '切换状态不确定' : a.activated ? '显式回滚完成（当时）' : a.rollback_requested ? '请求显式回滚，未确认完成' : a.rollback_requested === false ? '未请求显式回滚' : '旧报告未记录回滚模式', notes));
       if (a.status !== 'complete' || a.uncertain || a.scope_changed) tr.className = 'warning';
     }
+    recordGuidance(tr,row,'restore',data);
     table.append(tr);
   }
 }
@@ -337,11 +386,16 @@ function render(data) {
   ]) byId(id).replaceChildren(...certificates.map(c => item(c.label, c.error ? '无法读取证书' : '到期 ' + date(c.not_after), c.error ? '检查失败' : Math.floor(c.days_remaining) + ' 天', c.error || c.days_remaining < 30)));
   const repairs = data.repairs || [];
   byId('repair-section').hidden = repairs.length === 0;
-  byId('repairs').replaceChildren(...repairs.map(r => item(r.service, date(r.time) + ' · ' + (r.reason === 'persistent-unhealthy' ? '持续健康检查失败' : r.reason), ({restarted: '已请求重启', failed: '重启失败', skipped: '状态已变化，未重启', attempt: '处理中'})[r.result] || r.result, r.result === 'failed')));
+  byId('repairs').replaceChildren(...repairs.map(r => {
+    const done=repairResolved(r,data), node=item(r.service,date(r.time)+' · '+(r.reason==='persistent-unhealthy'?'持续健康检查失败':r.reason),done?'已处理：后续已重启且采样健康':({restarted:'已请求重启',failed:'重启失败',skipped:'状态已变化，未重启',attempt:'处理中'})[r.result]||r.result,r.result==='failed'&&!done);
+    if(done)node.className+=' record-resolved';
+    else if(r.result==='failed')node.append(el('small','下一步：sudo ./scripts/open-assets doctor；查看 sudo journalctl -u open-assets-repair.service -n 50 --no-pager，先确认失败原因，不直接补跑重启。','storage-detail'));
+    return node;
+  }));
   const performance = data.performance?.scenarios || [];
   byId('operations-empty').hidden = repairs.length > 0 || performance.length > 0;
   byId('performance-section').hidden = performance.length === 0;
-  if (performance.length) byId('performance-details').textContent = '完成于 ' + date(data.performance.collected_at) + ' · 固定并发与速率上限的读取测试，不代表容量上限。';
+  if (performance.length) byId('performance-details').textContent = '完成于 ' + date(data.performance.collected_at) + ' · 固定并发与速率上限的读取测试，不代表容量上限。'+(performance.some(p=>p.errors>0)?'历史测试存在错误，不等于当前服务故障；先用 sudo ./scripts/open-assets doctor 检查服务与网络，再按性能文档安排限量复测。':'');
   byId('performance').replaceChildren(...performance.map(p => {
     const tr = el('tr');
     for (const v of [p.label, String(p.concurrency), p.requests + ' / ' + p.errors, p.requests_per_second.toFixed(1), [p.p50_ms, p.p95_ms, p.p99_ms].map(x => x.toFixed(1)).join(' / ')]) tr.append(el('td', v));

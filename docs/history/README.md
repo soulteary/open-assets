@@ -14,3 +14,5 @@
 - [2026-11-08：初始化保护与文档整理](2026-11-08-initialization.md)。
 
 - [2026-11-08：doctor CLI 诊断](2026-11-08-doctor-cli.md)。
+
+- [2026-11-08：Info 部署诊断](2026-11-08-doctor-dashboard.md)。

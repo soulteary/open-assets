@@ -1,6 +1,8 @@
 """Read bounded restoration reports for Info without Git, S3 or state writes."""
 
 import os
+import hashlib
+import json
 import re
 import stat
 import time
@@ -9,7 +11,7 @@ import yaml
 
 from .object_info import scope
 from .object_retention import bucket_scope
-from .storage_info import finite_time, read_json
+from .storage_info import finite_time, read_bytes
 
 MAX_REPORTS = 512
 SCAN_SECONDS = 2
@@ -113,7 +115,7 @@ def clean(value, key, sha, digest):
     return result
 
 
-def summary(root, data_root):
+def summary(root, data_root, evidence=None):
     try:
         config, keys, _ = scope(root / "private/repositories.yaml")
         if config.get("state_root") != "/state":
@@ -136,6 +138,7 @@ def summary(root, data_root):
                 if not stat.S_ISDIR(directory.lstat().st_mode):
                     raise ValueError("invalid report directory")
                 latest = None
+                latest_identity = None
                 with os.scandir(directory) as entries:
                     for index, entry in enumerate(entries):
                         if index >= MAX_REPORTS or time.monotonic() > deadline:
@@ -145,19 +148,21 @@ def summary(root, data_root):
                             if re.fullmatch(r"tmp[a-z0-9_]{8}", entry.name):
                                 continue
                             raise ValueError("unexpected report entry")
-                        record = clean(
-                            read_json(directory / entry.name, 16384),
-                            key,
-                            entry.name[:-5],
-                            digest,
-                        )
+                        raw = read_bytes(directory / entry.name, 16384)
+                        record = clean(json.loads(raw), key, entry.name[:-5], digest)
                         if (
                             latest is None
                             or record["started_at"] > latest["started_at"]
                         ):
                             latest = record
+                            latest_identity = dict(
+                                sha=entry.name[:-5],
+                                report_digest=hashlib.sha256(raw).hexdigest(),
+                            )
                 if latest is not None:
                     row.update(result_status="ok", attempt=latest)
+                    if evidence is not None:
+                        evidence[key] = latest_identity
         except (
             OSError,
             ValueError,

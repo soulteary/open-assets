@@ -117,7 +117,7 @@ def verify_snapshots(source_raw, check_raw, intent, result):
         raise ValueError("invalid closure check evidence")
 
 
-def summary(root, data_root):
+def summary(root, data_root, evidence=None):
     try:
         config, keys, _ = scope(root / "private/repositories.yaml")
         if (
@@ -200,6 +200,13 @@ def summary(root, data_root):
                     except (OSError, ValueError, TypeError, KeyError, RecursionError):
                         record["observation_unavailable"] = True
                 row.update(result_status="ok", attempt=record)
+                if evidence is not None:
+                    evidence[key] = dict(
+                        sha=intent["sha"],
+                        source_digest=result.get("source_report_digest")
+                        if result
+                        else None,
+                    )
         except (
             OSError,
             ValueError,
