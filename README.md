@@ -12,6 +12,16 @@
 - **发布可查，历史内容可恢复**：查看任务状态和校验结果；从 Git 重建已清理的历史内容，完整校验后可显式回滚图片版本。
 - **日常维护集中查看**：Info 展示组件健康、磁盘、证书与历史版本占用；doctor 提供诊断和下一步建议，保留策略帮助管理存储空间。
 
+## 服务组成
+
+![Open Assets 架构图](.github/images/open-assets-architecture.gif)
+
+Gitea 通过内部签名 Webhook 提交任务，Publisher 串行导出和校验内容。Traefik 为 Nginx 图片和 OtterIO 附件提供 HTTPS；Gitea、OC、Traefik 管理页与 Info 由单实例 Stargate 保护，应用自身权限继续生效。应用容器不挂载 Docker socket。
+
+Info 的容量与诊断数据由定时任务采集，页面刷新不会触发存储遍历或 doctor 检查。日志轮转和受限健康恢复也由宿主机定时任务管理。
+
+架构图由 [fireworks-tech-graph](https://github.com/yizhiyanhua-ai/fireworks-tech-graph/) 的 Claude 风格生成，SVG 定制了流向动画。动画表示调用方向，不表示延迟或事务边界。
+
 ## 选择适合的上传方式
 
 **网页上传**适合直接管理存储对象。在 OC 存储管理后台上传、下载和管理文件，访问权限由存储策略决定。上传不会自动同步到 Git，也不会更新 Nginx 的图片目录；对外分享需先配置[网页公开目录](docs/web-uploads.md)，默认不自动公开所有上传内容。
@@ -49,16 +59,6 @@ sudo ./scripts/open-assets status --key main-images
 ```
 
 新增仓库请按[仓库 CLI](docs/cli.md)执行 `repo ensure`；该操作会创建或更新部署资源。接入返回 `ready` 后，用个人 Git SSH 密钥提交内容。只有该 SHA 的任务显示 `published` 才表示发布完成；Push 成功和 Webhook 返回 202 只表示前面的步骤已完成。
-
-## 服务组成
-
-![Open Assets 架构图](.github/images/open-assets-architecture.gif)
-
-Gitea 通过内部签名 Webhook 提交任务，Publisher 串行导出和校验内容。Traefik 为 Nginx 图片和 OtterIO 附件提供 HTTPS；Gitea、OC、Traefik 管理页与 Info 由单实例 Stargate 保护，应用自身权限继续生效。应用容器不挂载 Docker socket。
-
-Info 的容量与诊断数据由定时任务采集，页面刷新不会触发存储遍历或 doctor 检查。日志轮转和受限健康恢复也由宿主机定时任务管理。
-
-架构图由 [fireworks-tech-graph](https://github.com/yizhiyanhua-ai/fireworks-tech-graph/) 的 Claude 风格生成，SVG 定制了流向动画。动画表示调用方向，不表示延迟或事务边界。
 
 ## 使用前确认
 
