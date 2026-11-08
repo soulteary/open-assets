@@ -1,5 +1,7 @@
 # Open Assets
 
+![Open Assets：服务状态、证书与仓库容量看板](.github/images/open-assets-info-banner.png)
+
 图片与文件的自托管服务，让你在自己的服务器上管理和分享内容。
 
 为网站、应用和项目提供图片与文件访问链接。通过网页上传、下载和管理存储对象，或通过 Git 自动发布图片与附件。管理入口统一认证，服务状态、证书和存储空间可以在看板中查看。
@@ -48,32 +50,23 @@ Git 管理的版本目录应交由发布程序维护，避免在网页后台直�
 
 ## 开始使用
 
-- 首次安装：先看[环境要求](docs/requirements.md)，再选择[全新服务器](docs/new-server.md)或[接入已有 Traefik](docs/deployment.md)。
-- 第一次分享：[首次分享文件](docs/first-share.md)。包含 Git 发布和网页上传两条路线，以及匿名下载校验。
-- 已经部署：[使用指南](docs/usage.md)。包含登录、个人 SSH 密钥、空仓库首次提交与后续更新。
-- 接入新仓库：[仓库 CLI](docs/cli.md)。自动配置只读 Deploy Key、Webhook、S3 权限和图片映射，支持重复执行。
-- 日常维护：[命令速查](docs/operator.md)、[故障排查](docs/troubleshooting.md)。
-- 运行看板：[Info](docs/info.md)，展示健康、容量、恢复与缓存诊断；页面刷新不触发 doctor 检查。
-- 全部文档：[文档目录](docs/README.md)。
+第一次部署，按下面三步完成安装和分享：
 
-在部署服务器先检查现状（以下命令不修改服务）：
+1. **准备环境**：查看[环境要求](docs/requirements.md)，确认服务器、域名、工具和存储空间。
+2. **选择部署路线**：没有 Traefik 时，按[全新服务器指南](docs/new-server.md)安装；已有 Traefik 时，按[接入说明](docs/deployment.md)复用入口。两条路线选择一条即可。
+3. **分享第一个文件**：按[首次分享指南](docs/first-share.md)完成网页上传或 Git 发布，再从无需登录的客户端下载文件并核对内容。
 
-```sh
-cd /app/open-assets
-sudo ./scripts/open-assets doctor
-sudo ./scripts/open-assets repo list
-sudo ./scripts/open-assets status --key main-images
-```
+如果服务已由管理员部署，直接从[使用指南](docs/usage.md)查看登录、上传、Git 密钥和链接获取方法，无需重新安装。使用 Git 时，只有对应提交的任务显示 `published` 才表示发布完成；Push 成功不等于文件已可访问。
 
-新增仓库请按[仓库 CLI](docs/cli.md)执行 `repo ensure`；该操作会创建或更新部署资源。接入返回 `ready` 后，用个人 Git SSH 密钥提交内容。只有该 SHA 的任务显示 `published` 才表示发布完成；Push 成功和 Webhook 返回 202 只表示前面的步骤已完成。
+日常操作见[命令速查](docs/operator.md)，为其他项目接入仓库见[仓库 CLI](docs/cli.md)。管理员可按 [Info 说明](docs/info.md)配置运行看板；遇到问题时，按[故障排查](docs/troubleshooting.md)检查。其他配置与维护文档收录在[文档目录](docs/README.md)。
 
 ## 使用前确认
 
-- 面向单机 Docker Compose、单个 Publisher 和本地 POSIX 文件系统。配方固定 `/app/open-assets`、`/data/asset-stack` 及部分网络、端口；更改拓扑前需检查配置。
-- Git 发布的每个版本需有 `public/images/` 中至少一张图片。图片格式支持 PNG/JPEG/GIF/WebP/AVIF/ICO；Git 发布不支持 SVG、LFS、submodule、符号链接和隐藏路径，也不会执行仓库脚本。
-- 发布使用 Git/队列预算与流式校验。预算不替代磁盘配额、容器内存限制和备份。多个系统没有联合事务，失败时可能留下部分对象。
-- 初始化只用于新部署。程序拒绝已有配置或已启动的初始化；升级、改域名及新增仓库使用对应维护步骤。
+- **部署范围**：面向单机 Docker Compose、单个 Publisher 和本地 POSIX 文件系统。默认使用 `/app/open-assets`、`/data/asset-stack` 及约定的网络、端口；调整前先核对[部署配置](docs/configuration.md)。
+- **Git 内容限制**：每个发布版本的 `public/images/` 至少包含一张图片，支持 PNG/JPEG/GIF/WebP/AVIF/ICO。Git 发布不支持 SVG、LFS、submodule、符号链接和隐藏路径，也不会执行仓库脚本。
+- **配置与凭据**：初始化仅用于新部署；已有配置或初始化记录会阻止重复执行，先按[故障排查](docs/troubleshooting.md)核对状态。升级、改域名和新增仓库使用对应维护步骤。`.env`、`private/`、私钥与备份只保存在受保护的位置，不提交到 Git。
+- **容量与备份**：Git/队列预算和流式校验不能替代磁盘配额、容器内存限制及备份。对象上传与图片切换没有联合事务，失败时可能留下部分对象；正式使用前安排备份，并按内容规模配置[资源预算](docs/resource-limits.md)和[保留策略](docs/object-retention.md)。
 
-更多说明：[资源预算](docs/resource-limits.md)、[恢复内容](docs/object-restore.md)、[保留策略](docs/object-retention.md)、[安全](SECURITY.md)与[风险控制](docs/risks.md)。
+恢复操作见[恢复内容](docs/object-restore.md)，权限与已知限制见[安全说明](SECURITY.md)和[风险控制](docs/risks.md)。
 
 项目采用 [Apache-2.0](LICENSE)。参与开发见[贡献指南](CONTRIBUTING.md)和[开发测试](docs/development.md)，已验证范围见[验证记录](docs/acceptance.md)。
