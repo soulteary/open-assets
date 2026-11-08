@@ -1,13 +1,33 @@
 # Open Assets
 
-通过 Git 管理图片和附件：把文件提交到 Gitea，Open Assets 自动导出 `public/`，将版本附件上传到 OtterIO，再更新 Nginx 的当前图片目录。适合自己维护图片、文档和下载文件的单机部署。
+图片与文件的自托管服务，让你在自己的服务器上管理和分享内容。
+
+为网站、应用和项目提供图片与文件访问链接。通过网页上传、下载和管理存储对象，或通过 Git 自动发布图片与附件。管理入口统一认证，服务状态、证书和存储空间可以在看板中查看。
+
+## 项目特点
+
+- **网页管理与 Git 自动发布**：通过浏览器管理文件；需要版本记录和自动更新时，将内容提交到 Git，由程序完成导出、校验和发布。
+- **两种链接，满足不同用途**：图片使用固定地址，随当前版本更新；附件地址包含提交版本，方便引用和追溯。历史附件在对应对象保留期间有效。
+- **多个仓库，独立图片路径**：为不同项目配置仓库和访问前缀，统一命令协调只读 Deploy Key、Webhook、存储权限和图片映射，支持重复执行。
+- **发布可查，历史内容可恢复**：查看任务状态和校验结果；从 Git 重建已清理的历史内容，完整校验后可显式回滚图片版本。
+- **日常维护集中查看**：Info 展示组件健康、磁盘、证书与历史版本占用；doctor 提供诊断和下一步建议，保留策略帮助管理存储空间。
+
+## 选择适合的上传方式
+
+**网页上传**适合直接管理存储对象。在 OC 存储管理后台上传、下载和管理文件，访问权限由存储策略决定。上传不会自动同步到 Git，也不会更新 Nginx 的图片目录；对外分享还需确认对象权限和公开入口是否允许访问。
+
+**Git 发布**适合需要修改记录、版本链接和图片自动更新的内容。将文件放入仓库的 `public/` 并 Push 后，程序校验内容、上传版本附件，再更新当前图片目录。通过 SSH Push 时不需要先登录网页。
+
+Git 发布后的链接示例：
 
 ```text
 public/images/logo.png  → https://img-node-name.lab.dev/logo.png
 public/documents/a.pdf  → https://oss-node-name.lab.dev/attachments/repositories/main-images/releases/<SHA>/documents/a.pdf
 ```
 
-图片地址跟随当前版本，默认缓存 300 秒；附件地址包含 commit SHA。默认保留历史附件，启用对象清理并实际删除后，旧链接会失效。示例域名和节点名需替换为自己的值。
+图片默认缓存 300 秒，更新后客户端可能暂时看到旧内容。历史附件默认保留；启用对象清理并实际删除后，旧链接会失效。示例域名和节点名需替换为自己的值。
+
+Git 管理的版本目录应交由发布程序维护，避免在网页后台直接修改，造成对象与校验清单不一致。登录和访问链接的具体用法见[使用指南](docs/usage.md)。
 
 ## 开始使用
 
@@ -35,14 +55,14 @@ sudo ./scripts/open-assets status --key main-images
 
 Gitea 通过内部签名 Webhook 提交任务，Publisher 串行导出和校验内容。Traefik 为 Nginx 图片和 OtterIO 附件提供 HTTPS；Gitea、OC、Traefik 管理页与 Info 由单实例 Stargate 保护，应用自身权限继续生效。应用容器不挂载 Docker socket。
 
-Info 展示组件健康、CPU/内存、磁盘、证书、Git/队列预算和恢复记录。容量统计使用定时缓存；历史记录与当前健康分别查看。日志轮转和受限健康恢复由宿主机定时任务管理。
+Info 的容量与诊断数据由定时任务采集，页面刷新不会触发存储遍历或 doctor 检查。日志轮转和受限健康恢复也由宿主机定时任务管理。
 
 架构图由 [fireworks-tech-graph](https://github.com/yizhiyanhua-ai/fireworks-tech-graph/) 的 Claude 风格生成，SVG 定制了流向动画。动画表示调用方向，不表示延迟或事务边界。
 
 ## 使用前确认
 
 - 面向单机 Docker Compose、单个 Publisher 和本地 POSIX 文件系统。配方固定 `/app/open-assets`、`/data/asset-stack` 及部分网络、端口；更改拓扑前需检查配置。
-- 每个发布版本需有 `public/images/` 中至少一张图片。支持 PNG/JPEG/GIF/WebP/AVIF/ICO，不支持 SVG、LFS、submodule、符号链接和隐藏路径；不会执行仓库脚本。
+- Git 发布的每个版本需有 `public/images/` 中至少一张图片。图片格式支持 PNG/JPEG/GIF/WebP/AVIF/ICO；Git 发布不支持 SVG、LFS、submodule、符号链接和隐藏路径，也不会执行仓库脚本。
 - 发布使用 Git/队列预算与流式校验。预算不替代磁盘配额、容器内存限制和备份。多个系统没有联合事务，失败时可能留下部分对象。
 - 初始化只用于新部署。程序拒绝已有配置或已启动的初始化；升级、改域名及新增仓库使用对应维护步骤。
 
