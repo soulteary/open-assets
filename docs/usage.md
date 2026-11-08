@@ -34,7 +34,7 @@ cat private/domains.json
 用浏览器打开对应的 `https://` 地址。管理页面先经过 Stargate；Gitea 和 OC 还需要登录各自账号，Traefik 与 Info 没有第二层应用登录。
 
 - Stargate：只输入 `private/stargate_password` 中的密码，没有额外用户名。
-- Gitea：初始化账号为 `content`，密码在 `private/admin_password`。
+- Gitea：初始化账号为 `content`，密码在 `private/admin_password`（默认绝对路径 `/app/open-assets/private/admin_password`，权限 0600）。这是初始化保存的密码；在 Gitea 改密不会自动同步该文件，宿主接入工具仍读取该文件，应按凭据轮换流程同步。
 - OC：Access Key 在 `private/console_user`，Secret Key 在 `private/console_password`。默认 Access Key 为 `assets-operator`，以实际文件为准。
 - Traefik / Info：通过 Stargate 后进入 Dashboard 或运行看板，无第二个应用账号。
 
@@ -116,7 +116,7 @@ public/
     └── application.tar.gz
 ```
 
-每个 Git 发布版本至少需要一张图片。图片支持 PNG/JPEG/GIF/WebP/AVIF/ICO；SVG、LFS、submodule、符号链接和隐藏路径不支持。附件会随整个 `public/` 目录上传；仓库脚本不会执行。
+每个 Git 发布版本至少需要一张图片。图片支持 PNG/JPEG/GIF/WebP/AVIF/ICO 和[受限静态 SVG](svg.md)；LFS、submodule、符号链接和隐藏路径不支持。附件会随整个 `public/` 目录上传；仓库脚本不会执行。
 
 ### 首次发布（空仓库）
 

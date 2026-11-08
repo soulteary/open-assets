@@ -67,7 +67,7 @@ class Core(unittest.TestCase):
 
 
 class GitExport(unittest.TestCase):
-    def test_svg_is_attachment_only_not_an_image_publication(self):
+    def test_svg_supports_attachment_and_dated_image_publication(self):
         import subprocess
 
         with tempfile.TemporaryDirectory() as t:
@@ -101,17 +101,31 @@ class GitExport(unittest.TestCase):
                 next(f["content_type"] for f in files if f["path"] == "diagram.svg"),
                 "image/svg+xml",
             )
-            (root / "public/diagram.svg").rename(root / "public/images/diagram.SVG")
+            (root / "public/images/pic.png").unlink()
+            dated = root / "public/images/2026/10/10/image.SVG"
+            dated.parent.mkdir(parents=True)
+            (root / "public/diagram.svg").rename(dated)
             git("add", "public")
             git("commit", "-m", "SVG image")
-            with self.assertRaisesRegex(ValueError, "image format not allowed"):
-                m.export(
-                    config,
-                    repository,
-                    root / ".git",
-                    git("rev-parse", "HEAD").decode().strip(),
-                    root / "out2",
-                )
+            image_files = m.export(
+                config,
+                repository,
+                root / ".git",
+                git("rev-parse", "HEAD").decode().strip(),
+                root / "out2",
+            )
+            self.assertEqual(
+                next(
+                    f["content_type"]
+                    for f in image_files
+                    if f["path"].endswith("image.SVG")
+                ),
+                "image/svg+xml",
+            )
+            self.assertIn(
+                "2026/10/10/image.SVG",
+                {item["path"] for item in m.image_files(image_files)},
+            )
 
     def test_real_git_export_and_symlink_rejection(self):
         import subprocess

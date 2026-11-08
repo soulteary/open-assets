@@ -69,6 +69,7 @@ route = {'http': {'routers': {'uploads-public': {
     'rule': f"Host(`{domains['oss']}`) && PathPrefix(`/uploads/public/`) && (Method(`GET`) || Method(`HEAD`))",
     'entryPoints': ['websecure'],
     'service': 'objects@file',
+    'middlewares': ['public-assets@file'],
     'tls': {'certResolver': 'le'},
 }}}}
 # Exclusive creation avoids replacing an existing routing file.
