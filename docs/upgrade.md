@@ -14,6 +14,28 @@
 
 GHCR 和 Docker Hub 是否提供某个标签取决于项目实际发布，不应机械替换镜像地址。优先使用可访问的官方镜像并核对摘要。若镜像源不可达，可在受信任环境预拉取后传输，或使用项目支持的官方发行包并校验摘要，不能改用来源不明的代理包。
 
+## Stargate 1.3.1 升级到 1.3.5
+
+本次模板将 Stargate 固定为 `1.3.5` 及其镜像索引摘要，其他运行组件保持原有版本。版本选择、隔离验证和部署范围见[升级记录](history/2026-11-08-stargate-upgrade.md)。正式发布说明见 [Stargate v1.3.5](https://github.com/soulteary/stargate/releases/tag/v1.3.5)；从 1.3.1 升级还需阅读 [1.3.2](https://github.com/soulteary/stargate/releases/tag/v1.3.2)、[1.3.3](https://github.com/soulteary/stargate/releases/tag/v1.3.3) 和 [1.3.4](https://github.com/soulteary/stargate/releases/tag/v1.3.4) 的变更。
+
+本配方只使用密码认证，未启用独立 Warden、Herald、TOTP 或 Redis。上游 SDK 的更新不代表需要在这里部署这些服务；已自行启用外部认证的部署，必须遵循上游的依赖升级顺序、HMAC key ID 和共享会话状态要求，不能直接套用密码模式的验收结果。
+
+已有部署不会因为更新 `.env.example` 自动升级。在[维护窗口](operations.md#维护窗口)内：
+
+1. 记录旧镜像和运行状态，备份私有 `.env`、`private/stargate.env`、凭据和证书。保留原密码、会话交换密钥、回调允许列表和可信代理。
+2. 预拉取 `.env.example` 中固定的新镜像，仅更新私有 `.env` 的 `STARGATE_IMAGE`；不要整份覆盖 `.env`，也不要重新初始化。
+3. 在 `/app/open-assets` 的管理员 shell 中校验并重新创建网关：
+
+```sh
+docker compose config --quiet
+docker compose up -d --no-build --no-deps --force-recreate stargate
+docker compose ps stargate
+```
+
+4. 检查所有管理入口的匿名跳转、密码登录和认证后访问，确认错误密码不能进入；分别验证 Stargate 与 OC 的退出范围。重建会清空本配方的进程内会话，需要重新登录。检查公开图片、附件和 Range 下载，确认其他服务未受影响，再恢复维护前的定时任务。
+
+失败时保留私有日志，恢复原 `STARGATE_IMAGE` 并重新创建 Stargate。这里没有改变存储或 IAM 数据，回退网关也不会撤销其他系统写入。不得通过关闭认证、来源检查或证书验证作为回退方式。
+
 ## 使用 Certs Maker 生成十年内部证书
 
 新初始化自动安装与模板中版本及平台 SHA-256 匹配的 Certs Maker。支持 Linux amd64/arm64，原生程序需要 OpenSSL 和 sh，不依赖 Go。发行归档仅提取预期的普通二进制文件；安装文件和校验记录保存在 private/tools，修改过的二进制会拒绝使用。

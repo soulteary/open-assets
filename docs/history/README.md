@@ -20,3 +20,5 @@
 - [2026-11-08：Info 部署诊断](2026-11-08-doctor-dashboard.md)。
 
 - [2026-11-08：Info 历史提醒分类](2026-11-08-history-reminders.md)。
+
+- [2026-11-08：组件版本核查与 Stargate 升级](2026-11-08-stargate-upgrade.md)。
