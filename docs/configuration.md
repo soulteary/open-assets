@@ -1,16 +1,32 @@
 # 配置说明
 
-Git 拉取和队列准入预算配置在 `private/repositories.yaml` 顶层的 `resource_limits`，缺省也生效。完整参数和变更步骤见[发布资源预算](resource-limits.md)。
+首次部署会生成私有配置，日常使用通常不需要逐项手工修改。配置仓库优先使用[接入 CLI](cli.md)，调整限制和维护策略时再编辑对应文件。
+
+本文命令在服务器执行。涉及私有文件的编辑与备份时使用管理员 shell：
+
+```sh
+sudo -i
+cd /app/open-assets
+```
+
+不要把 `.env.example` 或示例 YAML 直接覆盖到已有部署；里面的占位值不能代替实际仓库 ID、域名或凭据。
 
 ## 配置放在哪里
 
-`.env` 保存 Compose 的镜像引用、DATA_ROOT、节点元数据和应用域名。`private/repositories.yaml` 保存接收器与 Publisher 共同使用的发布规则。`private/stargate.env`、密钥、CA 和 OC alias 也属于私有运行配置，不提交 Git。
+按要修改的内容选择文件：
+
+- `.env`：镜像引用、`DATA_ROOT`、节点元数据、应用域名，以及部分 Info 采集参数。
+- `private/repositories.yaml`：仓库身份、分支、图片路径、发布预算及历史保留策略。
+- `private/domains.json`：已生成的实际入口域名，供路由与链接工具读取。
+- `private/stargate.env`、密钥、CA 和 OC alias：认证与服务访问配置。
+
+这些都是私有运行材料，不提交 Git。改文件前备份；是否需要重新创建容器、更新路由或证书，取决于修改内容，见[修改如何生效](#修改如何生效)。
 
 `.env.example` 和 `config/repositories.example.yaml` 是模板。示例仓库 ID 不能代替 Gitea 实际 ID；生产 endpoint 需保留私有 CA 验证。初始化脚本会生成符合配方的私有文件，后续通过接入 CLI 添加仓库。
 
 ## 节点与域名
 
-新部署在初始化时传入两个环境变量：
+下面仅用于尚未准备的新部署，不是给现有部署改名的命令。先将示例基域替换为自己控制的域名，再传入两个环境变量：
 
 ```sh
 NODE_NAME=beijing-1 PUBLIC_BASE=example.org python3 scripts/prepare-private.py
@@ -36,6 +52,17 @@ docker compose config --quiet
 只改 `.env` 中的 `NODE_NAME` 或 `PUBLIC_BASE` 不会更新 `private/domains.json`、Stargate 回调、内部证书或 Traefik 动态路由。迁移节点域名需要分别安排 DNS、证书、Gitea ROOT_URL/SSH 地址、OC public URL、Stargate 回调和入口路由，并处理旧链接；当前没有自动迁移命令。不要通过重跑初始化替代迁移。
 
 `NODE_NAME` 只参与域名生成，不改变 Compose 项目、服务名、固定 IP、端口和数据目录，因此不提供同机多实例隔离。
+
+## 常见修改：调整文件限制
+
+例如，只将某个仓库的单文件上限从默认 100 MiB 调整为 50 MiB：先备份 `private/repositories.yaml`，找到该仓库的 key，修改它的 `max_file_bytes`，保留其余字段。
+
+```yaml
+# 这是已有仓库条目中的一个字段，不是完整配置。
+max_file_bytes: 52428800
+```
+
+`max_file_bytes` 限制单个文件，`max_bytes` 限制整个 `public/`，`max_files` 限制文件数量。修改上限不会自动清理已经发布的内容。按下面的[生效步骤](#修改如何生效)校验并应用；调大限制前还要检查磁盘预留和 Git/队列预算。
 
 ## 发布配置字段
 
@@ -67,7 +94,27 @@ Git blob 流式导出到暂存文件，S3 上传使用文件流，哈希和下�
 
 ## 修改如何生效
 
-接收器在请求时读取配置，Worker 在每轮扫描时读取配置。不过 Compose 挂载的是单个配置文件，编辑器的原子替换可能让运行容器继续看到旧 inode。手动修改后应 validate，再重建 webhook/publisher；接入 CLI 会处理这一步。
+以仅调整已有仓库的文件限制或 `resource_limits` 为例：
+
+1. 按[维护窗口](operations.md#维护窗口)暂停 Push、相关定时任务和并行管理操作，等待在途操作结束。保存私有配置备份，再停止发布服务，避免编辑期间读取不完整配置：
+
+```sh
+docker compose stop webhook publisher
+```
+2. 编辑 `private/repositories.yaml`，保留原有仓库 ID、remote、key 和路径。
+3. 用新的一次性容器校验磁盘上的配置，成功后再重新创建消费者：
+
+```sh
+docker compose run --rm --no-deps publisher validate
+# 仅在校验成功后执行：
+docker compose up -d --no-build --force-recreate webhook publisher
+```
+
+4. 确认服务健康，恢复维护前的定时任务与 Push，再观察下一次发布。失败时保留错误和备份，先修复配置，不重跑初始化。
+
+接收器在请求时读取配置，Worker 在每轮扫描时读取配置。不过 Compose 挂载的是单个文件，编辑器原子替换后，旧容器可能继续读旧文件；普通 restart 不保证重新挂载。一次性校验容器能读取新文件，但它不验证 S3 权限、Git 连通性或 Nginx 路由。
+
+这组命令只适用于不改变访问映射的发布规则。仓库接入由 CLI 同步处理相关资源；手工修改域名、桶、图片前缀或 `serve` 还需分别更新路由、权限或 Nginx。不要仅运行上述命令就认定映射已生效。
 
 渲染器读取配置并写出 images.conf，不直接控制 Nginx。候选文件应在 nginx -t 通过后 reload，失败时保留原服务配置。日常 Git 发布只切换 current，不修改 images.conf。
 
@@ -77,7 +124,9 @@ Git blob 流式导出到暂存文件，S3 上传使用文件流，哈希和下�
 
 宿主机接入 CLI 使用 private/admin_password、Publisher 公钥、Webhook Secret 和 private/oc-cli。当前实现假设 Gitea content 管理账号、本机 13000 HTTP API、asset-stack_admin 网络及 assets-publish 专用策略；它不是任意 Git 平台的通用管理接口。
 
-全局和仓库级 `retention` 控制本地版本保留及任务归档，默认禁用实际清理，配置项和保护规则见 [历史清理](retention.md)。
+## 保留策略与看板采集
+
+全局和仓库级 `retention` 控制本地版本保留及任务归档，默认禁用实际清理，配置项和保护规则见[历史清理](retention.md)。它不删除 OtterIO 对象；对象策略使用独立的 `object_retention`。
 
 `INFO_DISK_*` 与 `INFO_INODE_*` 控制 Info 的容量提示阈值，由宿主机采集器读取；默认值与统计范围见 [Info 说明](info.md#健康磁盘和证书)。
 
@@ -86,6 +135,8 @@ OtterIO 对象容量使用独立 open-assets-objects.timer：固定 15 分钟缓
 object_retention 为独立对象保留策略，支持全局默认和仓库覆盖。默认 enabled=false、exclusive_writer=false，不继承本地 retention.enabled。清理预算、专用 IAM、预览与执行步骤见[对象保留](object-retention.md)。
 
 恢复审计容量使用独立 `open-assets-audits.timer`，默认 15 分钟缓存，30 秒主机采集只读取过滤缓存及实际归档摘要。无需新增 S3 权限或容器；安装、手工强制采样、口径与上限见 [Info 审计统计](info.md#审计容量缓存与实际归档结果)。
+
+Git 拉取和队列准入预算位于 `private/repositories.yaml` 顶层的 `resource_limits`，省略时也使用默认预算，完整参数见[发布资源预算](resource-limits.md)。
 
 Git/队列的低频缓存由 `open-assets-resources.timer` 驱动；采集间隔与提示百分比位于 `.env`，准入预算仍位于 `private/repositories.yaml`。安装与字段含义见 [Info](info.md#git-缓存与全局队列)。
 

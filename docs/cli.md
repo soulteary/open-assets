@@ -1,6 +1,29 @@
 # 命令行使用
 
-日常命令统一从 `sudo ./scripts/open-assets` 调用。先运行 `repo list` 查稳定 key，`doctor` 查配置/运行状态；发布、恢复、结案和审计命令可直接接在脚本后。每个子命令支持独立 --help，完整速查见[日常操作入口](operator.md)。下面说明仓库接入；日常发布与恢复使用同一宿主机入口。
+命令行用于查看发布状态、接入仓库和维护历史内容。以下命令都在部署服务器的 `/app/open-assets` 执行；已进入 root shell 时可省略 `sudo`。个人电脑上的 Git 提交和 Push 见[使用指南](usage.md)。
+
+## 先查看，再操作
+
+```sh
+cd /app/open-assets
+sudo ./scripts/open-assets doctor
+sudo ./scripts/open-assets repo list
+sudo ./scripts/open-assets status --key main-images
+```
+
+这三条命令不修改服务。doctor 检查部署并给出下一步建议；repo list 列出仓库的稳定 key；status 查询任务。初始仓库 `content/images` 的 key 是 `main-images`，其他仓库使用列表中的实际 key。
+
+查看单个命令的参数：
+
+```sh
+./scripts/open-assets --help
+./scripts/open-assets repo ensure --help
+./scripts/open-assets restore-objects --help
+```
+
+帮助不需要 Docker 或 root；实际操作仍需要相应权限。常用命令的选择见[日常操作入口](operator.md)，部署诊断结果见[doctor 说明](doctor.md)。
+
+示例中的 `FULL_COMMIT_SHA` 是目标版本完整的 40 位小写 SHA，`JOB_ID` 是 status 输出中的完整 64 位任务 ID，执行前要替换。查询历史版本应使用那次提交的 SHA，不能直接以当前 HEAD 代替。
 
 ## 仓库自动接入 CLI
 
@@ -25,7 +48,7 @@ sudo ./scripts/open-assets repo ensure content/project-b \
 - `--branch main`：可选，默认 main。命令不自动创建提交、改写分支历史或修改已有分支保护。
 - `--root /app/open-assets`：全局选项，放在 repo 之前，用于指定部署根目录。该目录中的 Compose、private 与 .env 必须属于同一部署。
 
-已有同名私有仓库可直接接入；公开或归档仓库不会被自动转换。已配置 disabled/serve=false 的项不会被命令重新启用。
+已有同名私有仓库可直接接入；公开或归档仓库不会被自动转换。已配置 `enabled: false` 或 `serve: false` 的项不会被命令重新启用。
 
 ## 执行前提
 
@@ -65,11 +88,19 @@ sudo ./scripts/open-assets repo ensure content/project-b \
 sudo ./scripts/open-assets status --key project-b
 ```
 
-目标 SHA 为 `published` 后，使用 `links` 生成地址，详见[命令速查](operator.md)。已有内容需补发时，执行 `sudo ./scripts/open-assets publish project-b FULL_COMMIT_SHA`，然后继续查询任务结果。
+找到目标 SHA 的任务并确认 `published` 后，可在服务器生成链接：
+
+```sh
+sudo ./scripts/open-assets links project-b "$ASSET_COMMIT" 'public/images/logo.png'
+```
+
+先将 `ASSET_COMMIT` 设置为这次已发布的完整 SHA。图片链接的路径为 `/project-b/logo.png`，附件链接包含 `project-b/releases/<SHA>/`。命令只生成地址，不验证文件存在；生成后实际打开或下载确认。
+
+已有提交需要补发时，执行 `sudo ./scripts/open-assets publish project-b FULL_COMMIT_SHA`，然后查询任务。它可能切换当前图片版本，且仍受任务去重限制；已清理的历史内容应使用恢复命令。
 
 ## 对象清理账号
 
-完成初始化后，执行 sudo scripts/open-assets objects setup 可创建或收敛专用清理身份。重复执行保留凭据，仅为显式启用且声明独占写入的仓库授予删除权限。仓库或开关变化后需重新执行；Publisher 不增加 DeleteObject。完整步骤见[对象保留](object-retention.md)。
+这不是首次发布的必要步骤。只有准备配置对象保留时，才在完成初始化后执行 `sudo ./scripts/open-assets objects setup`，创建或更新专用清理身份。重复执行保留凭据，仅为显式启用且声明独占写入的仓库授予删除权限。仓库或开关变化后需重新执行；Publisher 不增加 DeleteObject。完整步骤见[对象保留](object-retention.md)。
 
 ## 恢复已清理对象
 
@@ -79,11 +110,11 @@ sudo ./scripts/open-assets status --key project-b
 
 ## 核对恢复状态
 
-`sudo ./scripts/open-assets check-restore <仓库key> <完整SHA>` 只读核对对象、本地两份副本、current/published 与清理屏障，并保存独立诊断报告。默认不修复、不切换，也不结案原恢复。完整前提、结果与退出码见[恢复状态核对](restore-check.md)。
+`sudo ./scripts/open-assets check-restore main-images FULL_COMMIT_SHA` 只读核对对象、本地两份副本、current/published 与清理屏障，并保存独立诊断报告。默认不修复、不切换，也不结案原恢复。完整前提、结果与退出码见[恢复状态核对](restore-check.md)。
 
 ## 显式结案恢复
 
-`sudo ./scripts/open-assets close-restore <仓库key> <完整SHA> --reason '人工复核原因'` 在同一维护锁内重新核对，通过后单独记录结案。原恢复必须未结案或状态不确定，且 current/published 必须存在并一致；不切换版本、不解除清理屏障、不改写原报告。前提、退出码和私有审计说明见[恢复结案](restore-close.md)。
+`sudo ./scripts/open-assets close-restore main-images FULL_COMMIT_SHA --reason '人工复核原因'` 在同一维护锁内重新核对，通过后单独记录结案。原恢复必须未结案或状态不确定，且 current/published 必须存在并一致；不切换版本、不解除清理屏障、不改写原报告。前提、退出码和私有审计说明见[恢复结案](restore-close.md)。
 
 ## 查询与归档恢复审计
 
@@ -91,4 +122,15 @@ sudo ./scripts/open-assets status --key project-b
 - `restore-audit-archive <key> [完整SHA]`：默认仅预览，保留最近 20 条、完成不足 30 天及未结案记录；添加 `--apply` 才实际归档。
 - `restore-audit-verify <key> [完整SHA]`：验证归档完整性和中断清理现场，不恢复或解包到在线目录。
 
+上面的 `<key>`、`[完整SHA]` 表示必需和可选参数，不要把尖括号或方括号原样输入。以下是只读查询与归档预览示例：
+
+```sh
+sudo ./scripts/open-assets restore-audit-list main-images --limit 20 --offset 0
+sudo ./scripts/open-assets restore-audit-archive main-images
+```
+
 均在部署服务器通过 `sudo ./scripts/open-assets` 执行。归档先保存完整文件与校验清单，验证后才移出在线目录；支持中断重试，不自动删除归档包。参数、保护范围、退出码见[恢复审计](restore-audit.md)。
+
+## 人工确认历史拒绝提醒
+
+最新结案拒绝经核实无需处理时，使用宿主机 `acknowledge-closure` 先预览，再带本次证据令牌确认。它只确认这条提醒，不为恢复结案，不切换版本，也不解除清理屏障。查询审计 ID、填写原因和确认步骤见[人工确认说明](closure-acknowledgment.md)。
