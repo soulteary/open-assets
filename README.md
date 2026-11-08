@@ -15,6 +15,7 @@ public/documents/a.pdf  → https://oss-node-name.lab.dev/attachments/repositori
 - 已经部署：[使用指南](docs/usage.md)。包含登录、个人 SSH 密钥、空仓库首次提交与后续更新。
 - 接入新仓库：[仓库 CLI](docs/cli.md)。自动配置只读 Deploy Key、Webhook、S3 权限和图片映射，支持重复执行。
 - 日常维护：[命令速查](docs/operator.md)、[故障排查](docs/troubleshooting.md)。
+- 运行看板：[Info](docs/info.md)，展示健康、容量、恢复与缓存诊断；页面刷新不触发 doctor 检查。
 - 全部文档：[文档目录](docs/README.md)。
 
 在部署服务器执行：

@@ -10,12 +10,12 @@ Info 通过 Stargate 提供只读状态页面。先看组件、磁盘和证书�
 cd /app/open-assets
 sudo install -d -o root -g 20010 -m 0750 /data/asset-stack/info
 sudo docker compose up -d --no-build info
-for name in info objects audits resources retention object-retention repair logrotate; do
+for name in info objects audits resources doctor retention object-retention repair logrotate; do
   sudo install -m 0644 "config/systemd/open-assets-$name.service" "config/systemd/open-assets-$name.timer" /etc/systemd/system/
 done
 sudo systemctl daemon-reload
 sudo python3 -m open_assets.telemetry --root /app/open-assets
-sudo systemctl enable --now open-assets-info.timer open-assets-objects.timer open-assets-audits.timer open-assets-resources.timer
+sudo systemctl enable --now open-assets-info.timer open-assets-objects.timer open-assets-audits.timer open-assets-resources.timer open-assets-doctor.timer
 ```
 
 上述命令安装所有单元，只启用采集。对象清理账号和删除权限按对象保留文档另行准备。保留清理、健康恢复和日志轮转分别按[本地保留](retention.md)、[对象保留](object-retention.md)、[健康检查](health.md)和[日志](logging.md)启用。`doctor` 将采集与日志轮转列为必需项，自动修复和两个保留任务列为可选项。未启用可选项不报故障；已执行失败和缓存过期仍提示，见[部署诊断](doctor.md)。
@@ -109,8 +109,28 @@ sudo systemctl status open-assets-resources.timer --no-pager
 
 最近超限只保存本功能启用后、程序捕获的最近一次队列和 Git 限制代码、key 与时间。它是历史记录，不代表当前仍超限，也不能解释内核直接终止或事件写盘失败。主机快照只读取两个固定槽位，不扫描旧任务。
 
+## 部署诊断
+
+“部署诊断”页签展示 doctor 最近一次采样的分类结论、五个必需和三个可选定时器、最近执行结果、缓存年龄和排查提示。可选项未启用单独显示，不作为故障。存在待处理项、诊断过期或采集失败时，页签和顶部详情提示会提醒复核。
+
+诊断由独立的 `open-assets-doctor.timer` 驱动。timer 每分钟检查是否到期，默认每 300 秒实际执行一次，服务最长运行 45 秒；超过时限由 systemd 结束整个服务进程组。该任务独立于每 30 秒的 Info 主机采集，不延长主机采集中的检查链。诊断任务不列入自身报告；其服务状态和诊断缓存时效单独展示，避免以自己的当前执行代替上次结果。
+
+`.env` 的 `INFO_DOCTOR_INTERVAL_SECONDS` 可设为 60–86400 秒。超过两倍间隔视为过期；新鲜度按诊断完成时间计算。主机采集只读取固定大小、有字段过滤的 `doctor-cache.json`，再写入 `snapshot.json`；HTTP 仅读取快照，刷新页面或切换页签不会运行 doctor、访问 Docker/systemd 或遍历存储。
+
+下表状态和年龄是**诊断采样时**的结果，并非当前实时状态。采集失败、被中断或结果过期时保留上次报告并标记旧结果；没有有效报告时显示不可用。诊断采集成功与检查通过分开：服务成功执行后，报告仍可能有待处理项。配置范围变化会使旧报告失效。
+
+需要更新时，在服务器执行：
+
+```sh
+sudo python3 -m open_assets.doctor_info --root /app/open-assets --force
+sudo systemctl start open-assets-info.service
+sudo systemctl status open-assets-doctor.timer open-assets-doctor.service --no-pager
+```
+
+`--force` 只忽略采集间隔，不绕过采集锁。以上操作仍只读诊断，不触发修复或清理。页面没有执行命令的按钮；按提示查看日志后人工处理。即时排查可直接运行 `sudo ./scripts/open-assets doctor`；完整规则见[部署诊断](doctor.md)。
+
 ## 数据位置与维护
 
-过滤缓存位于 `${DATA_ROOT}/info/`，包括 `repositories-cache.json`、`objects-cache.json`、`audit-cache.json`、`resource-cache.json`。缓存可重建，原始恢复、清理收据、审计及 `publisher/resource-limit-events.json` 应纳入私有备份。HTTP 只读取过滤后的 `snapshot.json`。
+过滤缓存位于 `${DATA_ROOT}/info/`，包括 `repositories-cache.json`、`objects-cache.json`、`audit-cache.json`、`resource-cache.json`、`doctor-cache.json`。缓存可重建，原始恢复、清理收据、审计及 `publisher/resource-limit-events.json` 应纳入私有备份。HTTP 只读取过滤后的 `snapshot.json`。
 
 维护前设置 `private/maintenance.flag`，停止相关 timer 和已经运行的 service；标记只阻止新任务启动。`--force` 只绕过统计间隔，不绕过锁或扫描预算。数据过期先检查对应服务，不通过重跑初始化或取消删除保护解决。

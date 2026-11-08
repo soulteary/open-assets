@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh cached deployment diagnostics every five minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec=1min
+AccuracySec=10s
+Unit=open-assets-doctor.service
+
+[Install]
+WantedBy=timers.target

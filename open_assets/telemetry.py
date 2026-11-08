@@ -384,6 +384,10 @@ def collect(root, refresh_storage=False):
 
     result["resources"] = resource_summary(root, data_root)
     result["resources"]["service"] = cleanup_service("open-assets-resources.service")
+    from .doctor_info import summary as doctor_summary
+
+    result["diagnostics"] = doctor_summary(root, data_root)
+    result["diagnostics"]["service"] = cleanup_service("open-assets-doctor.service")
     result["capacity"] = capacity(disks, result["storage"], env, image_disk_index)
     result["collection_seconds"] = round(time.monotonic() - started, 3)
     performance = root / "private/performance/latest-summary.json"

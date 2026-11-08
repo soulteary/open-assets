@@ -33,6 +33,24 @@ function capacityText(alert, data) {
   return messages[alert.code] || '容量数据不可用，请检查采集状态';
 }
 const resourceLabels = {git_repository_bytes:'仓库 Git 缓存容量',git_total_bytes:'全局 Git 缓存容量',git_fetch_bytes:'单次 Git 拉取增长',git_min_free_bytes:'Git 磁盘可用空间',git_timeout_seconds:'Git 命令时限',git_process_memory_bytes:'Git 进程地址空间',git_output_bytes:'Git 元数据输出',scan_entries:'预算扫描目录项',unsafe_resource_entry:'Git 缓存存在不安全条目',queue_active_records:'活动队列数量',queue_total_records:'队列合计数量',queue_reserved_bytes:'队列预留字节'};
+const doctorReason = value => ({ok:'最近执行成功',running:'正在执行','not-enabled':'未启用',failed:'执行失败','condition-skipped':'条件不满足，已跳过','never-or-unknown':'尚无可确认的执行记录',overdue:'超期未执行',unavailable:'状态不可读',fresh:'采样有效','never-or-invalid':'尚无有效样本','clock-skew':'采样时间超前',stale:'样本已过期','collector-busy':'采集锁忙','collector-scanning':'分页采集中','collector-never':'尚未采集','collector-unavailable':'采集失败','unavailable-or-scope-changed':'缓存不可用或配置范围变化'})[value]||'状态待核对';
+const doctorCacheLabels = {'local-versions':'本地版本',objects:'对象统计',audits:'恢复审计',resources:'Git 与队列'};
+function renderDoctor(data) {
+  const source=data.diagnostics||{}, sample=source.report, notice=byId('doctor-notice');
+  const old=data.stale||source.stale||source.status!=='ok'||['failed','unavailable','condition-skipped','not-installed','never'].includes(source.service?.status);
+  const containers=[byId('doctor-checks'),byId('doctor-required'),byId('doctor-optional'),byId('doctor-caches')];
+  for(const node of containers)node.replaceChildren();
+  notice.className=old||sample?.status!=='ok'?'warning':'muted';
+  if(!sample){notice.textContent='诊断结果不可用，不能判断为健康；请检查诊断采集定时器和日志。';return;}
+  notice.textContent='诊断采样于 '+date(source.measured_at)+' · 年龄 '+source.age_seconds+' 秒 · 采集间隔 '+source.interval_seconds+' 秒 · '+(old?'旧结果 / 待复查；'+(source.service?.status==='failed'?'采集服务失败':source.status==='running'?'最近采集未完成':source.status==='unavailable'?'最近采集失败':'结果过期或采集状态异常'):sample.status==='ok'?'采样时检查通过':'采样时存在待处理项');
+  for(const row of sample.checks||[])containers[0].append(el('p',row.check+'：'+(row.status==='ok'?'通过':'待处理')+'；'+row.hint,row.status==='ok'?'muted':'warning'));
+  for(const row of sample.timers||[]){const tr=el('tr');const target=row.required?containers[1]:containers[2];
+    const timing=row.age_seconds==null?'暂无完成年龄':'完成于采样前 '+row.age_seconds+' 秒 / 上限 '+row.max_age_seconds+' 秒';
+    tr.append(storageCell(row.timer,[({active:'调度启用',inactive:'调度未启用',failed:'调度失败'})[row.active]||'调度状态待核对',row.required?'必需':'可选']),storageCell(doctorReason(row.reason),[timing,...(row.result?[row.result+(row.exit_code!=null?' · 退出码 '+row.exit_code:'')]:[])]),storageCell(row.hint));
+    if(old||row.status==='attention')tr.className='warning';target.append(tr);
+  }
+  for(const row of sample.caches||[]){const tr=el('tr');tr.append(storageCell(doctorCacheLabels[row.cache]||row.cache,[row.key||'全局']),storageCell(doctorReason(row.reason),[row.age_seconds==null?'暂无有效采样年龄':'诊断时 '+row.age_seconds+' 秒 / 上限 '+row.max_age_seconds+' 秒']),storageCell(row.hint));if(old||row.status!=='ok')tr.className='warning';containers[3].append(tr);}
+}
 function renderResources(data) {
   const source=data.resources||{}, notice=byId('resource-notice'), global=byId('resource-global'), rows=byId('resource-repositories'), events=byId('resource-events');
   global.replaceChildren();rows.replaceChildren();events.replaceChildren();
@@ -119,9 +137,9 @@ function retentionHistory(row, name, label) {
   if (!value) return label + '：暂无完整记录';
   return label + '：' + date(value.finished_at) + (name === 'last_apply' ? ' · 已确认删除 ' + value.removed_versions + ' 版 / ' + value.removed_objects + ' 个 / ' + bytes(value.removed_bytes) : ' · 仅预览') + ' · ' + (retentionReasons[value.reason] || '状态待核对') + (value.policy_changed ? '（配置已变更）' : value.stale ? '（历史记录，已过期）' : '');
 }
-const detailTabs = ['storage','resources','policy','restore','check','audit','operations'];
+const detailTabs = ['storage','resources','policy','restore','check','audit','diagnostics','operations'];
 let activeDetailTab = 'storage';
-const detailTabLabels = {storage:'仓库容量',resources:'Git 与队列',policy:'对象保留',restore:'恢复结果',check:'状态核对',audit:'结案与审计',operations:'运维记录'};
+const detailTabLabels = {storage:'仓库容量',resources:'Git 与队列',policy:'对象保留',restore:'恢复结果',check:'状态核对',audit:'结案与审计',diagnostics:'部署诊断',operations:'运维记录'};
 const phaseLabel = value => ({validate:'前提检查',git:'读取 Git',export:'导出内容','local-preflight':'本地预检查',preflight:'对象预检查',upload:'上传对象',verify:'对象读回校验','local-install':'本地副本安装',activate:'切换引用',complete:'流程结束',objects:'对象核对',full:'完整副本核对',images:'图片副本核对',references:'引用核对',barrier:'清理屏障核对'})[value] || '未识别阶段';
 function selectDetailTab(key, focus = false) {
   if (!detailTabs.includes(key)) return;
@@ -157,6 +175,7 @@ function renderDetailAttention(data) {
   if(data.restoration_checks?.status!=='ok'||any('restoration_checks',r=>r.result_status==='unavailable'||(r.attempt&&(r.attempt.status!=='complete'||r.attempt.diagnosis!=='verified'||['source_uncertain','stale','source_changed','scope_changed','manifest_changed','references_changed','observation_unavailable'].some(k=>r.attempt[k])))))issues.check='核对有问题、原报告仍不确定或结果需重新确认';
   if(data.restoration_audits?.status!=='ok'||any('restoration_audits',r=>r.status!=='ok'||r.stale||r.changed_since_sample||r.invalid_records||(r.retired?.records||0)>0||r.archival?.status==='unavailable'||(r.archival?.attempt&&r.archival.attempt.status!=='complete'))||any('restoration_closures',r=>r.result_status==='unavailable'||r.archive_hint==='near-limit'||r.archive_hint==='scan-limit'||(r.attempt&&(r.attempt.status!=='closed'||['source_changed','scope_changed','manifest_changed','references_changed','observation_unavailable'].some(k=>r.attempt[k])))))issues.audit='审计有待清理、旧采样、结案拒绝或未完成的操作记录';
   if((data.repairs||[]).some(r=>r.result==='failed')||(data.performance?.scenarios||[]).some(r=>r.errors>0))issues.operations='健康恢复或限量测试记录中存在失败';
+  if(data.diagnostics?.status!=='ok'||data.diagnostics?.stale||data.diagnostics?.report?.status!=='ok'||['failed','unavailable','condition-skipped','not-installed','never'].includes(data.diagnostics?.service?.status))issues.diagnostics='诊断存在待处理项，或采集结果不可用/过期';
   const box=byId('detail-attention'),links=byId('detail-attention-links');links.replaceChildren();box.hidden=!Object.keys(issues).length;
   for(const key of detailTabs){const button=byId('tab-'+key);button.textContent=detailTabLabels[key]+(issues[key]?' · 提示':'');button.className=issues[key]?'tab-attention':'';
     if(issues[key]){const link=el('button',detailTabLabels[key]+'：'+issues[key]);link.type='button';link.addEventListener('click',()=>selectDetailTab(key,true));links.append(link);}}
@@ -289,6 +308,7 @@ function render(data) {
   byId('freshness').className = data.stale ? 'warning' : '';
   renderStorage(data);
   renderResources(data);
+  renderDoctor(data);
   renderObjectRetention(data);
   renderRestorations(data);
   renderRestoreChecks(data);
@@ -331,7 +351,7 @@ function render(data) {
 }
 async function update() {
   try { const r = await fetch('/api/status', {cache: 'no-store'}); if (!r.ok) throw new Error(); render(await r.json()); byId('error').hidden = true; }
-  catch { byId('resource-notice').textContent='资源数据无法刷新，下方可能是旧数据。';byId('resource-notice').className='warning'; byId('audit-notice').textContent = '审计容量与归档结果无法刷新，下表可能是旧数据。'; byId('audit-notice').className = 'warning'; byId('restore-close-notice').textContent = '结案结果无法刷新，下表可能是旧数据。'; byId('restore-close-notice').className = 'warning'; byId('restore-check-notice').textContent = '核对结果无法刷新，下表可能是旧数据。'; byId('restore-check-notice').className = 'warning'; byId('restore-notice').textContent = '恢复报告无法刷新，下表可能是旧结果，请复核采样时间。'; byId('restore-notice').className = 'warning'; byId('object-retention-notice').textContent = '对象保留数据无法刷新，下表保留旧结果，请复核采样时间。'; byId('object-retention-notice').className = 'warning'; byId('error').hidden = false; byId('error').textContent = '无法读取最新状态，请检查登录会话与采集定时器。下方可能是上次成功读取的数据。'; const notice = byId('capacity-notice'); notice.className = 'capacity-notice capacity-unknown'; notice.replaceChildren(el('strong', '容量状态待确认'), el('p', '无法取得最新状态，下方保留上次采样，不能作为实时容量依据。')); }
+  catch { byId('doctor-notice').textContent='诊断结果无法刷新，下方可能是旧数据，不能作为当前健康结论。';byId('doctor-notice').className='warning';byId('tab-diagnostics').textContent='部署诊断 · 提示';byId('tab-diagnostics').className='tab-attention'; byId('resource-notice').textContent='资源数据无法刷新，下方可能是旧数据。';byId('resource-notice').className='warning'; byId('audit-notice').textContent = '审计容量与归档结果无法刷新，下表可能是旧数据。'; byId('audit-notice').className = 'warning'; byId('restore-close-notice').textContent = '结案结果无法刷新，下表可能是旧数据。'; byId('restore-close-notice').className = 'warning'; byId('restore-check-notice').textContent = '核对结果无法刷新，下表可能是旧数据。'; byId('restore-check-notice').className = 'warning'; byId('restore-notice').textContent = '恢复报告无法刷新，下表可能是旧结果，请复核采样时间。'; byId('restore-notice').className = 'warning'; byId('object-retention-notice').textContent = '对象保留数据无法刷新，下表保留旧结果，请复核采样时间。'; byId('object-retention-notice').className = 'warning'; byId('error').hidden = false; byId('error').textContent = '无法读取最新状态，请检查登录会话与采集定时器。下方可能是上次成功读取的数据。'; const notice = byId('capacity-notice'); notice.className = 'capacity-notice capacity-unknown'; notice.replaceChildren(el('strong', '容量状态待确认'), el('p', '无法取得最新状态，下方保留上次采样，不能作为实时容量依据。')); }
 }
 initializeDetailTabs();
 update(); setInterval(update, 30000);
