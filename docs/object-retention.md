@@ -99,14 +99,14 @@ sudo docker compose run --rm --no-deps object-cleaner --key main-images --apply
 
 S3 不支持整版原子删除。网络失败、超时或进程停止可能留下部分已删除版本；收据保留原对象集合、ETag、时间与清单摘要，并绑定桶/endpoint 范围。重试重新检查当前保护，只允许处理原集合中仍存在且未变化的对象。新增对象、替换内容、清单改变或范围改变会停止，不扩大删除范围。即使已经删完但尚未记录完成，也能在下一轮将有效收据结案。
 
-已完成收据压缩为不含对象列表的完成标记，不授权未来同 SHA 的新对象删除。重新发布会先恢复并核验 S3 内容，再写 restored 标记；对象已删或正在删的版本不能直接 rollback-images，以免图片回滚看似成功而附件已失效。需按正常发布流程恢复该 SHA 的对象，或从可信备份恢复后进行等价核验，不要手工删除收据绕过检查。
+已完成收据压缩为不含对象列表的完成标记，不授权未来同 SHA 的新对象删除。实际执行的发布或对象恢复会先恢复并核验 S3 内容，再写 restored 标记；对象已删或正在删的版本不能直接 rollback-images，以免图片回滚看似成功而附件已失效。恢复已清理对象应使用[restore-objects](object-restore.md)，或从可信备份恢复后进行等价核验；普通 publish 可能命中终态任务去重，不保证重新上传。不要手工删除收据绕过检查。
 
 每仓库最多检查 10,000 份收据，超限停止；这些记录、清单及任务归档不由本功能自动清理。收据缺失会失去这部分回滚阻止依据，应与状态一同备份。受信任运维人员绕过锁改对象、引用、桶版本控制或 IAM 仍存在竞态；执行清理期间应避免这类并行管理操作。
 
 ## 定时预览与暂停
 
 ```sh
-sudo install -m 0644 config/systemd/open-assets-object-retention.{service,timer} /etc/systemd/system/
+sudo install -m 0644 config/systemd/open-assets-object-retention.service config/systemd/open-assets-object-retention.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now open-assets-object-retention.timer
 sudo systemctl start open-assets-object-retention.service

@@ -6,6 +6,8 @@
 
 ## 找到这次拒绝
 
+先用 `sudo ./scripts/open-assets repo list` 确认稳定仓库 key，并在当前服务器终端设置 `ASSET_KEY`。后续变量都来自本次私有查询结果，不是可直接照抄的固定值。
+
 ```sh
 cd /app/open-assets
 sudo ./scripts/open-assets restore-audit-list "$ASSET_KEY"

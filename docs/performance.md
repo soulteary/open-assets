@@ -17,7 +17,7 @@ python3 -m open_assets.benchmark --baseline --seconds 20
 
 ```sh
 python3 -m open_assets.benchmark \
-  --key performance-check \
+  --key load-test \
   --seconds 10 \
   --max-rps 40 \
   --concurrency 1 4 8
@@ -43,7 +43,7 @@ PNG/JPEG/WebP/AVIF、压缩包等通常已有压缩，不默认对它们再次 g
 
 是否增加缓存，应先采样目标机器的可用内存、读取延迟和流量。项目默认不增加 Redis/Memcached；内核页缓存和 HTTP 缓存已承担一部分重复读取。[历史采样](history/2026-11-07-performance.md)仅供比较测量口径。
 
-当前不增加独立内存缓存服务。主要依据是数据规模小、内存余量充足、已有 Linux 页缓存与 HTTP 缓存，并未观察到必须由独立缓存解决的内存或后端瓶颈。MemAvailable 是内核对可供新进程使用内存的估算，不能再把全部 buff/cache 加到它上面。页缓存机制见 [Linux 内存概念](https://docs.kernel.org/admin-guide/mm/concepts.html)。
+当前不增加独立内存缓存服务。历史采样节点的数据量较小、内存有余量，未观察到需要独立缓存解决的瓶颈；这不代表其他部署的容量或性能。是否增加缓存应以目标机器的采样和命中率为依据。MemAvailable 是内核对可供新进程使用内存的估算，不能再把全部 buff/cache 加到它上面。页缓存机制见 [Linux 内存概念](https://docs.kernel.org/admin-guide/mm/concepts.html)。
 
 Redis/Memcached 不会在启动后自动加速 Nginx 文件或 S3 对象。接入还需要缓存协议、对象序列化或模块、容量与淘汰策略、身份边界，以及固定图片 URL 的更新/回滚失效机制；二进制文件还会增加重复数据与复制开销。Redis 作为多实例会话存储又是另一个用途，不能把会话存储和资源缓存混为一谈。
 

@@ -12,7 +12,7 @@ Ubuntu 可安装宿主机依赖：
 
 ```sh
 sudo apt update
-sudo apt install git python3 python3-yaml python3-bcrypt openssl openssh-client
+sudo apt install git curl python3 python3-yaml python3-bcrypt openssl openssh-client
 sudo docker version
 sudo docker compose version
 python3 -c 'import yaml, bcrypt'
@@ -21,6 +21,8 @@ python3 -c 'import yaml, bcrypt'
 使用数据盘时先完成 /data 挂载；只有系统盘时，先创建专用 /data 目录。初始化脚本创建子目录，但不挂载磁盘。随后查看磁盘、内存和现有网络，确认 172.29.19.0/24 与 172.29.20.0/24 没有冲突：
 
 ```sh
+# 仅使用系统盘、且 /data 不是待挂载数据盘时，先创建目录：
+# sudo install -d -m 0755 /data
 df -h /data
 free -h
 ip route

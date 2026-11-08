@@ -74,7 +74,7 @@ Nginx 只读挂载 images 父目录，按仓库前缀读取 current。图片切�
 
 对象容量由独立 open-assets-objects.timer 低频触发，在 Publisher 内通过现有 S3 身份分页列表；宿主机缓存完整结果和续采进度。30 秒主机采集只读取缓存白名单字段，Info HTTP 仍只读最终状态快照，不访问 S3。
 
-对象清理由 maintenance profile 的短时 object-cleaner 执行，复用 Worker/Queue 锁和保护引用，使用专用 S3 身份及只读图片挂载。默认定时预览，删除需独立显式启用；收据保存在发布状态下 object-retention/<key>/<sha>.json。已删对象版本的本地回滚被阻止，正常重新发布核验对象后写 restored 标记。详见[对象保留](object-retention.md)。
+对象清理由 maintenance profile 的短时 object-cleaner 执行，复用 Worker/Queue 锁和保护引用，使用专用 S3 身份及只读图片挂载。默认定时预览，删除需独立显式启用；收据保存在发布状态下 object-retention/<key>/<sha>.json。已删对象版本的本地回滚被阻止，使用 restore-objects 重建并核验对象后写 restored 标记；普通 publish 可能命中终态任务去重，不能据此认定已经恢复。详见[对象保留](object-retention.md)。
 
 对象清理进程另写每仓库 object-retention-results 摘要，独立保留完整预览与完整执行。主机采集只读这些摘要和当前策略，输出固定原因码、计数与时间；对象规划仍由低频维护任务完成，不进入 HTTP 请求或普通采集路径。
 

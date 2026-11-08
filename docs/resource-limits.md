@@ -70,12 +70,12 @@ fetch 禁止递归子模块和自动 GC，限制 pack 线程数。新提交先�
 Webhook 超限返回 HTTP 503，附 `Retry-After: 60` 和不含秘密的限制代码；它没有确认接收新任务。Gitea 是否自动重投取决于其配置，解除限制后应检查并重投失败事件。手工命令退出非零，输出 `resource_limit` 字段。Git 预算导致任务失败时，任务 JSON 记录 `ResourceLimit` 和限制代码，`status` 在原有四列后追加代码：
 
 ```sh
-scripts/open-assets status all --key main-images
+sudo ./scripts/open-assets status all --key main-images
 # 核对原因、调整额度或完成经确认的清理后：
-scripts/open-assets retry <job-id>
+sudo ./scripts/open-assets retry "$JOB_ID"
 ```
 
-`retry` 使用原任务，不新增记录。进程地址空间或单文件 rlimit 也可能表现为 Git 非零退出，即 `CalledProcessError`，不能只凭这一类型断定密钥失效。原始 Git stderr 不写入公开日志，避免暴露地址和访问参数。
+`JOB_ID` 使用上面 status 输出中需要重试的完整任务 ID，先在当前终端设置。`retry` 使用原任务，不新增记录。进程地址空间或单文件 rlimit 也可能表现为 Git 非零退出，即 `CalledProcessError`，不能只凭这一类型断定密钥失效。原始 Git stderr 不写入公开日志，避免暴露地址和访问参数。
 
 活动记录较多时可按[本地保留策略](retention.md)归档符合条件的终态任务。合计满额时归档本身无助于释放额度；核实数据增长、保留需求和备份后再调整预算。当前不提供自动删除任务归档或隔离证据的命令。
 
@@ -85,7 +85,7 @@ Git blob 直接流入 staging 文件，之后以 1 MiB 块计算 SHA-256。S3 �
 
 同一 SHA 的既有对象若内容不同，仍拒绝发布，不覆盖冲突内容。流式处理不会让多对象上传成为事务，发布失败仍可能留下部分对象。峰值内存还包括 Python、SDK、元数据清单、Git 子进程和系统缓存，不能理解为整个容器只使用 1 MiB。
 
-独立大文件验收方法见 [e2e 说明](../tests/e2e/README.md)，结果见[验收记录](acceptance.md)。不要在业务桶或真实仓库中制造超限和内存耗尽测试。
+独立大文件验收方法见 [e2e 说明](../tests/e2e/README.md)，历史结果见[资源与流式处理验证](history/2026-11-07-08-acceptance.md)。不要在业务桶或真实仓库中制造超限和内存耗尽测试。
 
 ## 看板与定时测量
 

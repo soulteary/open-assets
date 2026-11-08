@@ -33,7 +33,7 @@ publish 创建人工任务，提交必须在配置分支的历史中，但可以
 
 rollback-images 使用已有本地清单和版本文件，校验后切换 current，并更新当前发布记录；它不创建新的发布任务，不改 Git 分支，不删除或回退 OSS 附件。目标本地版本或清单缺失时不能直接回滚。
 
-回滚同时校验完整 public 快照与实际提供服务的 `releases/images-<sha>/` 副本，包括文件集合、类型、大小和 SHA-256；拒绝符号链接及缺失、额外或损坏的文件。切换后再次校验，切换或校验异常时尝试恢复旧链接。不自动重建损坏副本；先从可信备份恢复，不要通过手工改清单绕过校验。仍需通过公开 URL 验证内容；文件系统故障或并发管理员写入不在原子保证范围内。
+回滚同时校验完整 public 快照与实际提供服务的 `releases/images-<sha>/` 副本，包括文件集合、类型、大小和 SHA-256；拒绝符号链接及缺失、额外或损坏的文件。切换后再次校验，切换或校验异常时尝试恢复旧链接。不自动重建损坏副本。副本缺失时可用 `restore-objects KEY SHA --with-local` 从 Git 重建；存在冲突内容时先调查并保存现场，或从可信备份恢复，不要通过手工改清单绕过校验。仍需通过公开 URL 验证内容；文件系统故障或并发管理员写入不在原子保证范围内。
 
 计划维护时可停止接收器与 Worker，避免新任务紧接着覆盖回滚：
 
@@ -46,9 +46,20 @@ docker compose up -d --no-build webhook publisher
 
 停止接收器期间暂停 Push；窗口内失败的 Hook 需重投或按 SHA 补发。重新启动后，已有待处理任务仍会执行，必要时先核对队列。不要直接编辑任务或 current 来跳过这些检查。
 
+## 维护窗口
+
+备份、升级或恢复数据前，先记录容器和定时器原先的启用、活动状态，再暂停 Push 和人工写操作（发布、清理、恢复、结案、人工确认及仓库接入）。不要在维护后盲目启用全部可选定时器。
+
+1. 检查 `private/maintenance.flag`。若已存在，先确认是谁设置及维护是否结束；不要覆盖或删除他人的标记。若不存在，由本次维护创建。
+2. 停止本项目已启用的定时器，再停止对应的 service。采集包括 info、objects、audits、resources、doctor；写操作包括 repair、retention、object-retention。日志轮转如涉及本次备份范围，也一并暂停。
+3. 确认在途任务和人工操作已结束，再按下面的步骤停业务服务、备份或更新。停止 timer 不会停止已启动的 service；维护标记也不终止在途操作。info、objects 等采集不检查该标记，必须明确停止。
+4. 完成后恢复原先需要运行的服务，移除仅由本次维护创建的标记，再恢复原先启用的定时器。运行 doctor，检查近期采集、发布、公开读取和管理登录。
+
+标记不是系统级写锁，也不能约束绕过工具直接修改文件或对象的管理员。维护期间应由一名操作者协调写入。
+
 ## 备份
 
-至少包含：OtterIO 对象及 IAM/config、Gitea 数据库与仓库、发布任务和清单、私有凭据及 CA、Traefik 配置和 ACME 状态。缺少解密或访问凭据的数据副本可能无法恢复。
+按上面的维护窗口暂停宿主机定时任务和人工写入后再执行备份。至少包含：OtterIO 对象及 IAM/config、Gitea 数据库与仓库、发布任务、清单和恢复审计、私有凭据及 CA、Traefik 配置和 ACME 状态。人工确认审计在 `${DATA_ROOT}/closure-acknowledgments/`，不在 publisher 子目录中，应随整个 DATA_ROOT 保存。缺少解密或访问凭据的数据副本可能无法恢复。
 
 `scripts/backup.sh` 只打包应用 private、.env 和数据目录，不停止服务，也不包含 Traefik；它不能单独视为在线数据库的一致性备份。
 
@@ -69,7 +80,7 @@ sh scripts/snapshot.sh
 
 先记录现有提交和镜像摘要，备份私有配置并查看待更新差异。不要通过重复 prepare-private.py 或 initialize-services.py 更新已有部署，也不要用 docker compose down -v 作为常规更新步骤。
 
-应用源码改动后构建 publisher 镜像，再用同一个镜像重建 publisher/webhook；只修改宿主机管理 CLI 时无需重建运行容器。使用已审阅的固定版本，分别验证发布、读取及管理登录。
+publisher、webhook 和 info 共用应用镜像。源码改动后构建候选镜像，并重新创建实际受影响的消费者；Info 页面或其服务代码更新也需要重建 info。只修改宿主机管理 CLI 时无需重建运行容器。使用已审阅的固定版本，分别验证发布、读取及管理登录。
 
 OtterIO/OC 升级需要核对配对版本、数据兼容范围和恢复步骤。镜像能启动不等于数据可安全降级。更换服务前保留旧程序和一致性数据副本。
 
@@ -99,10 +110,8 @@ Worker 对每份任务最多读取 64 KiB，拒绝符号链接、非普通文件
 
 本地副本也已清理时，使用 restore-objects KEY SHA --with-local；恢复后默认保持 current。需要切换时可组合 --with-local --rollback，在同一维护锁内校验对象与双副本后激活。中断或失败按恢复报告分别核对 S3、本地安装和 current/published，不把部分完成当作事务回滚。
 
-恢复审计容量采集由 `open-assets-audits.timer` 执行。升级或恢复 Publisher 状态前，把该 timer/service 也纳入停止范围；维护标记只防止新的服务启动，不终止已在运行的采集。归档后如需立即更新看板，先运行 `python3 -m open_assets.audit_info --root /app/open-assets --force`，再启动 Info 主机采样服务；默认刷新不会绕过统计间隔。实际归档摘要和 audit-cache.json 也应纳入私有备份。
+## 统计与诊断维护
 
-Git/队列测量由 `open-assets-resources.timer` 驱动，维护时同时停止该 timer 和正在运行的 service。默认缓存 15 分钟，`--force` 不绕过锁；安装和阈值见 [Info](info.md#git-缓存与全局队列)。备份包含 `info/resource-cache.json` 与 `publisher/resource-limit-events.json`；缓存可重建，事件文件只保存本功能启用后的最近原因。
+审计容量、Git/队列预算和 doctor 分别由独立定时任务采集。页面刷新不强制更新缓存，归档或排障后需要立即刷新时，按 [Info](info.md) 中相应章节执行采集；`--force` 不绕过锁和扫描预算。维护时按[维护窗口](#维护窗口)暂停 timer 和正在运行的 service。
 
-部署诊断由 `open-assets-doctor.timer` 独立采集，维护时停止该 timer 和正在运行的 service。维护标记会阻止新启动，但不会终止已有执行。`info/doctor-cache.json` 是可重建的诊断缓存，不替代业务备份；读取与手动更新见 [Info](info.md#部署诊断)。
-
-人工确认审计位于 `${DATA_ROOT}/closure-acknowledgments/`，包含原因、原拒绝快照及固定指针，应随整个 DATA_ROOT 一起备份。现有恢复审计归档命令不移动该目录；恢复后指针、记录、快照和现场证据完整匹配才标灰，见[人工确认](closure-acknowledgment.md)。
+统计缓存可重建，不代替发布、恢复和审计原始记录。资源超限事件只保留本功能启用后的最近原因。恢复人工确认记录时，固定指针、审核记录、快照和现场证据全部匹配后才会标灰，见[人工确认](closure-acknowledgment.md)。

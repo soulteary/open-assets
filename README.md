@@ -18,17 +18,16 @@ public/documents/a.pdf  → https://oss-node-name.lab.dev/attachments/repositori
 - 运行看板：[Info](docs/info.md)，展示健康、容量、恢复与缓存诊断；页面刷新不触发 doctor 检查。
 - 全部文档：[文档目录](docs/README.md)。
 
-在部署服务器执行：
+在部署服务器先检查现状（以下命令不修改服务）：
 
 ```sh
 cd /app/open-assets
 sudo ./scripts/open-assets doctor
 sudo ./scripts/open-assets repo list
-sudo ./scripts/open-assets repo ensure content/project-b --key project-b --mount-path /project-b/
-sudo ./scripts/open-assets status --key project-b
+sudo ./scripts/open-assets status --key main-images
 ```
 
-接入返回 `ready` 后，用个人 Git SSH 密钥提交内容。只有该 SHA 的任务显示 `published` 才表示发布完成；Push 成功和 Webhook 返回 202 只表示前面的步骤已完成。
+新增仓库请按[仓库 CLI](docs/cli.md)执行 `repo ensure`；该操作会创建或更新部署资源。接入返回 `ready` 后，用个人 Git SSH 密钥提交内容。只有该 SHA 的任务显示 `published` 才表示发布完成；Push 成功和 Webhook 返回 202 只表示前面的步骤已完成。
 
 ## 服务组成
 

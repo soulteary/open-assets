@@ -93,17 +93,17 @@ sudo ./scripts/open-assets status all
 
 ## 定时运行与暂停
 
-可安装 `config/systemd/open-assets-retention.{service,timer}`。定时器以开机后 20 分钟为首次触发点；启用时若已超过该时间，可能立即执行。之后每 6 小时执行，并有最多 15 分钟随机延迟；仅清理 enabled=true 的仓库。它使用宿主机 Docker 权限调用现有 Publisher，不给应用容器挂载 Docker socket，也不增加 S3 删除权限。
+可安装 `config/systemd/open-assets-retention.service` 和 `config/systemd/open-assets-retention.timer`。定时器以开机后 20 分钟为首次触发点；启用时若已超过该时间，可能立即执行。之后每 6 小时执行，并有最多 15 分钟随机延迟；仅清理 enabled=true 的仓库。它使用宿主机 Docker 权限调用现有 Publisher，不给应用容器挂载 Docker socket，也不增加 S3 删除权限。
 
 ```sh
-sudo install -m 0644 config/systemd/open-assets-retention.{service,timer} /etc/systemd/system/
+sudo install -m 0644 config/systemd/open-assets-retention.service config/systemd/open-assets-retention.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now open-assets-retention.timer
 sudo systemctl start open-assets-retention.service
 sudo journalctl -u open-assets-retention.service --since=1day --no-pager
 ```
 
-已有维护标记时服务不会启动；标记不能停止已经运行的清理。计划恢复备份或手工维护前，先停止 timer 和 service，并确认没有手工清理进程，再设置维护标记。停止 timer 不会自动停止已启动任务。
+已有维护标记时服务不会启动；标记不能停止已经运行的清理。计划恢复备份或手工维护前，先设置维护标记，再停止 timer 和 service，并确认没有在途任务或手工清理进程；完整步骤见[维护窗口](operations.md#维护窗口)。停止 timer 不会自动停止已启动任务。
 
 ```sh
 sudo systemctl stop open-assets-retention.timer open-assets-retention.service

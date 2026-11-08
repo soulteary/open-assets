@@ -39,11 +39,13 @@ logging:
 
 `config/logrotate/open-assets-private` 只匹配 `/app/open-assets/private/updates/*/*.log`。每天轮转非空文件，超过 10 MiB 时可提前轮转，保留最多 7 份，轮转时清理超过 14 天的归档，压缩并延迟一轮压缩活动副本。`copytruncate` 避免影响仍持有文件描述符的临时构建进程，但复制和截断之间可能丢失极少量日志，不应用于要求无损的审计记录。
 
+先确认宿主机已安装 logrotate；Ubuntu 可运行 `sudo apt install logrotate`。以下命令在 `/app/open-assets` 执行，路径调整过的部署需同步修改规则和 service。
+
 安装和检查：
 
 ```sh
 sudo install -m 0644 config/logrotate/open-assets-private /etc/open-assets-logrotate.conf
-sudo install -m 0644 config/systemd/open-assets-logrotate.{service,timer} /etc/systemd/system/
+sudo install -m 0644 config/systemd/open-assets-logrotate.service config/systemd/open-assets-logrotate.timer /etc/systemd/system/
 sudo logrotate --debug /etc/open-assets-logrotate.conf
 sudo systemctl daemon-reload
 sudo systemctl enable --now open-assets-logrotate.timer
@@ -55,6 +57,4 @@ sudo systemctl status open-assets-logrotate.timer --no-pager
 
 不要扩展成 `/data/**/*.log`：Gitea 队列等目录中的 `.log` 是数据库文件，不是可轮转文本。任务、发布清单、对象、备份和证书也不属于本规则，容量与保留策略需分别管理。持续监测 Info 磁盘和 inode 使用情况；轮转不能替代容量告警。
 
-## 2026-11-07 实际验收
-
-九个容器实际配置均为 local / 10m / 3 / compress=true，且恢复 healthy。公开图片与附件读取及管理入口认证检查通过。journal 配置加载成功，私有日志 timer 已启用，首次正常运行成功。另用隔离的无敏感临时文本验证 logrotate 轮转、延迟压缩和 gzip 解压内容一致；隔离 Docker 测试也确认超出保留窗口的旧行被淘汰、最新行仍可读取。未强制轮转应用数据库或删除备份。
+历史部署验证见[日志验收记录](history/2026-11-07-logging.md)，不代表当前安装已完成这些检查。

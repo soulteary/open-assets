@@ -13,6 +13,7 @@
 - [命令速查](operator.md)：查询状态、重试、生成链接及选择恢复命令。
 - [配置说明](configuration.md)、[仓库与 URL](repositories.md)：配置位置与映射规则。
 - [Info](info.md)：安装采集服务，阅读健康、容量和恢复结果。
+- [部署诊断](doctor.md)：检查必需/可选定时器、最近执行结果和缓存时效。
 - [故障排查](troubleshooting.md)：按现象检查发布和管理入口。
 
 ## 运行维护
@@ -28,5 +29,3 @@
 - [开发测试](development.md)、[发布流程](architecture.md)、[性能与缓存](performance.md)。
 - [使用限制](usability.md)、[风险与控制](risks.md)、[安全说明](../SECURITY.md)。
 - [当前验证范围](acceptance.md)、[历史验收归档](history/README.md)。历史环境与测试数量不代表当前版本重新执行过同一套验证。
-
-部署检查与故障处理见[部署诊断](doctor.md)：必需/可选定时器、最近执行结果、缓存时效及下一步操作。

@@ -1,6 +1,6 @@
 # 日常操作入口
 
-在部署服务器的 `/app/open-assets` 中使用 `sudo ./scripts/open-assets`。开发者本机继续通过 Git SSH Push 提交；本工具不替代个人 Git 密钥或 Gitea 权限。已有 `repo ensure`、`objects setup` 和容器内 `python -m open_assets` 命令继续可用。
+在部署服务器的 `/app/open-assets` 中使用 `sudo ./scripts/open-assets`。开发者本机继续通过 Git SSH Push 提交；本工具不替代个人 Git 密钥或 Gitea 权限。仓库接入、对象清理身份配置和日常发布统一从此入口选择；`acknowledge-closure` 仅在宿主机运行，需要 root。容器内入口只支持其自身列出的命令，不与宿主机命令逐项对应。
 
 ## 先确认环境与 key
 
@@ -26,14 +26,15 @@ sudo ./scripts/open-assets status --key main-images
 sudo ./scripts/open-assets status all --key main-images --sha "$ASSET_COMMIT"
 ```
 
-ASSET_COMMIT 是内容仓库中 `git rev-parse HEAD` 的完整 40 位小写输出，需要传到当前服务器终端。status 输出 ID、key、SHA、状态；只匹配完整 key/SHA。没有输出表示所选任务目录没有匹配项，不代表成功，也不代表内容不存在。查询旧任务时使用 all 或 archived。
+ASSET_COMMIT 是目标提交的完整 40 位小写 SHA，需要传到当前服务器终端。发布当前提交时可在内容仓库执行 `git rev-parse HEAD` 获取；查询或恢复历史版本时使用那次发布的 SHA，不能直接用当前 HEAD 替代。status 输出 ID、key、SHA、状态；只匹配完整 key/SHA。没有输出表示所选任务目录没有匹配项，不代表成功，也不代表内容不存在。查询旧任务时使用 all 或 archived。
 
 - Push 已入队但未完成：先查 status，failed 才用 retry JOB_ID。publish 的返回值是任务 ID，还要继续确认 published。
 - 需要主动发布某个历史提交：publish KEY SHA 会在任务成功后改变当前图片版本。已有终态任务仍按既有规则去重。
 - 对象或本地历史副本被清理：restore-objects KEY SHA；需要同时重建本地时加 --with-local。默认保持当前版本，不靠重放终态 publish 任务恢复。
 - 已有完整副本且要切换图片：rollback-images KEY SHA。需要从 Git 先重建、完整验证再切换时，使用 restore-objects KEY SHA --with-local --rollback。
 - 恢复报告未完成或不确定：check-restore KEY SHA。核对只写独立报告，不能当作修复或结案。
-- 人工确认需要结案：close-restore KEY SHA --reason '复核说明'，同锁重新核对通过后记录结案，原报告保留。
+- 需要为恢复结案：close-restore KEY SHA --reason '复核说明'，同锁重新核对通过后记录结案，原报告保留。
+- 最新结案拒绝经人工核实无需处理：acknowledge-closure KEY AUDIT_ID --reason '核实原因'，先预览，再附加返回的确认令牌。它只确认提醒，不为恢复结案。
 - 审计容量增长：restore-audit-list KEY [SHA]；restore-audit-archive KEY [SHA] 默认预览，--apply 才实际归档；restore-audit-verify 校验归档。
 
 可在操作前运行对应 --help：
@@ -63,9 +64,9 @@ sudo ./scripts/open-assets links main-images "$ASSET_COMMIT" \
 
 ## 权限、退出和兼容
 
-脚本在宿主机调用固定的 Publisher 命令白名单，不运行任意 shell 或容器命令。服务启动用的 worker/serve/once/render 不通过此入口开放；由 Compose 管理。repo ensure 与 objects setup 仍委派现有管理程序，仍需其完整管理员配置和 root 权限，不因只读新命令而获得额外权限。
+日常发布命令由宿主机入口转发到固定的 Publisher 命令白名单，不接受任意 shell 或容器命令。人工确认由宿主机 root 直接写入独立审计目录。服务启动用的 worker/serve/once/render 不通过此入口开放；由 Compose 管理。repo ensure 与 objects setup 仍委派现有管理程序，仍需其完整管理员配置和 root 权限，不因只读新命令而获得额外权限。
 
---root 是全局参数，放在子命令前：`./scripts/open-assets --root /app/open-assets repo list`。它只选择部署目录，不将配方变成任意多实例支持。脚本不自动执行 docker compose up，不修复权限，也不创建缺失部署。
+--root 是全局参数，放在子命令前：`./scripts/open-assets --root /app/open-assets repo list`。它只选择部署目录，不将配方变成任意多实例支持。只读查询和日常转发命令不会创建缺失部署或修复权限；`repo ensure` 是管理操作，在需要使配置生效时会重建 webhook/publisher 并更新 Nginx，具体影响见[仓库 CLI](cli.md)。
 
 转发命令保留 Publisher 的输出和退出码：多数结果为 JSON，status 输出四列基本信息，资源超限失败时追加限制代码；用法错误为 2，实际失败通常为 1，锁忙也可能为 2，应结合返回内容区分。原有安全相关异常继续只给固定错误类型，未增加原始 SDK 请求、环境或凭据的输出。
 
