@@ -387,6 +387,12 @@ def collect(root, refresh_storage=False):
     result["restoration_closures"] = close_summary(
         root, data_root, evidence=evidence["restoration_closures"]
     )
+    from .closure_ack import summary as acknowledgment_summary
+
+    for row in result["restoration_closures"]["repositories"]:
+        row["acknowledgment"] = acknowledgment_summary(
+            root, data_root, result, evidence, row
+        )
     from .reminder_info import annotate
 
     annotate(result, evidence)

@@ -20,6 +20,7 @@
 - [维护与备份](operations.md)、[升级与证书](upgrade.md)、[日志](logging.md)。
 - [健康检查](health.md)、[资源预算](resource-limits.md)、[本地历史保留](retention.md)、[对象保留](object-retention.md)。
 - [恢复内容](object-restore.md)、[核对恢复](restore-check.md)、[恢复结案](restore-close.md)、[审计归档](restore-audit.md)。
+- [人工确认拒绝提醒](closure-acknowledgment.md)：保存审核原因与证据，不替恢复结案。
 - [手工接入](manual-onboarding.md)：仅用于需要检查每一步的定制部署。
 
 ## 开发与参考

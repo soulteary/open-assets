@@ -186,8 +186,8 @@ function recordGuidance(tr,row,kind,data) {
   const command='sudo ./scripts/open-assets ',check=command+'check-restore '+key+' FULL_SHA';
   let title='',notes=[],commands=[];
   if(state==='resolved'){
-    title=row.reminder?.reason==='later-verified'?'已处理：后续核对通过，原失败记录保留':'已处理：已显式结案，原始记录保留';
-    notes=['结案覆盖对应原恢复，不表示当前数据永久有效；无需重复结案。'];
+    title=row.reminder?.reason==='manually-acknowledged'?'已人工确认无需处理（非恢复结案）':row.reminder?.reason==='later-verified'?'已处理：后续核对通过，原失败记录保留':'已处理：已显式结案，原始记录保留';
+    notes=row.reminder?.reason==='manually-acknowledged'?['人工确认于 '+date(row.acknowledgment?.acknowledged_at)+'；仅确认这次结案拒绝提醒，原报告与在用版本保持原样；新尝试或证据变化后重新提醒。']:['结案覆盖对应原恢复，不表示当前数据永久有效；无需重复结案。'];
   }else if(state==='historical'){
     title=row.reminder?.reason==='close-not-needed'?'历史记录：原恢复已完成，无需结案':'历史记录：当时核对通过，不代表当前状态';
     notes=['不是新的失败，也不能据此宣称已修复。需要确认当前状态时可重新核对。'];commands=[check];
@@ -209,6 +209,9 @@ function recordGuidance(tr,row,kind,data) {
       if(a.scope_changed||a.source_changed||a.manifest_changed)notes.push('配置或原始证据已变化，先确认应处理的那次恢复；旧结案不覆盖新尝试。');
     }
   }
+  if(kind==='close'&&state==='active'&&a.status==='refused'){notes.push('仅在已核实这次拒绝无需处理时，才使用人工确认。先用 restore-audit-list 查 AUDIT_ID，再预览；核实预览结果后追加 --confirm 证据令牌。这不替恢复结案。');commands.push(command+'acknowledge-closure '+key+' AUDIT_ID --reason \"填写核实无需处理的原因\"');}
+  if(kind==='close'&&row.acknowledgment?.status==='invalid')notes.push(row.acknowledgment.reason==='new-attempt'?'旧人工确认不覆盖新的结案尝试。':'证据已变化，旧人工确认失效，需重新核实；不要直接复用旧令牌。');
+  if(kind==='close'&&row.acknowledgment?.status==='unavailable')notes.push('人工确认或其证据不可读，不能按已处理判断；检查私有确认记录及备份。');
   if(title)td.append(el('strong',title,'record-state'));
   for(const note of notes)td.append(el('small',note,'storage-detail'));
   for(const text of commands)td.append(el('code',text,'action-command'));

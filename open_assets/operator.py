@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -63,6 +64,16 @@ def parser():
         "doctor", help="只读检查配置、容器、定时任务与快照，不修复或重启"
     )
     doctor.add_argument("--json", action="store_true")
+    ack = commands.add_parser(
+        "acknowledge-closure",
+        help="预览人工确认结案拒绝；--confirm TOKEN 后保留证据并记录确认，不替恢复结案",
+    )
+    ack.add_argument("key", type=cli.key)
+    ack.add_argument("audit_id", type=audit_id)
+    ack.add_argument("--reason", required=True, type=cli.reason)
+    ack.add_argument(
+        "--confirm", type=evidence_token, help="使用本次预览的64位证据令牌显式确认"
+    )
     links = commands.add_parser(
         "links", help="只读生成图片/版本附件 URL，正确编码中文、空格、加号和百分号"
     )
@@ -71,6 +82,20 @@ def parser():
     links.add_argument("path", help="相对 public/ 的文件路径，也接受配置的源目录前缀")
     links.add_argument("--json", action="store_true")
     return p
+
+
+def audit_id(value):
+    if not re.fullmatch(r"[0-9a-f]{32}", value):
+        raise argparse.ArgumentTypeError(
+            "需要 restore-audit-list 输出的32位结案审计 ID。"
+        )
+    return value
+
+
+def evidence_token(value):
+    if not re.fullmatch(r"[0-9a-f]{64}", value):
+        raise argparse.ArgumentTypeError("需要本次 preview 输出的完整64位证据令牌。")
+    return value
 
 
 def configured(root):
@@ -302,6 +327,22 @@ def main(argv=None):
     options = cli.normalize(p, p.parse_args(argv))
     root = options.root.resolve()
     try:
+        if options.command == "acknowledge-closure":
+            from .closure_ack import run
+
+            if os.geteuid() != 0:
+                raise ValueError("run host acknowledgment as root")
+            result = run(
+                root, options.key, options.audit_id, options.reason, options.confirm
+            )
+            print(json.dumps(result, ensure_ascii=False))
+            return (
+                2
+                if result["status"] == "busy"
+                else 0
+                if result["status"] in ("preview", "acknowledged")
+                else 1
+            )
         if options.command in ("repo", "objects") and not (
             options.command == "repo" and options.operation == "list"
         ):
@@ -429,7 +470,11 @@ def main(argv=None):
                 dict(
                     status="failed",
                     error=type(error).__name__,
-                    hint="确认 --root 指向已初始化部署；先用 doctor 检查。原始异常和凭据不输出。",
+                    hint=(
+                        "请用 sudo 在宿主机运行；先用 restore-audit-list 核对最新在线 refused 审计 ID，再检查原报告、确认指针及备份。不要重跑初始化或手工改写指针。"
+                        if options.command == "acknowledge-closure"
+                        else "确认 --root 指向已初始化部署；先用 doctor 检查。原始异常和凭据不输出。"
+                    ),
                 ),
                 ensure_ascii=False,
             ),

@@ -46,6 +46,10 @@ sudo ./scripts/open-assets repo ensure --help
 
 帮助只列该命令适用的参数。错误的 key/SHA、任务 ID、缺少参数、错误开关或超出范围，在读取配置和执行前拒绝；不依赖 Python traceback 解释用法。发布/恢复的保护条件、去重和权限不因入口统一而改变。
 
+## 人工确认已核实的结案拒绝
+
+使用 `restore-audit-list KEY` 找到最新在线拒绝的审计 ID，然后运行 `acknowledge-closure KEY AUDIT_ID --reason "实际核实原因"` 预览。核实后附加 `--confirm TOKEN` 才记录确认；旧报告保留，新尝试或证据变化会重新提醒。它只在宿主机运行，不替恢复结案，见[完整步骤](closure-acknowledgment.md)。
+
 ## 生成可复制链接
 
 ```sh

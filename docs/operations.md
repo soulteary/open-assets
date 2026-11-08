@@ -104,3 +104,5 @@ Worker 对每份任务最多读取 64 KiB，拒绝符号链接、非普通文件
 Git/队列测量由 `open-assets-resources.timer` 驱动，维护时同时停止该 timer 和正在运行的 service。默认缓存 15 分钟，`--force` 不绕过锁；安装和阈值见 [Info](info.md#git-缓存与全局队列)。备份包含 `info/resource-cache.json` 与 `publisher/resource-limit-events.json`；缓存可重建，事件文件只保存本功能启用后的最近原因。
 
 部署诊断由 `open-assets-doctor.timer` 独立采集，维护时停止该 timer 和正在运行的 service。维护标记会阻止新启动，但不会终止已有执行。`info/doctor-cache.json` 是可重建的诊断缓存，不替代业务备份；读取与手动更新见 [Info](info.md#部署诊断)。
+
+人工确认审计位于 `${DATA_ROOT}/closure-acknowledgments/`，包含原因、原拒绝快照及固定指针，应随整个 DATA_ROOT 一起备份。现有恢复审计归档命令不移动该目录；恢复后指针、记录、快照和现场证据完整匹配才标灰，见[人工确认](closure-acknowledgment.md)。

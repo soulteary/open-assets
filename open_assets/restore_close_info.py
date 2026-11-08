@@ -202,6 +202,7 @@ def summary(root, data_root, evidence=None):
                 row.update(result_status="ok", attempt=record)
                 if evidence is not None:
                     evidence[key] = dict(
+                        audit_id=intent["audit_id"],
                         sha=intent["sha"],
                         source_digest=result.get("source_report_digest")
                         if result

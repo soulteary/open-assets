@@ -92,7 +92,16 @@ def annotate(snapshot, evidence):
                     else:
                         reason = "needs-check"
                 else:
-                    if closed_ok:
+                    if a.get("status") == "refused" and row.get(
+                        "acknowledgment", {}
+                    ).get("status") in ("invalid", "unavailable"):
+                        reason = "acknowledgment-invalid"
+                    elif (
+                        a.get("status") == "refused"
+                        and row.get("acknowledgment", {}).get("status") == "valid"
+                    ):
+                        state, reason = "resolved", "manually-acknowledged"
+                    elif closed_ok:
                         state, reason = "resolved", "explicitly-closed"
                     elif (
                         a.get("status") == "refused"
