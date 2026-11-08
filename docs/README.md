@@ -34,3 +34,6 @@
 - [架构与发布流程](architecture.md)、[性能与缓存](performance.md)。
 - [使用限制](usability.md)、[风险与控制](risks.md)、[安全说明](../SECURITY.md)。
 - [验证记录](acceptance.md)、[历史验收索引](history/README.md)。记录只适用于其中写明的提交、环境和范围，不能证明后续版本已重新验证。
+
+- [SVG 使用范围](svg.md)：固定图片入口、版本附件与网页上传的差异。
+- [发布与保留修订](review-fixes.md)：本轮改动、升级步骤与保留边界。

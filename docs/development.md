@@ -18,4 +18,4 @@ node --test tests/test_storage_ui.js
 
 [端到端脚本](../tests/e2e/README.md)需要可丢弃的 Linux 环境。它会初始化真实 Gitea/OtterIO，并验证仓库接入、SSH Push、公开读取和管理入口。不要挂载生产 Docker socket、private 或数据。对象清理与恢复的专项只能连接专用测试存储。
 
-CI 执行格式检查、Python/界面测试和镜像构建；不会自动运行需要独立 Docker daemon 的从零部署测试。变更初始化、权限或路由后，应另外运行相关端到端验收。测试结果记录版本、环境和范围，放在[验证记录](acceptance.md)或[历史归档](history/README.md)。
+CI 先执行格式检查、Python/界面测试和镜像构建，再在独立 GitHub 托管 runner 上执行从零部署与网页分享 API 验收。变更初始化、权限或路由后，应另外运行相关端到端验收。测试结果记录版本、环境和范围，放在[验证记录](acceptance.md)或[历史归档](history/README.md)。

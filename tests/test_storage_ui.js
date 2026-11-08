@@ -104,6 +104,17 @@ test('object retention preview never appears as actual deletion and policy/candi
   assert.match(text,/最近完整执行：暂无完整记录/);
   assert.doesNotMatch(text,/本次已确认删除/);
 });
+test('partial batches display progress without claiming complete version removal', () => {
+  const ui = setup(), data = retentionFixture(), row = data.object_retention.repositories[0];
+  row.last_plan = {...row.last_plan,mode:'apply',reason:'budget-skipped',skip_counts:{'batch-remaining':1},removed_versions:0,removed_objects:100,removed_bytes:4096};
+  row.last_apply = row.last_plan;
+  row.attempt = row.last_plan;
+  ui.context.render(data);
+  const text = ui.get('object-retention-repositories').textContent;
+  assert.match(text,/已分批删除，仍有剩余/);
+  assert.match(text,/100 个/);
+  assert.doesNotMatch(text,/undefined/);
+});
 test('object retention failed apply retains last success and warns about partial deletion', () => {
   const ui = setup(), data = retentionFixture(), row = data.object_retention.repositories[0];
   row.last_apply = {...row.last_plan,mode:'apply',reason:'applied',removed_versions:1,removed_objects:3,removed_bytes:1024};

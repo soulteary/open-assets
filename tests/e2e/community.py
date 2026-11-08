@@ -214,14 +214,18 @@ def main():
     assert api("/api/logout", b"", "POST")[0] == 403
     content = b"Hello Open Assets\n"
     keys = ["public/hello.txt", "public/中文 + %.txt", "private/hidden.txt"]
-    for key in keys:
+    payloads = dict.fromkeys(keys, content)
+    payloads["public/diagram.svg"] = (
+        b'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>'
+    )
+    for key, payload in payloads.items():
         code, body, _ = api(
             "/api/uploads",
             json.dumps(
                 {
                     "bucket": "uploads",
                     "key": key,
-                    "size": len(content),
+                    "size": len(payload),
                     "overwrite": False,
                 }
             ).encode(),
@@ -231,21 +235,21 @@ def main():
         upload = json.loads(body)["id"]
         assert api(
             "/api/uploads/" + upload,
-            content,
+            payload,
             "PUT",
             {"Content-Type": "application/octet-stream", "X-CSRF-Token": csrf},
         )[0] in (200, 201, 202)
-    for key in keys[:2]:
+    for key in [*keys[:2], "public/diagram.svg"]:
         url = "https://" + domains["oss"] + "/uploads/" + urllib.parse.quote(key)
         for _ in range(30):
             code, body, _ = request(url)
             if code == 200:
                 break
             time.sleep(1)
-        assert code == 200 and body == content
+        assert code == 200 and body == payloads[key]
         assert request(url, method="HEAD")[0] == 200
         code, body, _ = request(url, headers={"Range": "bytes=0-4"})
-        assert code == 206 and body == content[:5]
+        assert code == 206 and body == payloads[key][:5]
     public = "https://" + domains["oss"]
     for path, method, body in [
         ("/uploads?list-type=2", "GET", None),
@@ -280,6 +284,7 @@ def main():
     report = {
         "passed": True,
         "checks": [
+            "SVG object upload and anonymous byte verification (not browser preview)",
             "template-health",
             "redirect",
             "management-auth",

@@ -121,7 +121,13 @@ def clean_record(value, complete=False):
         skips = value.get("skip_counts", {})
         if not isinstance(skips, dict) or any(
             k
-            not in ("versions-limit", "objects-limit", "bytes-limit", "request-budget")
+            not in (
+                "versions-limit",
+                "objects-limit",
+                "bytes-limit",
+                "request-budget",
+                "batch-remaining",
+            )
             or type(n) is not int
             or not 0 <= n <= 50000
             for k, n in skips.items()

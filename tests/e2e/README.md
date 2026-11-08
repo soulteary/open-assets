@@ -25,8 +25,10 @@ OPEN_ASSETS_FRESH_TEST=1 sh tests/e2e/fresh-stack.sh
 - 请求冲突前缀，确认没有创建对应仓库。
 - 核对重复执行准备/初始化会被拒绝，凭据与配置哈希不变。
 - 使用个人 SSH 密钥克隆两个空仓库，执行使用指南中的首次提交和后续更新，各完成两次真实 Push。
-- 等待两个签名事件对应任务达到 published。
+- 等待两个签名事件对应任务达到 published，并通过宿主 CLI 回滚到首次发布、核对 current 后返回最新版本。
 - 用独立测试 Traefik 检查图片、不可变附件、中文/特殊字符路径、Range 和管理入口认证。
+
+GitHub CI 在专用托管 runner 上自动执行 fresh-stack 及 community API 验收；失败时不上传 private 目录或原始诊断，以免暴露生成凭据。
 
 测试域名全部位于保留的 acceptance.invalid 下。入口使用临时 CA 签发的文件证书，路由基于 configure-edge.py 生成，但测试副本移除 ACME resolver。它不验证真实 DNS、云安全组、公共证书申请或浏览器 UI；这些范围与单机生产验收记录分开。
 
