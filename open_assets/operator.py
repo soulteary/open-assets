@@ -5,6 +5,9 @@ import json
 import re
 import subprocess
 import sys
+import time
+
+from . import diagnostics
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
@@ -24,16 +27,7 @@ SERVICES = (
     "stargate",
     "gitea",
 )
-TIMERS = (
-    "info",
-    "objects",
-    "retention",
-    "object-retention",
-    "repair",
-    "logrotate",
-    "audits",
-    "resources",
-)
+TIMERS = tuple(diagnostics.TIMERS)
 
 
 def parser():
@@ -166,12 +160,13 @@ def inspect_command(args, *, root=None):
 
 def doctor(root):
     checks = []
+    config = None
 
     def add(name, state, hint):
         checks.append(dict(check=name, status=state, hint=hint))
 
     try:
-        configured(root)
+        config = configured(root)
         add("configuration", "ok", "配置结构和策略校验通过。")
     except (OSError, ValueError, TypeError, KeyError, AttributeError, yaml.YAMLError):
         add(
@@ -179,7 +174,14 @@ def doctor(root):
             "attention",
             "检查 private/repositories.yaml 与文件权限；不要重跑初始化重置凭据。",
         )
+    if (root / "private/maintenance.flag").exists():
+        add(
+            "maintenance",
+            "attention",
+            "维护标记存在，部分任务会被跳过；先确认维护是否结束，再按维护流程恢复，勿仅为通过检查删除标记。",
+        )
     components = []
+    cache_rows = []
     try:
         raw = inspect_command(
             [
@@ -235,45 +237,63 @@ def doctor(root):
             "attention",
             "确认 Docker 可用、Compose 项目目录正确，且当前用户有读取权限。",
         )
-    timer_rows = []
-    for name in TIMERS:
-        try:
-            value = inspect_command(
-                ["systemctl", "is-active", "open-assets-" + name + ".timer"]
-            ).strip()
-            state = "active" if value == "active" else "inactive"
-        except (OSError, subprocess.SubprocessError):
-            state = "inactive-or-unavailable"
-        timer_rows.append(dict(timer=name, status=state))
+    try:
+        uptime = float(Path("/proc/uptime").read_text().split()[0])
+    except (OSError, ValueError):
+        uptime = 0
+    timer_rows = [
+        diagnostics.timer(root, name, inspect_command, uptime) for name in TIMERS
+    ]
     add(
         "timers",
-        "ok" if all(t["status"] == "active" for t in timer_rows) else "attention",
-        "核对定时任务安装及 systemctl 日志；本命令不会启动任务。",
+        "attention" if any(t["status"] == "attention" for t in timer_rows) else "ok",
+        "必需：Info、对象/审计/资源采集、日志轮转；可选：自动修复、本地/对象保留。详见下方逐项结果。",
     )
     try:
         from .telemetry import environment
 
-        snapshot = read_snapshot(
-            Path(environment(root)["DATA_ROOT"]) / "info/snapshot.json"
+        data = Path(environment(root)["DATA_ROOT"])
+        snapshot = read_snapshot(data / "info/snapshot.json")
+        snapshot["stale"] = (
+            snapshot["stale"] or snapshot["collected_at"] > time.time() + 5
         )
         add(
             "info-snapshot",
             "attention" if snapshot["stale"] else "ok",
             "主机快照年龄 "
             + str(snapshot["age_seconds"])
-            + " 秒；不代表低频缓存也刚更新。",
+            + " 秒；不代表低频缓存也刚更新。"
+            + (
+                "查看 sudo journalctl -u open-assets-info.service -n 50 --no-pager，修复后 sudo systemctl start open-assets-info.service。"
+                if snapshot["stale"]
+                else ""
+            ),
         )
     except (OSError, ValueError, KeyError, TypeError):
         add(
             "info-snapshot",
             "attention",
-            "检查 Info 主机采集服务、DATA_ROOT 与快照权限。",
+            "检查 DATA_ROOT 与快照权限，查看 sudo journalctl -u open-assets-info.service -n 50 --no-pager；修复后 sudo systemctl start open-assets-info.service。",
         )
+    try:
+        from .telemetry import environment
+
+        cache_rows = diagnostics.caches(
+            root, Path(environment(root)["DATA_ROOT"]), config
+        )
+        add(
+            "caches",
+            "attention" if any(r["status"] != "ok" for r in cache_rows) else "ok",
+            "分别检查本地版本、对象、审计、Git/队列缓存；只读固定文件，不扫描目录或访问 S3。",
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        add("caches", "attention", "先修复配置与 DATA_ROOT，再重新运行 doctor。")
     return dict(
         status="ok" if all(c["status"] == "ok" for c in checks) else "attention",
         checks=checks,
         components=components,
         timers=timer_rows,
+        caches=cache_rows,
     )
 
 
@@ -348,8 +368,27 @@ def main(argv=None):
                             + value["health"]
                         )
                 for value in result["timers"]:
-                    if value["status"] != "active":
-                        print("  定时任务 " + value["timer"] + "：" + value["status"])
+                    print(
+                        "  定时任务 "
+                        + value["timer"]
+                        + ("（必需）" if value["required"] else "（可选）")
+                        + "："
+                        + value["reason"]
+                        + "；"
+                        + value["hint"]
+                    )
+                for value in result["caches"]:
+                    age = value.get("age_seconds")
+                    print(
+                        "  缓存 "
+                        + value["cache"]
+                        + (" / " + value["key"] if value.get("key") else "")
+                        + "："
+                        + value["reason"]
+                        + ("，采样年龄 " + str(age) + " 秒" if age is not None else "")
+                        + "；"
+                        + value["hint"]
+                    )
             return 0 if result["status"] == "ok" else 1
         # Explicit allowlist from the shared parser; never invoke a shell or arbitrary container commands.
         if options.command not in cli.DESCRIPTIONS or options.command in cli.INTERNAL:

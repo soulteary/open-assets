@@ -27,3 +27,5 @@
 - [开发测试](development.md)、[发布流程](architecture.md)、[性能与缓存](performance.md)。
 - [使用限制](usability.md)、[风险与控制](risks.md)、[安全说明](../SECURITY.md)。
 - [当前验证范围](acceptance.md)、[历史验收归档](history/README.md)。历史环境与测试数量不代表当前版本重新执行过同一套验证。
+
+部署检查与故障处理见[部署诊断](doctor.md)：必需/可选定时器、最近执行结果、缓存时效及下一步操作。

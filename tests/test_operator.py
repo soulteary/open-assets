@@ -215,10 +215,25 @@ class Operator(unittest.TestCase):
         ]
 
         def inspect(args, **kwargs):
-            return json.dumps(containers) if args[0] == "docker" else "active\n"
+            if args[0] == "docker":
+                return json.dumps(containers)
+            name = args[2].removesuffix(".timer")
+            uptime = (
+                float(Path("/proc/uptime").read_text().split()[0])
+                if Path("/proc/uptime").exists()
+                else 0
+            )
+            return (
+                f"Id={name}.timer\nLoadState=loaded\nActiveState=active\nUnitFileState=enabled\n\n"
+                f"Id={name}.service\nLoadState=loaded\nActiveState=inactive\nResult=success\n"
+                f"ExecMainStartTimestampMonotonic={int((uptime - 2) * 1e6)}\nExecMainExitTimestampMonotonic={int((uptime - 1) * 1e6)}"
+            )
 
         before = {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
-        with patch.object(operator, "inspect_command", side_effect=inspect) as command:
+        with (
+            patch.object(operator, "inspect_command", side_effect=inspect) as command,
+            patch.object(operator.diagnostics, "caches", return_value=[]),
+        ):
             result = operator.doctor(self.root)
         self.assertEqual(result["status"], "ok")
         self.assertNotIn("secret", json.dumps(result))

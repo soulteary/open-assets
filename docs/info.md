@@ -18,7 +18,7 @@ sudo python3 -m open_assets.telemetry --root /app/open-assets
 sudo systemctl enable --now open-assets-info.timer open-assets-objects.timer open-assets-audits.timer open-assets-resources.timer
 ```
 
-上述命令安装所有单元，只启用采集。对象清理账号和删除权限按对象保留文档另行准备。保留清理、健康恢复和日志轮转分别按[本地保留](retention.md)、[对象保留](object-retention.md)、[健康检查](health.md)和[日志](logging.md)启用。`doctor` 会提醒未启用的定时器；应按部署需要核对，不用为了消除提示直接开启删除策略。
+上述命令安装所有单元，只启用采集。对象清理账号和删除权限按对象保留文档另行准备。保留清理、健康恢复和日志轮转分别按[本地保留](retention.md)、[对象保留](object-retention.md)、[健康检查](health.md)和[日志](logging.md)启用。`doctor` 将采集与日志轮转列为必需项，自动修复和两个保留任务列为可选项。未启用可选项不报故障；已执行失败和缓存过期仍提示，见[部署诊断](doctor.md)。
 
 主机快照每轮结束后约 30 秒更新，页面每 30 秒读取一次。超过 120 秒会标记过期。查看采集故障：
 

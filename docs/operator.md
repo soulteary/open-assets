@@ -11,9 +11,9 @@ sudo ./scripts/open-assets repo list
 sudo ./scripts/open-assets status --key main-images
 ```
 
-repo list 读取配置中的稳定 key、仓库名、分支和图片 URL 前缀，不调用 Gitea，也不需要管理员密码。key 不是 owner/repository 名称。doctor 校验配置结构、八个应用容器、八个 timer 与 Info 主机快照；不启动/重启服务、不初始化、不读取存储 root 密码。既有外部 Traefik、外部 DNS/防火墙、业务内容、备份恢复和低频缓存是否足够新仍需另查。
+repo list 读取配置中的稳定 key、仓库名、分支和图片 URL 前缀，不调用 Gitea，也不需要管理员密码。key 不是 owner/repository 名称。doctor 校验配置结构、八个应用容器、必需/可选 timer 的最近执行结果，以及 Info 快照和统计缓存；不启动/重启服务、不初始化、不读取存储 root 密码。既有外部 Traefik、外部 DNS/防火墙、业务内容与备份恢复仍需另查。
 
-doctor 中“通过”是该检查当时满足条件，不是整套部署完全健康的证明。定时器 active 只说明调度已启用，不能代替服务最后执行结果。Info 快照新鲜也不表示对象/审计缓存刚刚更新。失败时按提示检查，避免重跑初始化来处理日常故障。
+doctor 中“通过”是该检查当时满足条件，不是整套部署完全健康的证明。定时器调度、service 最近执行结果与各缓存采样年龄分别检查，可选功能未启用不报故障；已执行失败仍会提示。完整规则与排查步骤见[部署诊断](doctor.md)。失败时按提示检查，避免重跑初始化来处理日常故障。
 
 repo list、doctor、links 支持 --json。doctor 发现待处理项返回 1；正常返回 0。帮助与参数解析不需要 Docker、配置或 root；实际命令仍需相应文件/Docker 读取权限。
 
