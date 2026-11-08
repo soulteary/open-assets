@@ -194,6 +194,9 @@ function recordGuidance(tr,row,kind,data) {
   }else if(state==='active'){
     title='待处理：先核对证据，再决定操作';
     if(data.stale||row.result_status!=='ok'||!row.attempt){notes=['先运行 doctor，检查 Info 采集日志和报告读取错误；不要用旧结果判断已修复。'];commands=[command+'doctor'];}
+    else if(kind==='close'&&a.reason==='source-unavailable'){
+      notes=['原恢复报告缺失、损坏或存储范围变化。先在服务器核对原报告和私有备份；若从未执行恢复，则无需结案。','可以核对数据，但核对通过不代表缺失报告已恢复。不要为了消除提醒创建新恢复、伪造报告或盲目重复结案。'];commands=[check,command+'restore-audit-list '+key];
+    }
     else if(row.reminder?.reason==='needs-close'||(kind==='check'&&a.diagnosis==='verified'&&a.source_uncertain&&!['stale','references_changed','source_changed','scope_changed','manifest_changed','observation_unavailable'].some(k=>a[k]))){
       notes=['数据核对通过，但原恢复仍未结案或不确定。人工复核后显式结案；命令会重新完整核对，不直接采纳缓存。'];commands=[command+'close-restore '+key+' FULL_SHA --reason "填写人工复核原因"'];
     }else{
