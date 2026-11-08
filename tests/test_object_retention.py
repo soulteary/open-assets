@@ -159,6 +159,24 @@ class ObjectRetention(unittest.TestCase):
                     )
                 )
 
+    def test_slow_metadata_checks_leave_time_for_deletion_progress(self):
+        self.large_version(250)
+        clock = [0.0]
+        original = self.store.head_object
+
+        def slow_head(**kwargs):
+            clock[0] += 2
+            return original(**kwargs)
+
+        with (
+            patch.object(r.time, "monotonic", side_effect=lambda: clock[0]),
+            patch.object(self.store, "head_object", side_effect=slow_head),
+        ):
+            result = self.run_retention(True)
+        self.assertGreater(result["removed_objects"], 0)
+        self.assertLess(result["removed_objects"], 250)
+        self.assertLess(clock[0], r.SECONDS)
+
     def test_policy_object_and_byte_limits_are_per_batch(self):
         sha = self.large_version(8)
         self.config["object_retention"].update(

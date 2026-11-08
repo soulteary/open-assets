@@ -398,7 +398,13 @@ def remove(config, repository, version, budget, progress=None):
     selected = dict(list(version.get("batch", observed).items())[: max(0, available)])
     if observed and not selected:
         return dict(status="budget", objects=0, bytes=0)
+    # Spend at most half the remaining window checking metadata. Otherwise a
+    # slow HEAD phase could consume every run without ever reaching DELETE.
+    head_deadline = (time.monotonic() + budget.deadline) / 2
+    checked = {}
     for name, obj in selected.items():
+        if checked and time.monotonic() >= head_deadline:
+            break
         head = budget.call("head_object", Bucket=config["bucket"], Key=name)
         if (
             head["ContentLength"] != obj["size"]
@@ -409,6 +415,8 @@ def remove(config, repository, version, budget, progress=None):
             != version["files"][name]["sha256"]
         ):
             raise ValueError("object retention metadata mismatch")
+        checked[name] = obj
+    selected = checked
     previous = receipt(config, key, sha, version["manifest_digest"])
     record = previous or dict(
         schema_version=1,
