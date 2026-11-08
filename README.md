@@ -16,11 +16,18 @@
 
 ![Open Assets 架构图](.github/images/open-assets-architecture.gif)
 
-Gitea 通过内部签名 Webhook 提交任务，Publisher 串行导出和校验内容。Traefik 为 Nginx 图片和 OtterIO 附件提供 HTTPS；Gitea、OC、Traefik 管理页与 Info 由单实例 Stargate 保护，应用自身权限继续生效。应用容器不挂载 Docker socket。
+各组件分别负责接收内容、发布文件、提供访问和日常管理：
 
-Info 的容量与诊断数据由定时任务采集，页面刷新不会触发存储遍历或 doctor 检查。日志轮转和受限健康恢复也由宿主机定时任务管理。
+- **Gitea**：托管内容仓库，接收 Git Push，并通知发布服务。
+- **Webhook 与 Publisher**：验证来自 Gitea 的通知并排队处理，依次导出、校验和发布仓库中的文件。
+- **OtterIO**：提供兼容 S3 的对象存储，保存版本附件和网页上传的文件。
+- **OC**：存储管理网页，用于登录后上传、下载和管理 OtterIO 中的文件。
+- **Nginx**：提供当前版本的图片访问，让图片保持固定链接。
+- **Traefik**：统一提供 HTTPS 入口，将请求转发到对应服务，并提供入口管理页面。
+- **Stargate**：为 Gitea、OC、Traefik 管理页和 Info 提供统一的登录保护；各应用自身的账号和权限仍然生效。
+- **Info**：运行看板，展示组件健康、证书有效期、磁盘占用和发布维护状态。
 
-架构图由 [fireworks-tech-graph](https://github.com/yizhiyanhua-ai/fireworks-tech-graph/) 的 Claude 风格生成，SVG 定制了流向动画。动画表示调用方向，不表示延迟或事务边界。
+公开图片和已配置公开权限的附件无需登录即可访问。应用容器不挂载 Docker socket；Info 的容量与诊断数据由定时任务采集，页面刷新不会触发存储遍历或 doctor 检查。日志轮转和受限健康恢复由宿主机定时任务管理。
 
 ## 选择适合的上传方式
 
