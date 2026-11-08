@@ -1,0 +1,23 @@
+name: 文档问题
+description: 报告难理解的步骤、错误命令或失效链接。
+title: '[Docs] '
+body:
+  - type: input
+    id: location
+    attributes:
+      label: 文档位置
+      description: 填仓库文档链接和章节；不要附带私有服务器地址。
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: 卡在哪一步
+      description: 哪句话难理解、哪个命令或链接有问题？如附输出，先去掉秘密和生产信息。
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: 希望补充或调整的内容
+      description: 可选；也可说明你的系统、版本和部署路线。

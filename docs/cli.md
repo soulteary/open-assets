@@ -25,11 +25,15 @@ sudo ./scripts/open-assets status --key main-images
 
 示例中的 `FULL_COMMIT_SHA` 是目标版本完整的 40 位小写 SHA，`JOB_ID` 是 status 输出中的完整 64 位任务 ID，执行前要替换。查询历史版本应使用那次提交的 SHA，不能直接以当前 HEAD 代替。
 
-## 仓库自动接入 CLI
+## 仓库接入
+
+首次分享先看[完整例子](first-share.md)。下面用于已初始化服务器上的其他项目。
+
+### 仓库自动接入 CLI
 
 此命令在部署服务器宿主机上执行，自动协调 Gitea 仓库、只读 Deploy Key、签名 Push Webhook、Publisher 的 S3 前缀权限、发布白名单和 Nginx 图片映射。不需要把 Docker socket 或管理员凭据挂到应用容器里。
 
-## 接入命令
+### 接入命令
 
 ```sh
 cd /app/open-assets
@@ -50,7 +54,7 @@ sudo ./scripts/open-assets repo ensure content/project-b \
 
 已有同名私有仓库可直接接入；公开或归档仓库不会被自动转换。已配置 `enabled: false` 或 `serve: false` 的项不会被命令重新启用。
 
-## 执行前提
+### 执行前提
 
 这是初始化之后的运维命令。需要 Linux 宿主机 Python 3、PyYAML、Docker Compose，以及完整的 private 配置：Gitea content 管理凭据、Publisher 公钥、Webhook Secret、已配置的 OC 管理 alias 与 CA、现有 assets-publish 策略和发布账号。
 
@@ -58,7 +62,7 @@ sudo ./scripts/open-assets repo ensure content/project-b \
 
 新增仓库或恢复中断执行时会短暂停止/重建 webhook 与 publisher；图片和附件服务继续运行。请安排发布维护窗口，看到 ready 后再 Push。窗口内旧仓库的失败 Hook 需重投或按 SHA 补发。
 
-## 自动完成的步骤
+### 自动完成的步骤
 
 1. 取得主机级锁，验证名称、稳定 key、URL 前缀和现有配置；前缀冲突在创建资源前拒绝。
 2. 查询同名仓库，不存在时创建空私有仓库；将实际 ID 绑定到白名单。
@@ -68,7 +72,7 @@ sudo ./scripts/open-assets repo ensure content/project-b \
 6. 更新发布白名单，生成候选 Nginx 配置，通过 nginx -t 后 reload。校验失败恢复旧 Nginx 文件，不 reload 无效配置。
 7. 必要时重建接收器/Worker，确保 bind mount 使用新的配置 inode，写入私有接入记录并返回 ready。
 
-## 重复执行与失败恢复
+### 重复执行与失败恢复
 
 可以重复运行完全相同的命令。最终配置和资源不重复；已成功应用且配置未变时，`services_recreated` 为 false，不重建发布服务。命令仍核对远端状态、协调同值 Webhook Secret 和专用 IAM 策略。
 
@@ -78,7 +82,7 @@ sudo ./scripts/open-assets repo ensure content/project-b \
 
 恢复材料在 `private/onboarding/<key>/`：初始 repositories 与线上策略副本、需要修改时保存的 Nginx 旧配置，以及成功后的 result.json。它们是私有材料，不提交 Git；不要未经核对直接恢复整份旧配置，以免覆盖后续其他仓库接入。
 
-## 接入后发布
+### 接入后发布
 
 用个人 Gitea SSH 密钥克隆新仓库，按[首次发布](usage.md#首次发布空仓库)提交内容。第一次提交前不拉取不存在的远端 main 分支。若使用其他分支，将示例中的 main 替换为接入时的配置分支。
 
@@ -98,25 +102,29 @@ sudo ./scripts/open-assets links project-b "$ASSET_COMMIT" 'public/images/logo.p
 
 已有提交需要补发时，执行 `sudo ./scripts/open-assets publish project-b FULL_COMMIT_SHA`，然后查询任务。它可能切换当前图片版本，且仍受任务去重限制；已清理的历史内容应使用恢复命令。
 
-## 对象清理账号
+## 高级维护
+
+以下按实际问题选择，不是第一次发布的前置步骤。恢复、核对、结案和人工确认各自保存不同证据，不需要按文档顺序全部执行。
+
+### 对象清理账号
 
 这不是首次发布的必要步骤。只有准备配置对象保留时，才在完成初始化后执行 `sudo ./scripts/open-assets objects setup`，创建或更新专用清理身份。重复执行保留凭据，仅为显式启用且声明独占写入的仓库授予删除权限。仓库或开关变化后需重新执行；Publisher 不增加 DeleteObject。完整步骤见[对象保留](object-retention.md)。
 
-## 恢复已清理对象
+### 恢复已清理对象
 
 在部署服务器执行 `sudo ./scripts/open-assets restore-objects KEY FULL_SHA`，从固定 Git 分支历史重建并核验对象。它同步执行，不依赖任务重放；获取不到 Worker 锁时返回 busy 和退出码 2。命令及前提见[对象恢复](object-restore.md)。
 
 本地副本也已清理时，添加 `--with-local` 重建完整 public 与图片副本，默认保持当前版本。确认需要切换后，使用 `--with-local --rollback` 在完整校验后显式回滚。已有副本冲突会停止，不强制覆盖；详见[恢复与切换](object-restore.md#完整恢复后显式切换)。
 
-## 核对恢复状态
+### 核对恢复状态
 
 `sudo ./scripts/open-assets check-restore main-images FULL_COMMIT_SHA` 只读核对对象、本地两份副本、current/published 与清理屏障，并保存独立诊断报告。默认不修复、不切换，也不结案原恢复。完整前提、结果与退出码见[恢复状态核对](restore-check.md)。
 
-## 显式结案恢复
+### 显式结案恢复
 
 `sudo ./scripts/open-assets close-restore main-images FULL_COMMIT_SHA --reason '人工复核原因'` 在同一维护锁内重新核对，通过后单独记录结案。原恢复必须未结案或状态不确定，且 current/published 必须存在并一致；不切换版本、不解除清理屏障、不改写原报告。前提、退出码和私有审计说明见[恢复结案](restore-close.md)。
 
-## 查询与归档恢复审计
+### 查询与归档恢复审计
 
 - `restore-audit-list <key> [完整SHA] --limit 100 --offset 0`：合并查询在线与已归档的结案审计。
 - `restore-audit-archive <key> [完整SHA]`：默认仅预览，保留最近 20 条、完成不足 30 天及未结案记录；添加 `--apply` 才实际归档。
@@ -131,6 +139,6 @@ sudo ./scripts/open-assets restore-audit-archive main-images
 
 均在部署服务器通过 `sudo ./scripts/open-assets` 执行。归档先保存完整文件与校验清单，验证后才移出在线目录；支持中断重试，不自动删除归档包。参数、保护范围、退出码见[恢复审计](restore-audit.md)。
 
-## 人工确认历史拒绝提醒
+### 人工确认历史拒绝提醒
 
 最新结案拒绝经核实无需处理时，使用宿主机 `acknowledge-closure` 先预览，再带本次证据令牌确认。它只确认这条提醒，不为恢复结案，不切换版本，也不解除清理屏障。查询审计 ID、填写原因和确认步骤见[人工确认说明](closure-acknowledgment.md)。

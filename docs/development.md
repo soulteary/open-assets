@@ -1,9 +1,9 @@
 # 开发与测试
 
-应用使用 Python 3.13。宿主机脚本还需要系统 Python 的 PyYAML、bcrypt、Git、OpenSSH 和 OpenSSL；部署依赖见[部署说明](deployment.md)。
+先看[环境要求](requirements.md#开发与测试)和[贡献指南](../CONTRIBUTING.md)。应用与常规 Python 测试使用 Python 3.13，界面测试另需支持 `node:test` 的 Node.js；先记录 `python3 --version` 和 `node --version`。宿主部署脚本的依赖与容器内依赖分开安装，见[环境要求](requirements.md)。
 
 ```sh
-python3 -m venv .venv
+python3.13 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
 pip install ruff==0.14.4

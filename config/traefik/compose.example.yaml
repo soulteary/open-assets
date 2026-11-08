@@ -1,0 +1,40 @@
+# Only for a new server without an existing Traefik instance.
+name: traefik
+services:
+  traefik:
+    image: ${TRAEFIK_IMAGE:?Use --env-file /app/open-assets/.env}
+    user: '20003:20003'
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command: [--configFile=/etc/traefik/traefik.yaml]
+    ports: ['80:8080', '443:8443']
+    volumes:
+      - ./traefik.yaml:/etc/traefik/traefik.yaml:ro
+      - ./dynamic:/etc/traefik/dynamic:ro
+      - ./acme:/acme
+    tmpfs: ['/tmp:size=16m,mode=1777']
+    healthcheck:
+      test: [CMD, traefik, healthcheck, --configFile=/etc/traefik/traefik.yaml, --ping]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: local
+      options:
+        max-size: '10m'
+        max-file: '3'
+        compress: 'true'
+    networks:
+      edge: {}
+      auth:
+        ipv4_address: 172.29.19.2
+networks:
+  edge:
+    external: true
+    name: open-assets-edge
+  auth:
+    external: true
+    name: open-assets-auth

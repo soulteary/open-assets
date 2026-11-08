@@ -1,0 +1,23 @@
+name: 功能建议
+description: 描述要完成的事情与当前限制。
+title: '[Feature] '
+body:
+  - type: textarea
+    id: task
+    attributes:
+      label: 你想完成什么
+      description: 说明使用场景与当前做法，不包含私有数据或凭据。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议的行为
+      description: 可描述输入、操作和预期输出，以及考虑过的替代方案。
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: 权限与数据影响
+      description: 如涉及公开访问、删除、恢复或兼容性，说明预期边界；不确定可直接写明。

@@ -28,6 +28,18 @@ class FreshEnvironmentGuards(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("requires explicit disposable-environment opt-in", result.stderr)
 
+    def test_community_verifier_refuses_before_reading_configuration(self):
+        env = os.environ.copy()
+        env.pop("OPEN_ASSETS_COMMUNITY_TEST", None)
+        result = subprocess.run(
+            [sys.executable, "tests/e2e/community.py"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires explicit disposable-environment opt-in", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

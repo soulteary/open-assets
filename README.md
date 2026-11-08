@@ -14,7 +14,7 @@
 
 ## 选择适合的上传方式
 
-**网页上传**适合直接管理存储对象。在 OC 存储管理后台上传、下载和管理文件，访问权限由存储策略决定。上传不会自动同步到 Git，也不会更新 Nginx 的图片目录；对外分享还需确认对象权限和公开入口是否允许访问。
+**网页上传**适合直接管理存储对象。在 OC 存储管理后台上传、下载和管理文件，访问权限由存储策略决定。上传不会自动同步到 Git，也不会更新 Nginx 的图片目录；对外分享需先配置[网页公开目录](docs/web-uploads.md)，默认不自动公开所有上传内容。
 
 **Git 发布**适合需要修改记录、版本链接和图片自动更新的内容。将文件放入仓库的 `public/` 并 Push 后，程序校验内容、上传版本附件，再更新当前图片目录。通过 SSH Push 时不需要先登录网页。
 
@@ -31,7 +31,8 @@ Git 管理的版本目录应交由发布程序维护，避免在网页后台直�
 
 ## 开始使用
 
-- 首次安装：[部署说明](docs/deployment.md)。复用现有 Traefik，不启动第二套入口。
+- 首次安装：先看[环境要求](docs/requirements.md)，再选择[全新服务器](docs/new-server.md)或[接入已有 Traefik](docs/deployment.md)。
+- 第一次分享：[首次分享文件](docs/first-share.md)。包含 Git 发布和网页上传两条路线，以及匿名下载校验。
 - 已经部署：[使用指南](docs/usage.md)。包含登录、个人 SSH 密钥、空仓库首次提交与后续更新。
 - 接入新仓库：[仓库 CLI](docs/cli.md)。自动配置只读 Deploy Key、Webhook、S3 权限和图片映射，支持重复执行。
 - 日常维护：[命令速查](docs/operator.md)、[故障排查](docs/troubleshooting.md)。
@@ -68,4 +69,4 @@ Info 的容量与诊断数据由定时任务采集，页面刷新不会触发存
 
 更多说明：[资源预算](docs/resource-limits.md)、[恢复内容](docs/object-restore.md)、[保留策略](docs/object-retention.md)、[安全](SECURITY.md)与[风险控制](docs/risks.md)。
 
-项目采用 [Apache-2.0](LICENSE)。参与开发见[开发测试](docs/development.md)，已验证范围见[验证记录](docs/acceptance.md)。
+项目采用 [Apache-2.0](LICENSE)。参与开发见[贡献指南](CONTRIBUTING.md)和[开发测试](docs/development.md)，已验证范围见[验证记录](docs/acceptance.md)。

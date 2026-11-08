@@ -1,8 +1,8 @@
 # 部署说明
 
-这份指南用于在一台 Linux 服务器上首次部署 Open Assets，复用一套已经工作的 Traefik。完成后，你可以登录网页管理文件，也可以通过 Git 发布图片与附件。
+这份指南用于在一台 Linux 服务器上首次部署 Open Assets，复用一套已经工作的 Traefik。没有现有入口时，选择[全新服务器路线](new-server.md)，其中包含 Docker 安装和独立 Traefik；不要同时执行两条路线的入口部署。完成后，你可以登录网页管理文件，也可以通过 Git 发布图片与附件。
 
-部署会依次准备私有配置、初始化存储和仓库、接入 HTTPS，最后完成一次真实发布。以下步骤需要服务器管理员权限；还需要可用的域名、DNS 配置权限，以及访问现有 Traefik 配置的权限。如果还没有 Traefik，先参考 [Traefik 部署示例](https://github.com/soulteary/traefik-v3-example)建立入口。
+部署会依次准备私有配置、初始化存储和仓库、接入 HTTPS，最后完成一次真实发布。以下步骤需要服务器管理员权限；还需要可用的域名、DNS 配置权限，以及访问现有 Traefik 配置的权限。完整工具、容量和验证基线统一见[环境要求](requirements.md)。
 
 源码、私有配置和数据分别放在 `/app/open-assets`、`/app/open-assets/private` 和 `/data/asset-stack`。节点名由 `NODE_NAME` 指定，默认 `node-name`；Compose 项目名固定为 asset-stack。
 
@@ -169,7 +169,7 @@ Traefik 到 OC 和 OtterIO 使用内部 HTTPS，校验私有 CA 和主机名。S
 
 ## 6. 首次发布及验收
 
-按 [使用指南](usage.md#2-配置个人-git-ssh-密钥) 配置个人 SSH 公钥，克隆 content/images，把有效图片放进 public/images，再 Push 到 main。初始化脚本不创建内容提交，也不自动设置分支保护；首次 Push 后按团队要求保护 main 并禁用 force push。OC 网页上传是独立的存储管理方式，不会触发这条 Git 发布链路，见[网页管理文件](usage.md#通过网页管理文件)。
+按[首次分享指南](first-share.md)配置个人 SSH 公钥，克隆 content/images，生成示例图片与文本附件，再 Push 到 main，并从匿名客户端下载校验。初始化脚本不创建内容提交，也不自动设置分支保护；首次 Push 后按团队要求保护 main 并禁用 force push。OC 网页上传是独立的存储管理方式，不会触发这条 Git 发布链路，见[网页管理文件](usage.md#通过网页管理文件)。
 
 检查以下结果：
 

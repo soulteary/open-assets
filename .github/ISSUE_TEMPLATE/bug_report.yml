@@ -1,0 +1,39 @@
+name: 故障报告
+description: 提供复现步骤与脱敏诊断信息。
+title: '[Bug] '
+body:
+  - type: markdown
+    attributes:
+      value: 请先阅读故障排查。认证绕过、凭据泄露或数据破坏漏洞请按 SECURITY.md 联系，不在公开 Issue 中提供细节。不要上传 .env、private、密钥、Cookie、完整配置或签名 URL。
+  - type: textarea
+    id: environment
+    attributes:
+      label: 版本与环境
+      description: 应用 commit、组件版本、系统/架构、Docker/Compose；使用全新服务器还是已有 Traefik。不要填写生产域名和地址。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 从哪一步开始，执行了哪些命令或页面操作？用占位值替换私有参数。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果与实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 已做的排查与最少必要输出
+      description: 写明 doctor 失败项、任务状态、错误码及尝试结果；只附已检查的脱敏片段，不粘贴完整日志或配置。
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: 发布前检查
+      options:
+        - label: 已检查正文和附件，不包含密码、密钥、Token、Cookie、生产配置、签名 URL 或其他敏感信息。
+          required: true

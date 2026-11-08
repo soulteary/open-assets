@@ -32,7 +32,21 @@ OPEN_ASSETS_FRESH_TEST=1 sh tests/e2e/fresh-stack.sh
 
 结果写在 `private/e2e/result.json`，诊断文件和生成凭据也只在私有测试目录。公开保存结果前需检查内容，不上传整个 private。
 
-最近一次运行结果及未覆盖范围见[2026-11-08 从零部署记录](../../docs/history/2026-11-08-fresh-install.md)。
+从零部署运行结果及未覆盖范围见[2026-11-08 从零部署记录](../../docs/history/2026-11-08-fresh-install.md)。
+
+## 新入口与网页分享配置
+
+在同样的空环境中启用附加验收：
+
+```sh
+OPEN_ASSETS_FRESH_TEST=1 OPEN_ASSETS_COMMUNITY_TEST=1 sh tests/e2e/fresh-stack.sh
+```
+
+完成上述从零部署与 Git 发布后，脚本替换自己的临时入口，使用 `config/traefik/` 中的新服务器模板检查健康探针、HTTP 跳转和管理入口认证。它直接执行网页分享文档中的建桶、策略与路由代码块，检查重复操作拒绝覆盖，再通过 OC API 上传、下载和退出登录。另测中文与特殊字符路径、Range、匿名权限、撤下路由以及 Git 发布状态保持不变。
+
+仅在测试副本挂载临时文件证书，并移除路由中的 ACME resolver 引用；静态模板保留原样。不会向公共 CA 申请 `.invalid` 域名证书，也不覆盖公共 DNS、Ubuntu 安装或浏览器界面。结果写入 `private/e2e/community-result.json`；失败诊断仍只保存在私有测试目录。单独执行 community.py 也必须设置显式开关，并先有本脚本成功生成的测试环境。
+
+新入口与网页分享本次结果见[验收记录](../../docs/history/2026-11-08-community-onboarding.md)。
 
 ## 退出与清理
 

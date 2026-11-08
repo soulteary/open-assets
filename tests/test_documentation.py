@@ -9,6 +9,8 @@ class Documentation(unittest.TestCase):
     def test_local_markdown_links_resolve(self):
         files = [
             Path("README.md"),
+            Path("CONTRIBUTING.md"),
+            Path(".github/PULL_REQUEST_TEMPLATE.md"),
             *Path("docs").rglob("*.md"),
             Path("tests/e2e/README.md"),
         ]

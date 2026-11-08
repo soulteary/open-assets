@@ -31,3 +31,7 @@ docker compose run --rm --no-deps -v "$PWD/private/generated:/generated" publish
 docker compose up -d --no-build nginx webhook publisher
 docker compose exec -T nginx nginx -c /etc/nginx/open-assets.conf -t
 python3 tests/e2e/verify.py
+
+if [ "${OPEN_ASSETS_COMMUNITY_TEST:-}" = 1 ]; then
+  python3 tests/e2e/community.py
+fi
