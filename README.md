@@ -16,7 +16,9 @@
 
 ## 服务组成
 
-![Open Assets 架构图](.github/images/open-assets-architecture.gif)
+![Open Assets 架构动图：Git 发布、网页上传、公开读取与运行观测](.github/images/open-assets-architecture.gif)
+
+动图依次展示 Git 发布、网页上传、公开读取和运行观测，详细流程见[架构说明](docs/architecture.md)。
 
 各组件分别负责接收内容、发布文件、提供访问和日常管理：
 
