@@ -323,3 +323,19 @@ class ClosureAcknowledgment(unittest.TestCase):
         finally:
             self.data.chmod(0o755)
         self.assertEqual(self.run_ack(token)["status"], "acknowledged")
+
+    def test_parent_sync_failure_never_reports_confirmation_success(self):
+        token = self.preview()
+        original = ack.retention.sync_directory
+
+        def sync(path):
+            if path == self.data:
+                raise OSError("parent directory sync failed")
+            return original(path)
+
+        with patch.object(ack.retention, "sync_directory", side_effect=sync):
+            with self.assertRaises(OSError):
+                self.run_ack(token)
+        self.assertFalse((self.base / "latest.json").exists())
+        self.assertEqual(self.observe()[0]["status"], "none")
+        self.assertEqual(self.run_ack(token)["status"], "acknowledged")

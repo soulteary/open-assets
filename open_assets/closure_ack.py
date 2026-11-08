@@ -31,6 +31,7 @@ def valid_id(value):
 def directory(path, create=False):
     if create:
         path.mkdir(mode=0o700, exist_ok=True)
+        retention.sync_directory(path.parent)
     if path.exists() or path.is_symlink():
         retention.real_directory(path)
 
@@ -284,6 +285,7 @@ def run(root, key, audit_id, reason, confirm=None):
             ack_id = uuid.uuid4().hex
             folder = base / ack_id
             folder.mkdir(mode=0o700)
+            retention.sync_directory(base)
             for name, raw in artifacts.items():
                 write_once(folder / name, raw)
             value = dict(
