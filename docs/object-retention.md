@@ -35,7 +35,7 @@ repositories:
 
 exclusive_writer 默认为 false。只有确认该前缀由本应用独占写入、执行期间不通过 OC/其他 S3 客户端或并行运维程序修改对象和引用时，才可显式设为 true。当前 OtterIO 不提供可靠的 If-Match 删除条件；无法满足这一前提的仓库只能预览。
 
-keep_last 至少为 1；keep_days 可以为 0；min_age_hours 至少为 1。每仓库每轮最多删除 max_delete_versions 个版本、max_delete_objects 个对象和 max_delete_bytes 个逻辑字节，必须同时满足；超过单轮预算的整版会跳过，不把它拆成正常的多轮删除。失败中断后的剩余对象可以凭收据恢复处理。
+keep_last 至少为 1；keep_days 可以为 0；min_age_hours 至少为 1。每仓库每轮最多删除 max_delete_versions 个版本、max_delete_objects 个对象和 max_delete_bytes 个逻辑字节，必须同时满足；单版超过对象数、总字节或请求预算时，按受限批次删除，后续轮次凭收据继续；每轮仍重新核对保护引用、完整剩余对象列表和本批元数据。单个对象大于 `max_delete_bytes` 时不会删除，需显式提高字节预算。
 
 修改配置前备份并执行 validate；原子替换单文件 bind mount 后按部署流程重建 Publisher/Webhook。独立清理容器每次创建时读取最新配置。新增白名单仓库 CLI 保留已有 object_retention 设置；新增 key 或启用、禁用某仓库删除后，重新执行下述 objects setup，使 IAM 同步。后续新建的清理进程会按禁用策略停止删除，重新 setup 则撤销存储端旧授权。配置不会撤销正在执行的旧进程；调整前先暂停定时器并等待当前作业退出。
 
@@ -85,6 +85,8 @@ sudo docker compose run --rm --no-deps object-cleaner --key main-images --apply
 
 执行时重新计算保护和候选，不接受保存的预览作为删除授权。最好先对一个仓库启用、预览并核对备份，再手工执行。策略已启用但 IAM 尚未同步时，删除会失败，不会退回 root 凭据。
 
+报告 `status=complete` 表示本轮结束，不表示所有历史版本已经删除；必须同时看 `removed_versions`、`removed_objects`、`skipped_versions` 和 `skip_counts`。`batch-remaining` 表示已推进但尚有剩余，`request-budget` 表示本轮请求余量不足。
+
 最近完整报告保存在 state_root/object-retention-last.json，包含 apply、候选、保护原因、实际删除数量与逻辑字节、完成时间。CLI 的 busy 表示未获取到锁，本轮没有执行；blocked 且非零退出表示遇到不安全状态或错误。失败前可能已删除部分对象，不能把非零退出理解为事务回滚；旧的完整报告只代表其时间点，失败详情需结合本次输出、journal 和收据核对。
 
 ## 校验、条件删除和中断恢复
@@ -93,7 +95,7 @@ sudo docker compose run --rm --no-deps object-cleaner --key main-images --apply
 
 每轮共享 45 秒检查预算、500 次 S3 请求和 50,000 个列表条目计数，重复核对的列表条目也计入预算。每页最多 1000 个对象，请求起点间隔至少 0.1 秒；连接/读取超时 2/5 秒，关闭 SDK 自动重试。预算不能中断已开始的网络调用，示例 systemd 另设 120 秒上限。过大的仓库会停止，不能通过删除缓存绕过限制；需要分仓、保留明确范围或设计专门离线作业。
 
-对每个候选重新列出完整版本前缀；删除前对整版对象逐一 HEAD，要求大小、ETag、时间及 sha256 元数据与列表/可信清单一致。这是元数据围栏，不会重新下载并计算完整内容哈希。随后先刷盘写入 deleting 收据，再逐对象删除，最后确认前缀为空。请求仍附带 IfMatch ETag，但当前 OtterIO 实测会忽略该条件，程序不依赖它提供原子保证；安全前提是显式的 exclusive_writer 和应用共享锁。对象被外部修改时，HEAD 与 DELETE 之间仍有竞态，不能宣称所有外部写入都能被阻止。[S3 DeleteObject 语义](https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObject.html)
+对每个候选重新列出完整版本前缀；删除前对本批选中的对象逐一 HEAD，要求大小、ETag、时间及 sha256 元数据与列表/可信清单一致。这是元数据围栏，不会重新下载并计算完整内容哈希。随后先刷盘写入完整原对象集合的 deleting 收据，再逐对象删除，最后确认剩余对象恰好是预期集合。仍有剩余时保持 deleting 收据并报告 `batch-remaining`；只有前缀为空才写 complete 收据。请求仍附带 IfMatch ETag，但当前 OtterIO 实测会忽略该条件，程序不依赖它提供原子保证；安全前提是显式的 exclusive_writer 和应用共享锁。对象被外部修改时，HEAD 与 DELETE 之间仍有竞态，不能宣称所有外部写入都能被阻止。[S3 DeleteObject 语义](https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObject.html)
 
 仅支持未启用过版本控制的桶。Enabled 或 Suspended 状态均停止，不产生删除标记来冒充释放空间；不删除非当前对象版本，也不绕过对象保留锁。独立实例实测错误 ETag 仍可能删除对象，因此没有把条件删除作为当前 OtterIO 的安全保证。更换实现或版本后仍应重新验证，不能仅凭 SDK 接受参数就认为服务端支持。
 

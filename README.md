@@ -63,7 +63,7 @@ Git 管理的版本目录应交由发布程序维护，避免在网页后台直�
 ## 使用前确认
 
 - **部署范围**：面向单机 Docker Compose、单个 Publisher 和本地 POSIX 文件系统。默认使用 `/app/open-assets`、`/data/asset-stack` 及约定的网络、端口；调整前先核对[部署配置](docs/configuration.md)。
-- **Git 内容限制**：每个发布版本的 `public/images/` 至少包含一张图片，支持 PNG/JPEG/GIF/WebP/AVIF/ICO。Git 发布不支持 SVG、LFS、submodule、符号链接和隐藏路径，也不会执行仓库脚本。
+- **Git 内容限制**：每个发布版本的 `public/images/` 至少包含一张图片，支持 PNG/JPEG/GIF/WebP/AVIF/ICO。SVG 不能放入图片目录；放在其他 `public/` 路径时可作为附件原样发布（不做 SVG 净化）。不支持 LFS、submodule、符号链接和隐藏路径，也不会执行仓库脚本。详见 [SVG 使用范围](docs/svg.md)。
 - **配置与凭据**：初始化仅用于新部署；已有配置或初始化记录会阻止重复执行，先按[故障排查](docs/troubleshooting.md)核对状态。升级、改域名和新增仓库使用对应维护步骤。`.env`、`private/`、私钥与备份只保存在受保护的位置，不提交到 Git。
 - **容量与备份**：Git/队列预算和流式校验不能替代磁盘配额、容器内存限制及备份。对象上传与图片切换没有联合事务，失败时可能留下部分对象；正式使用前安排备份，并按内容规模配置[资源预算](docs/resource-limits.md)和[保留策略](docs/object-retention.md)。
 

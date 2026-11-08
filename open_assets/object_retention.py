@@ -336,11 +336,17 @@ def plan(config, repository, jobs, budget, now):
         eligible_versions += 1
         eligible_objects += n
         eligible_bytes += b
-        if (
-            len(candidates) >= settings["max_delete_versions"]
-            or count + n > settings["max_delete_objects"]
-            or size + b > settings["max_delete_bytes"]
-        ):
+        # Select a bounded batch, retaining the whole observed version for the
+        # durable receipt. Oversized versions can progress across invocations.
+        batch = {}
+        batch_bytes = 0
+        for name, obj in sorted(v["objects"].items()):
+            if count + len(batch) >= settings["max_delete_objects"]:
+                break
+            if size + batch_bytes + obj["size"] <= settings["max_delete_bytes"]:
+                batch[name] = obj
+                batch_bytes += obj["size"]
+        if len(candidates) >= settings["max_delete_versions"] or (n and not batch):
             skipped_versions += 1
             reason = (
                 "versions-limit"
@@ -351,9 +357,10 @@ def plan(config, repository, jobs, budget, now):
             )
             skip_counts[reason] = skip_counts.get(reason, 0) + 1
             continue
+        v["batch"] = batch
         candidates.append(v)
-        count += n
-        size += b
+        count += len(batch)
+        size += batch_bytes
     return dict(
         key=key,
         enabled=settings["enabled"],
@@ -378,13 +385,20 @@ def remove(config, repository, version, budget, progress=None):
         "Status"
     ) not in (None, ""):
         raise ValueError("bucket versioning changed")
-    # Re-list, then HEAD every object before making the first deletion.
+    # Re-list the full version, then HEAD this batch before its first deletion.
     observed = listing(config, key, budget, sha)
     if observed != version["objects"]:
         raise ValueError("object retention version changed")
-    if budget.requests + len(observed) * 2 + 1 > MAX_REQUESTS:
+    # Reserve a final list request. Leave time for both HEAD and DELETE at the
+    # configured request pacing; network delays may still interrupt safely.
+    available = min(
+        (MAX_REQUESTS - budget.requests - 1) // 2,
+        max(0, int((budget.deadline - time.monotonic() - 1) / 0.2)),
+    )
+    selected = dict(list(version.get("batch", observed).items())[: max(0, available)])
+    if observed and not selected:
         return dict(status="budget", objects=0, bytes=0)
-    for name, obj in observed.items():
+    for name, obj in selected.items():
         head = budget.call("head_object", Bucket=config["bucket"], Key=name)
         if (
             head["ContentLength"] != obj["size"]
@@ -407,7 +421,7 @@ def remove(config, repository, version, budget, progress=None):
     )
     path = receipt_path(config, key, sha)
     atomic(path, record)
-    for name, obj in observed.items():
+    for name, obj in selected.items():
         # Current OtterIO ignores If-Match. This header is only extra protection
         # for compatible implementations, never the exclusive-writer safety gate.
         if progress is not None:
@@ -423,8 +437,16 @@ def remove(config, repository, version, budget, progress=None):
         if progress is not None:
             progress["removed_objects"] += 1
             progress["removed_bytes"] += obj["size"]
-    if listing(config, key, budget, sha):
-        raise ValueError("object retention prefix not empty")
+    remaining = listing(config, key, budget, sha)
+    expected = {name: obj for name, obj in observed.items() if name not in selected}
+    if remaining != expected:
+        raise ValueError("object retention version changed after deletion")
+    if remaining:
+        return dict(
+            status="partial",
+            objects=len(selected),
+            bytes=sum(o["size"] for o in selected.values()),
+        )
     # Completed receipts retain no object names and cannot authorize future deletion.
     atomic(
         path,
@@ -478,8 +500,8 @@ def _run(config, key=None, apply=False, s3=None, now=None, progress=None):
                 row["candidates"] = [
                     dict(
                         sha=v["sha"],
-                        objects=len(v["objects"]),
-                        bytes=sum(o["size"] for o in v["objects"].values()),
+                        objects=len(v["batch"]),
+                        bytes=sum(o["size"] for o in v["batch"].values()),
                     )
                     for v in value["candidates"]
                 ]
@@ -495,10 +517,15 @@ def _run(config, key=None, apply=False, s3=None, now=None, progress=None):
                             budget,
                             progress.get(repository["key"]) if progress else None,
                         )
-                        if removed["status"] == "budget":
+                        if removed["status"] in ("budget", "partial"):
                             row["skipped_versions"] += 1
-                            row["skip_counts"]["request-budget"] = (
-                                row["skip_counts"].get("request-budget", 0) + 1
+                            reason = (
+                                "batch-remaining"
+                                if removed["status"] == "partial"
+                                else "request-budget"
+                            )
+                            row["skip_counts"][reason] = (
+                                row["skip_counts"].get(reason, 0) + 1
                             )
                         row["removed_objects"] += removed["objects"]
                         row["removed_bytes"] += removed["bytes"]

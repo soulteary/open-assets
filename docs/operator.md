@@ -73,3 +73,7 @@ sudo ./scripts/open-assets links main-images "$ASSET_COMMIT" \
 长命令中断或 SSH 断开时，远端操作可能仍在执行。不要立即用第二个写命令“补救”；先查询任务、check-restore 或审计位置，并核对维护锁及私有报告。Ctrl-C 不是跨系统回滚。运行输出含仓库身份、SHA 和 URL，只保存在私有终端，不提交公开仓库。
 
 本入口目前覆盖仓库接入、日常发布/恢复/审计及只读发现。本地/对象保留、强制统计采样、备份和证书更新仍使用各自文档中的专用工具；尤其对象清理使用独立身份，不能因入口简化而改用 Publisher 授予删除权限。
+
+## 发布历史与当前图片
+
+`status` 保留前四列（任务 ID、仓库 key、SHA、任务结果），追加 `images=current|other-version|unavailable|unknown`。`published` 只表示该次发布曾成功；只有 `images=current` 表示读取时 current 与 published 引用都指向该版本。该字段不重新计算文件哈希，也不保证读取后的状态不变。`unknown` 应先检查引用一致性；`unavailable` 表示尚无可读取的当前引用。回退图片使用 `rollback-images`；force push 到曾发布的 SHA 不会绕过任务去重重新激活。

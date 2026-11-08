@@ -329,6 +329,7 @@ def main():
         command("sh", "-eu", "-c", "cd " + str(checkout) + "\n" + first, env=env)
         sha = command("git", "-C", str(checkout), "rev-parse", "HEAD").decode().strip()
         wait_job(key_name, sha)
+        first_sha = sha
         update = next(block for block in blocks if block.startswith("# 后续更新"))
         # The documentation asks the operator to edit after pulling.
         body += b"updated\n"
@@ -341,6 +342,13 @@ def main():
         command("sh", "-eu", "-c", "cd " + str(checkout) + "\n" + updated, env=env)
         sha = command("git", "-C", str(checkout), "rev-parse", "HEAD").decode().strip()
         wait_job(key_name, sha)
+        # Exercise the explicit rollback path, then restore the newest release.
+        command("./scripts/open-assets", "rollback-images", key_name, first_sha)
+        current = Path("/data/asset-stack/images/repos") / key_name / "current"
+        assert os.readlink(current) == "releases/images-" + first_sha
+        assert (current / "图片 +%.png").read_bytes() == png
+        command("./scripts/open-assets", "rollback-images", key_name, sha)
+        assert os.readlink(current) == "releases/images-" + sha
         releases.append((key_name, mount, sha, body))
         print("PASS SSH Push and published state:", key_name)
     context = test_edge(manager, domains)
@@ -401,6 +409,7 @@ def main():
             "SSH Push",
             "signed webhook",
             "published state",
+            "explicit image rollback and return",
             "HTTPS object bytes",
             "encoded image path",
             "Range",

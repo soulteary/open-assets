@@ -504,6 +504,7 @@ def publish(c, j):
     staging = P(tempfile.mkdtemp(prefix=".staging-", dir=base))
     try:
         files = export(c, r, g, j["sha"], staging)
+        images = image_files(files)  # Validate before the first remote write.
         s = s3client(c, bounded=True)
         prefix = f"repositories/{r['key']}/releases/{j['sha']}/"
         for item in files:
@@ -525,7 +526,7 @@ def publish(c, j):
                         CacheControl="public, max-age=31536000, immutable",
                         Metadata={"sha256": item["sha256"]},
                     )
-            verify_body(s.get_object(Bucket=c["bucket"], Key=key)["Body"], item)
+                verify_body(s.get_object(Bucket=c["bucket"], Key=key)["Body"], item)
         manifest = dict(key=r["key"], sha=j["sha"], files=files, config=c["revision"])
         from .object_retention import restoration_record
 
@@ -568,7 +569,7 @@ def publish(c, j):
         from .retention import remember_previous
 
         remember_previous(c, r["key"], j["sha"])
-        activate_images(base, "images-" + j["sha"], image_files(files))
+        activate_images(base, "images-" + j["sha"], images)
         j["status"] = "published"
         j["finished"] = time.time()
         atomic(state / "published" / r["key"], manifest)
@@ -812,6 +813,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 )
 
 
+def active_image_state(config, key, sha):
+    """Read current separately from a job's immutable historical result."""
+    from .retention import current_sha, read_json
+
+    try:
+        current = current_sha(P(config["images_root"]) / "repos" / key)
+        published = read_json(P(config["state_root"]) / "published" / key)
+        if published.get("sha") != current:
+            return "unknown"
+        return "current" if current == sha else "other-version"
+    except FileNotFoundError:
+        return "unavailable"
+    except (OSError, ValueError, KeyError, TypeError):
+        return "unknown"
+
+
 def main():
     from .cli import parse
 
@@ -1023,6 +1040,7 @@ def execute(a, o):
             values = [j["id"], j["key"], j["sha"], j["status"]]
             if j.get("resource_limit") and j["status"] == "failed":
                 values.append(j["resource_limit"])
+            values.append("images=" + active_image_state(c, j["key"], j["sha"]))
             print(*values)
 
 

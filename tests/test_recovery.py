@@ -228,6 +228,24 @@ class Recovery(unittest.TestCase):
             self.assertEqual(publish.call_args.args[1]["id"], jid)
         self.assertTrue((jobs / "bad.json").exists())
 
+    def test_attachment_only_publication_fails_before_remote_side_effects(self):
+        repository = self.c["repositories"][0]
+        repository.update(max_bytes=1)
+        with (
+            patch("open_assets.resources.fetch"),
+            patch.object(m, "git", return_value=self.sha.encode()),
+            patch.object(
+                m,
+                "export",
+                return_value=[dict(path="document.txt", size=1, sha256="0" * 64)],
+            ),
+            patch.object(m, "s3client") as client,
+        ):
+            with self.assertRaisesRegex(ValueError, "missing images"):
+                m.publish(self.c, dict(key="fixture", sha=self.sha, kind="manual"))
+            client.assert_not_called()
+        self.assert_old()
+
     def test_real_git_publication_queue_isolation_and_rollback(self):
         source = self.root / "source"
         source.mkdir()

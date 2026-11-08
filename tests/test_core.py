@@ -45,6 +45,20 @@ class Core(unittest.TestCase):
         m.switch(self.p, "b")
         self.assertEqual(os.readlink(self.p / "current"), "releases/b")
 
+    def test_job_history_is_distinct_from_current_image_reference(self):
+        self.c["images_root"] = str(self.p / "images")
+        base = self.p / "images/repos/images"
+        sha = "a" * 40
+        (base / "releases" / ("images-" + sha)).mkdir(parents=True)
+        m.switch(base, "images-" + sha)
+        m.atomic(self.p / "state/published/images", dict(sha=sha))
+        self.assertEqual(m.active_image_state(self.c, "images", sha), "current")
+        self.assertEqual(
+            m.active_image_state(self.c, "images", "b" * 40), "other-version"
+        )
+        m.atomic(self.p / "state/published/images", dict(sha="b" * 40))
+        self.assertEqual(m.active_image_state(self.c, "images", sha), "unknown")
+
     def test_atomic_complete_json(self):
         p = self.p / "job"
         m.atomic(p, {"x": 1})
@@ -53,6 +67,52 @@ class Core(unittest.TestCase):
 
 
 class GitExport(unittest.TestCase):
+    def test_svg_is_attachment_only_not_an_image_publication(self):
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as t:
+            root = pathlib.Path(t)
+
+            def git(*args):
+                return subprocess.check_output(
+                    ["git", "-C", str(root), *args], stderr=subprocess.DEVNULL
+                )
+
+            git("init")
+            git("config", "commit.gpgsign", "false")
+            git("config", "user.name", "Fixture")
+            git("config", "user.email", "fixture@localhost.invalid")
+            (root / "public/images").mkdir(parents=True)
+            (root / "public/images/pic.png").write_bytes(b"fixture")
+            svg = b'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>'
+            (root / "public/diagram.svg").write_bytes(svg)
+            git("add", ".")
+            git("commit", "-m", "SVG attachment")
+            config = dict(repositories=[dict(mount_path="/")])
+            repository = dict(source_directory="public", mount_path="/")
+            files = m.export(
+                config,
+                repository,
+                root / ".git",
+                git("rev-parse", "HEAD").decode().strip(),
+                root / "out",
+            )
+            self.assertEqual(
+                next(f["content_type"] for f in files if f["path"] == "diagram.svg"),
+                "image/svg+xml",
+            )
+            (root / "public/diagram.svg").rename(root / "public/images/diagram.SVG")
+            git("add", "public")
+            git("commit", "-m", "SVG image")
+            with self.assertRaisesRegex(ValueError, "image format not allowed"):
+                m.export(
+                    config,
+                    repository,
+                    root / ".git",
+                    git("rev-parse", "HEAD").decode().strip(),
+                    root / "out2",
+                )
+
     def test_real_git_export_and_symlink_rejection(self):
         import subprocess
 

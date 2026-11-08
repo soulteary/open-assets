@@ -101,6 +101,97 @@ class ObjectRetention(unittest.TestCase):
             "repositories"
         ][0]
 
+    def large_version(self, count):
+        sha = self.fixture.shas[0]
+        path = self.fixture.state / "manifests/assets" / (sha + ".json")
+        item = json.loads(path.read_text())["files"][0]
+        original = dict(
+            size=40,
+            sha256=item["sha256"],
+            etag='"fixture"',
+            modified=self.fixture.now - 40 * 86400,
+        )
+        for name in list(self.store.objects):
+            if name.startswith(r.prefix("assets", sha)):
+                del self.store.objects[name]
+        r.receipt_path(self.config, "assets", sha).unlink(missing_ok=True)
+        files = [dict(item, path=f"images/{i:05d}.png") for i in range(count)]
+        core.atomic(path, dict(key="assets", sha=sha, files=files))
+        os.utime(path, (self.fixture.now - 40 * 86400,) * 2)
+        for file in files:
+            self.store.objects[r.prefix("assets", sha) + file["path"]] = original.copy()
+        self.config["object_retention"].update(
+            max_delete_objects=1000,
+            max_delete_versions=1,
+            pinned_shas=self.fixture.shas[1:-1],
+        )
+        return sha
+
+    def test_large_versions_make_progress_and_eventually_complete(self):
+        for count in (248, 250, 1000):
+            with self.subTest(objects=count):
+                sha = self.large_version(count)
+                self.config["object_retention"]["max_delete_objects"] = 1000
+                rounds = 0
+                while any(
+                    k.startswith(r.prefix("assets", sha)) for k in self.store.objects
+                ):
+                    before = len(self.store.objects)
+                    result = self.run_retention(True)
+                    self.assertGreater(result["removed_objects"], 0)
+                    self.assertLess(len(self.store.objects), before)
+                    rounds += 1
+                    self.assertLess(rounds, 20)
+                self.assertEqual(
+                    json.loads(r.receipt_path(self.config, "assets", sha).read_text())[
+                        "status"
+                    ],
+                    "complete",
+                )
+                self.assertEqual(result["removed_versions"], 1)
+                self.assertTrue(
+                    all(
+                        any(
+                            k.startswith(r.prefix("assets", protected))
+                            for k in self.store.objects
+                        )
+                        for protected in self.fixture.shas[1:]
+                    )
+                )
+
+    def test_policy_object_and_byte_limits_are_per_batch(self):
+        sha = self.large_version(8)
+        self.config["object_retention"].update(
+            max_delete_objects=3, max_delete_bytes=80
+        )
+        result = self.run_retention(True)
+        self.assertEqual(result["removed_objects"], 2)
+        self.assertEqual(result["removed_bytes"], 80)
+        self.assertEqual(result["removed_versions"], 0)
+        self.assertEqual(result["skip_counts"]["batch-remaining"], 1)
+        self.assertEqual(
+            json.loads(r.receipt_path(self.config, "assets", sha).read_text())[
+                "status"
+            ],
+            "deleting",
+        )
+        self.config["object_retention"]["pinned_shas"].append(sha)
+        before = copy.deepcopy(self.store.objects)
+        self.run_retention(True)
+        self.assertEqual(before, self.store.objects)
+
+    def test_changed_remaining_object_stops_resumption(self):
+        sha = self.large_version(250)
+        self.run_retention(True)
+        name = next(
+            k for k in self.store.objects if k.startswith(r.prefix("assets", sha))
+        )
+        self.store.objects[name]["etag"] = '"changed"'
+        before = copy.deepcopy(self.store.objects)
+        with self.assertRaisesRegex(ValueError, "receipt conflicts"):
+            self.run_retention(True)
+        self.assertEqual(before, self.store.objects)
+
     def test_preview_and_double_opt_in(self):
         before = copy.deepcopy(self.store.objects)
         self.assertTrue(self.run_retention()["candidates"])
