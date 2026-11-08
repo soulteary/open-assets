@@ -209,7 +209,16 @@ def main():
     }
     print("PASS repeated setup refused before credentials or configuration changed")
     manager = Manager(ROOT)
-    manager.ensure("content/e2e-images", "e2e-images", "/e2e-images/", "main")
+    command(
+        "./scripts/open-assets",
+        "repo",
+        "ensure",
+        "content/e2e-images",
+        "--key",
+        "e2e-images",
+        "--mount-path",
+        "/e2e-images/",
+    )
     repository = manager.api("repos/content/e2e-images")
     counts = (
         len(manager.collection("repos/content/e2e-images/keys")),
@@ -222,7 +231,16 @@ def main():
         "{{.State.StartedAt}}",
         "asset-stack-publisher-1",
     )
-    manager.ensure("content/e2e-images", "e2e-images", "/e2e-images/", "main")
+    command(
+        "./scripts/open-assets",
+        "repo",
+        "ensure",
+        "content/e2e-images",
+        "--key",
+        "e2e-images",
+        "--mount-path",
+        "/e2e-images/",
+    )
     assert manager.api("repos/content/e2e-images")["id"] == repository["id"]
     assert (
         counts
@@ -240,14 +258,22 @@ def main():
         "asset-stack-publisher-1",
     )
     print("PASS repeated onboarding: stable ID, one Key/Hook, no Worker restart")
-    from open_assets.admin import Conflict
-
-    try:
-        manager.ensure("content/e2e-conflict", "e2e-conflict", "/", "main")
-    except Conflict:
-        pass
-    else:
-        raise AssertionError("prefix conflict accepted")
+    conflict = subprocess.run(
+        [
+            "./scripts/open-assets",
+            "repo",
+            "ensure",
+            "content/e2e-conflict",
+            "--key",
+            "e2e-conflict",
+            "--mount-path",
+            "/",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        timeout=240,
+    )
+    assert conflict.returncode != 0, "prefix conflict accepted"
     assert manager.api("repos/content/e2e-conflict", missing=True) is None
     print("PASS prefix conflict: no repository created")
     key = work / "personal-key"

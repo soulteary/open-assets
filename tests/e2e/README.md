@@ -21,7 +21,7 @@ OPEN_ASSETS_FRESH_TEST=1 sh tests/e2e/fresh-stack.sh
 
 流程按部署文档执行 prepare-private、镜像构建、后端就绪检查、initialize-services、Nginx 配置生成和发布服务启动。随后：
 
-- CLI 新建 content/e2e-images，再次执行，检查仓库 ID、Key/Hook 数量和 Worker 启动时间。
+- 通过宿主机 `scripts/open-assets repo ensure` 新建 content/e2e-images，再次执行，检查仓库 ID、Key/Hook 数量和 Worker 启动时间；不绕过 CLI 直接调用接入函数。
 - 请求冲突前缀，确认没有创建对应仓库。
 - 核对重复执行准备/初始化会被拒绝，凭据与配置哈希不变。
 - 使用个人 SSH 密钥克隆两个空仓库，执行使用指南中的首次提交和后续更新，各完成两次真实 Push。
@@ -31,6 +31,8 @@ OPEN_ASSETS_FRESH_TEST=1 sh tests/e2e/fresh-stack.sh
 测试域名全部位于保留的 acceptance.invalid 下。入口使用临时 CA 签发的文件证书，路由基于 configure-edge.py 生成，但测试副本移除 ACME resolver。它不验证真实 DNS、云安全组、公共证书申请或浏览器 UI；这些范围与单机生产验收记录分开。
 
 结果写在 `private/e2e/result.json`，诊断文件和生成凭据也只在私有测试目录。公开保存结果前需检查内容，不上传整个 private。
+
+最近一次运行结果及未覆盖范围见[2026-11-08 从零部署记录](../../docs/history/2026-11-08-fresh-install.md)。
 
 ## 退出与清理
 
