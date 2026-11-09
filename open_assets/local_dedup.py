@@ -22,7 +22,6 @@ def run(config, apply=False):
         ):
             raise ValueError("wait for queued publications before local deduplication")
         groups = {}
-        paths = []
         hashed = {}
         # Complete preflight before replacing a single directory entry.
         for repository in config["repositories"]:
@@ -79,8 +78,11 @@ def run(config, apply=False):
                             raise ValueError("dedup content differs from manifest")
                         group = (key, item["sha256"], item["size"])
                         groups.setdefault(group, []).append((p, fingerprint, item))
-                        paths.append(p)
                         report["files"] += 1
+                        from .resources import policy
+
+                        if report["files"] > policy(config)["scan_entries"]:
+                            raise ValueError("dedup scan budget exceeded")
         # Logical entries may already share inodes. Count each redundant physical
         # inode once; application data outside these manifests is never touched.
         for entries in groups.values():

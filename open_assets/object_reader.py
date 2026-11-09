@@ -1,5 +1,6 @@
 """Read-only version URL resolver. No storage credentials or Docker access."""
 
+import contextlib
 from collections import OrderedDict
 import http.client
 import http.server
@@ -92,6 +93,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def error(self, status):
         self.send_response(status)
+        if status == 200:
+            self.send_header("X-Open-Assets-Reader", "guard-v1")
         self.send_header("Content-Length", "0")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -107,7 +110,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         connection = None
         headers_sent = False
+        guard = contextlib.ExitStack()
         try:
+            guard.enter_context(object_refs.read_guard(RECEIPTS / "compaction.lock"))
             key, mime = resolve(self.path)
             endpoint = urllib.parse.urlsplit(ENDPOINT)
             if (
@@ -183,6 +188,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         finally:
             if connection:
                 connection.close()
+            guard.close()
             ACTIVE.release()
 
 

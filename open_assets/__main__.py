@@ -1071,6 +1071,10 @@ def execute(a, o):
         finally:
             wakeup.close()
             stop.set()
+    elif o.command == "compact-objects":
+        from .object_compact import run
+
+        print(json.dumps(run(c, s3client(c, bounded=True), apply=o.apply)))
     elif o.command == "materialize-image-views":
         from .local_dedup import legacy_views
 

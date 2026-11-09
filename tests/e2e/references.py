@@ -152,6 +152,41 @@ def main():
         "main-images",
         second,
     )
+    command(
+        "docker",
+        "compose",
+        "exec",
+        "-T",
+        "publisher",
+        "python",
+        "-m",
+        "open_assets",
+        "deduplicate-local",
+        "--apply",
+    )
+    command("python3", "-m", "open_assets.admin", "objects", "setup", "--compaction")
+    try:
+        command(
+            "docker",
+            "compose",
+            "run",
+            "--rm",
+            "--no-deps",
+            "--entrypoint",
+            "python",
+            "object-cleaner",
+            "-m",
+            "open_assets",
+            "compact-objects",
+            "--apply",
+        )
+    finally:
+        command("python3", "-m", "open_assets.admin", "objects", "setup")
+    # Previously complete physical versions now resolve through canonical objects.
+    for sha in (first, second):
+        url = f"https://{domains['oss']}/attachments/repositories/main-images/releases/{sha}/{path}"
+        with urllib.request.urlopen(url, context=context) as response:
+            assert response.read() == data
     print(
         "PASS reference delta, old/new URLs, streaming Range/HEAD/304 and image rollback"
     )

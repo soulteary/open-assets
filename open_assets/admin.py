@@ -440,8 +440,13 @@ def main(argv=None):
     objects = commands.add_parser("objects").add_subparsers(
         dest="operation", required=True
     )
-    objects.add_parser(
+    object_setup = objects.add_parser(
         "setup", help="reconcile separate S3 retention credentials and scope"
+    )
+    object_setup.add_argument(
+        "--compaction",
+        action="store_true",
+        help="temporarily grant scoped deletion for verified compaction; run setup again to revoke",
     )
     args = parser.parse_args(argv)
     if os.geteuid() != 0:
@@ -455,7 +460,7 @@ def main(argv=None):
             if args.command == "objects":
                 from .object_retention_setup import setup
 
-                setup(manager)
+                setup(manager, compaction=args.compaction)
             else:
                 manager.ensure(args.name, args.key, args.mount_path, args.branch)
         except (Conflict, RuntimeError, OSError, KeyError, ValueError) as error:

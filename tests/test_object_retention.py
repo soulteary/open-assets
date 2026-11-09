@@ -425,6 +425,17 @@ class ObjectRetention(unittest.TestCase):
             self.run_retention(True)
         self.assertFalse(self.store.deleted)
 
+    def test_compaction_grants_only_configured_namespaces_then_revokes(self):
+        self.config["object_retention"]["enabled"] = False
+        temporary = iam_policy(self.config, compaction=True)
+        deletes = [
+            s for s in temporary["Statement"] if "s3:DeleteObject" in s["Action"]
+        ]
+        self.assertEqual(len(deletes), 1)
+        self.assertTrue(all("/repositories/" in r for r in deletes[0]["Resource"]))
+        self.assertNotIn("s3:PutObject", json.dumps(temporary))
+        self.assertNotIn("s3:DeleteObject", json.dumps(iam_policy(self.config)))
+
     def test_setup_reuses_identity_and_revokes_delete_scope_when_disabled(self):
         import yaml
 

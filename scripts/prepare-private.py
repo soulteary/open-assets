@@ -52,6 +52,13 @@ for s, uid in [
     t.chmod(0o750)
 
 
+guard = d / "publisher/object-retention/compaction.lock"
+with guard.open("xb"):
+    pass
+os.chown(guard, 20010, 20010)
+guard.chmod(0o644)
+
+
 def sec(s, value=None):
     t = p / s
     if not t.exists():
