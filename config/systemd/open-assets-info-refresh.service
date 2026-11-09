@@ -6,7 +6,7 @@ Requires=docker.service
 [Service]
 Type=simple
 WorkingDirectory=/app/open-assets
-ExecStart=/usr/bin/python3 -m open_assets.info_refresh --root /app/open-assets
+ExecStart=/app/open-assets/bin/open-assets info-refresh --root /app/open-assets
 Environment=DOCKER_CONFIG=/tmp/open-assets-docker
 UMask=0077
 Restart=on-failure

@@ -1,4 +1,10 @@
 #!/bin/sh
 set -eu
 cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-exec python3 -m open_assets.operator "$@"
+root=$(pwd -P)
+binary=${OPEN_ASSETS_BINARY:-$root/bin/open-assets}
+if [ ! -x "$binary" ] && [ -x "$root/target/release/open-assets" ]; then
+  binary=$root/target/release/open-assets
+fi
+[ -x "$binary" ] || { echo 'Install the native binary with scripts/install-runtime.sh after building the image.' >&2; exit 1; }
+exec "$binary" operator --root "$root" "$@"

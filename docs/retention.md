@@ -58,13 +58,13 @@ repositories:
 
 ```sh
 # 默认只预览，输出保护原因、候选版本及拟归档任务。
-docker compose exec -T publisher python -m open_assets.retention --key main-images
+docker compose exec -T publisher bin/open-assets retention --key main-images
 
 # 重新读取状态并计算，只有 enabled=true 的仓库才实际清理。
-docker compose exec -T publisher python -m open_assets.retention --key main-images --apply
+docker compose exec -T publisher bin/open-assets retention --key main-images --apply
 
 # 不指定 key 时检查所有已配置仓库。
-docker compose exec -T publisher python -m open_assets.retention --apply
+docker compose exec -T publisher bin/open-assets retention --apply
 ```
 
 预览不移动或删除版本、任务；获取锁可能创建锁文件。执行不会使用过期预览文件作为删除清单，每次都重新判断。建议先备份、预览，再启用单个仓库，确认回滚点及候选范围后执行。

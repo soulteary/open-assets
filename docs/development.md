@@ -1,21 +1,21 @@
 # 开发与测试
 
-先看[环境要求](requirements.md#开发与测试)和[贡献指南](../CONTRIBUTING.md)。应用与常规 Python 测试使用 Python 3.13，界面测试另需支持 `node:test` 的 Node.js；先记录 `python3 --version` 和 `node --version`。宿主部署脚本的依赖与容器内依赖分开安装，见[环境要求](requirements.md)。
+应用、宿主机管理和验收程序均使用 Rust。浏览器界面沿用 HTML/CSS/JavaScript，测试需要支持 `node:test` 的 Node.js。使用与 CI 一致的当前稳定 Rust 工具链，记录 `rustc --version`、`cargo --version` 和 `node --version`。
 
 ```sh
-python3.13 -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
-pip install ruff==0.14.4
-ruff check open_assets scripts tests
-ruff format --check open_assets scripts tests
-python -m unittest discover -s tests -v
-node --check open_assets/static/app.js
+cargo build --locked
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
+node --check web/static/app.js
 node --test tests/test_storage_ui.js
+docker build -t open-assets:test .
 ```
 
-普通测试使用临时目录、Git 仓库和回环 HTTP 服务，不连接生产数据。首次发布测试直接执行使用指南中的 shell 命令，覆盖空仓库与后续更新；初始化测试检查拒绝已有、并发和中断状态。
+普通测试使用私有临时目录、真实临时 Git 仓库和回环 HTTP 服务，不需要生产账号。测试覆盖队列预算、签名通知、Git/SVG 安全、不可变 inode、增量/预备快照、对象引用、条件删除、恢复和审计。Python JSON、浮点、MIME 与恢复规则的固定 oracle 由 Rust 测试读取，不需要 Python 解释器。
 
-[端到端脚本](../tests/e2e/README.md)需要可丢弃的 Linux 环境。它会初始化真实 Gitea/OtterIO，并验证仓库接入、SSH Push、公开读取和管理入口。不要挂载生产 Docker socket、private 或数据。对象清理与恢复的专项只能连接专用测试存储。
+Rust 源码位于 `rust/src`，公开界面位于 `web/static`；工作区根目录维护 `Cargo.lock`。新依赖、文件格式或失败处理变更应补有意义的回归测试，不能仅断言新实现自己的内部步骤。
 
-CI 先执行格式检查、Python/界面测试和镜像构建，再在独立 GitHub 托管 runner 上执行从零部署与网页分享 API 验收。变更初始化、权限或路由后，应另外运行相关端到端验收。测试结果记录版本、环境和范围，放在[验证记录](acceptance.md)或[历史归档](history/README.md)。
+[独立全栈验收](../tests/e2e/README.md)使用空 Linux Docker daemon，真实创建 Gitea/OtterIO 身份和签名 Webhook，经 SSH Push 验证发布、拒绝危险 SVG、共享 inode、回退、缺失对象和本地快照恢复，以及 HTTPS/管理认证。不要为运行测试清空已有 Docker 环境，也不要挂载生产 private、数据或 socket。
+
+迁移范围、严格校验差异和生产切换边界见 [Rust 迁移说明](rust-migration.md)。历史 Python 验收留在 [历史记录](history/README.md) 与 Git 历史中，不能当作本次 Rust 验收结果。

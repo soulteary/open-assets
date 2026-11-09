@@ -234,15 +234,10 @@ printf 'https://%s/attachments/repositories/main-images/releases/%s/documents/ma
 
 图片路径去掉 `public/images/`，并添加仓库的 `mount_path`；附件路径去掉 `public/`，添加桶、稳定 key 和 SHA。两者的路径规则不同。
 
-中文及特殊字符按路径段进行 URL 编码；空格用 `%20`、加号用 `%2B`、百分号用 `%25`，保留目录分隔 `/`。可以用 Python 生成完整链接：
+中文及特殊字符按路径段进行 URL 编码；空格用 `%20`、加号用 `%2B`、百分号用 `%25`，保留目录分隔 `/`。可以在服务器使用 Rust CLI 生成完整链接（只计算链接，不代表已经发布）：
 
 ```sh
-python3 - <<'PY'
-import os
-from urllib.parse import quote
-key = 'documents/中文 文件+%.pdf'
-print(f'https://{os.environ["OSS_HOST"]}/attachments/repositories/main-images/releases/{os.environ["RELEASE_SHA"]}/' + quote(key, safe='/'))
-PY
+sudo ./scripts/open-assets links main-images "$RELEASE_SHA" 'documents/中文 文件+%.pdf' --json
 ```
 
 固定图片 URL 随最新成功发布变化，默认缓存 300 秒；附件 SHA URL 的路径和内容保持不变，适合文章、版本发布及回溯，但只在对象仍被保留时有效。实际清理对象后，旧链接会失效；需要长期引用的版本应纳入[固定保留策略](object-retention.md)。发布前不要对外引用尚未校验的 SHA 路径。图片回滚不会删除旧附件。OC 中“下载/复制文件链接”得到的是受会话保护的 OC 下载入口，不是公开 OSS 链接；对外分享应按上面的公开路径生成。

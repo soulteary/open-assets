@@ -7,7 +7,7 @@ ConditionPathExists=!/app/open-assets/private/maintenance.flag
 [Service]
 Type=oneshot
 WorkingDirectory=/app/open-assets
-ExecStart=/usr/bin/docker compose exec -T publisher python -m open_assets.retention --apply
+ExecStart=/usr/bin/docker compose exec -T publisher open-assets retention --apply
 Environment=DOCKER_CONFIG=/tmp/open-assets-docker
 UMask=0077
 Nice=15

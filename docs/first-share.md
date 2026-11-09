@@ -27,18 +27,15 @@ cd images
 下面生成一张 1×1 PNG 和一份文本文件，只用于验证。文件已存在时停止，不覆盖原内容：
 
 ```sh
-python3 - <<'PY'
-import base64
-from pathlib import Path
-image = Path('public/images/hello.png')
-attachment = Path('public/documents/hello.txt')
-if image.exists() or attachment.exists():
-    raise SystemExit('示例文件已存在，请先检查，不覆盖原内容')
-image.parent.mkdir(parents=True, exist_ok=True)
-attachment.parent.mkdir(parents=True, exist_ok=True)
-image.write_bytes(base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII='))
-attachment.write_text('Hello Open Assets\n', encoding='utf-8')
-PY
+(
+  set -eu
+  test ! -e public/images/hello.png && test ! -L public/images/hello.png
+  test ! -e public/documents/hello.txt && test ! -L public/documents/hello.txt
+  mkdir -p public/images public/documents
+  set -C
+  printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=' | openssl base64 -d -A > public/images/hello.png
+  printf 'Hello Open Assets\n' > public/documents/hello.txt
+)
 ```
 
 若 Git 尚未配置提交身份，先用自己的姓名和邮箱设置此仓库的 `user.name`、`user.email`，再提交。这与 Gitea 密码和 SSH 公钥不同。

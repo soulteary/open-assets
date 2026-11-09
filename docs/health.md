@@ -45,7 +45,7 @@ docker inspect "$TRAEFIK_CONTAINER" \
 ```sh
 cd /app/open-assets
 install -d -o root -g root -m 0700 /data/asset-stack/repair
-python3 -m open_assets.repair
+bin/open-assets repair
 install -m 0644 config/systemd/open-assets-repair.service /etc/systemd/system/
 install -m 0644 config/systemd/open-assets-repair.timer /etc/systemd/system/
 systemctl daemon-reload

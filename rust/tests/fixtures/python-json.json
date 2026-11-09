@@ -1,0 +1,84 @@
+[
+  {
+    "value": null,
+    "expected": "null",
+    "digest": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+  },
+  {
+    "value": true,
+    "expected": "true",
+    "digest": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+  },
+  {
+    "value": false,
+    "expected": "false",
+    "digest": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+  },
+  {
+    "value": 0,
+    "expected": "0",
+    "digest": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+  },
+  {
+    "value": 42,
+    "expected": "42",
+    "digest": "73475cb40a568e8da8a045ced110137e159f890ac4da883b6b17dc651b3a8049"
+  },
+  {
+    "value": -1,
+    "expected": "-1",
+    "digest": "1bad6b8cf97131fceab8543e81f7757195fbb1d36b376ee994ad1cf17699c464"
+  },
+  {
+    "value": 9223372036854775808,
+    "expected": "9223372036854775808",
+    "digest": "c5c29af0c2b1ba23907ca40686689919361601e7740335050476b290f2f87ee8"
+  },
+  {
+    "value": {
+      "空 格": "😀",
+      "a": "quote\"\\\t\n\b\f\r"
+    },
+    "expected": "{\"a\": \"quote\\\"\\\\\\t\\n\\b\\f\\r\\u007f\", \"\\u7a7a \\u683c\": \"\\ud83d\\ude00\"}",
+    "digest": "41ead6d4825807c49f2c34e4ce080058c6a06907dae2cd25b5fdce66d8095d78"
+  },
+  {
+    "value": {
+      "numbers": [
+        1.0,
+        -0.0,
+        1e-05,
+        0.0001,
+        1e-07,
+        1e-10,
+        1000000000000000.0,
+        1e+16,
+        1e+17,
+        1.23456789e+20,
+        9.999e-05
+      ]
+    },
+    "expected": "{\"numbers\": [1.0, -0.0, 1e-05, 0.0001, 1e-07, 1e-10, 1000000000000000.0, 1e+16, 1e+17, 1.23456789e+20, 9.999e-05]}",
+    "digest": "20c0289b4a68bee088a0a19c19e5358d555288f3caea4d7a5ac5a28a97efb41b"
+  },
+  {
+    "value": {
+      "files": [
+        {
+          "path": "images/2026/10/10/中文.svg",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "size": 67,
+          "content_type": "image/svg+xml"
+        }
+      ],
+      "object_sources": {
+        "images/2026/10/10/中文.svg": {
+          "key": "repositories/assets/releases/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/images/old.svg",
+          "content_type": "image/svg+xml"
+        }
+      }
+    },
+    "expected": "{\"files\": [{\"content_type\": \"image/svg+xml\", \"path\": \"images/2026/10/10/\\u4e2d\\u6587.svg\", \"sha256\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"size\": 67}], \"object_sources\": {\"images/2026/10/10/\\u4e2d\\u6587.svg\": {\"content_type\": \"image/svg+xml\", \"key\": \"repositories/assets/releases/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/images/old.svg\"}}}",
+    "digest": "0f78ac9d9ec9f7f5467705d6212a0b7aff3b65063c5a7cfc58f2c838742e0320"
+  }
+]

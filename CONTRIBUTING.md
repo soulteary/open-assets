@@ -21,35 +21,33 @@ Fork 仓库并克隆自己的 Fork，创建独立分支；不要把私有部署�
 
 ```sh
 git switch -c docs/clarify-first-use
-python3.13 -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
-pip install ruff==0.14.4
+cargo build --locked
+cargo test --locked
 ```
 
-使用 Python 3.13；界面测试还需要 Node.js。测试会在临时目录创建 Git 仓库和文件，不需要生产账号。不要为了运行测试复制服务器 private 或给开发容器挂载生产 Docker socket。
+使用当前稳定 Rust；界面测试还需要 Node.js。测试会在临时目录创建 Git 仓库和文件，不需要生产账号。不要为了运行测试复制服务器 private 或给开发容器挂载生产 Docker socket。
 
 ## 选择与修改相符的检查
 
 文档与命令示例：
 
 ```sh
-PYTHONPATH=tests python -m unittest test_documentation test_first_publication -q
+cargo test --locked --test compatibility
 git diff --check
 ```
 
-Python 代码：
+Rust 代码：
 
 ```sh
-ruff check open_assets scripts tests
-ruff format --check open_assets scripts tests
-python -m unittest discover -s tests -v
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
 ```
 
 Info 页面：
 
 ```sh
-node --check open_assets/static/app.js
+node --check web/static/app.js
 node --test tests/test_storage_ui.js
 ```
 
@@ -69,4 +67,4 @@ git diff --cached --check
 
 还需实际阅读暂存差异，统计和格式检查不会自动发现秘密。不要提交本地测试凭据、环境输出、截图、构建产物或新的生产域名；示例使用 `lab.dev`、`example.org`、`node-name` 等占位值。
 
-通过 GitHub 创建 PR，使用仓库提供的模板如实填写。未执行的检查写明原因，不把历史记录当成本次验证。CI 会执行格式、Python/界面测试、镜像构建，并在独立托管 runner 执行从零部署和网页分享 API 验收。
+通过 GitHub 创建 PR，使用仓库提供的模板如实填写。未执行的检查写明原因，不把历史记录当成本次验证。CI 会执行格式、Rust/界面测试、镜像构建，并在独立托管 runner 执行从零部署和网页分享 API 验收。

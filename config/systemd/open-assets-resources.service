@@ -5,7 +5,7 @@ ConditionPathExists=!/app/open-assets/private/maintenance.flag
 [Service]
 Type=oneshot
 WorkingDirectory=/app/open-assets
-ExecStart=/usr/bin/python3 -m open_assets.resource_info --root /app/open-assets
+ExecStart=/app/open-assets/bin/open-assets resource-info --root /app/open-assets
 UMask=0077
 TimeoutStartSec=90
 Nice=15

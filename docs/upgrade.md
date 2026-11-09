@@ -1,6 +1,6 @@
 # 组件升级与内部证书
 
-升级先在隔离环境验证，再安排线上维护。不要通过重新执行 prepare-private.py 或 initialize-services.py 升级已有环境，它们仅用于新环境，已有或中断状态会被保护机制拒绝。
+升级先在隔离环境验证，再安排线上维护。不要通过重新执行 `open-assets prepare-private` 或 `open-assets initialize-services` 升级已有环境，它们仅用于新环境，已有或中断状态会被保护机制拒绝。
 
 ## 确认版本
 
@@ -46,7 +46,7 @@ docker compose ps stargate
 
 ```sh
 cd /app/open-assets
-python3 scripts/internal_certs.py \
+bin/open-assets internal-certs \
   --root /app/open-assets \
   --domains private/domains.json \
   --output private/tls-next

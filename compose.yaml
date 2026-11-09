@@ -33,7 +33,7 @@ services:
   object-cleaner:
     <<: *app
     profiles: [maintenance]
-    entrypoint: [python, -m, open_assets.object_retention]
+    entrypoint: [open-assets, object-retention]
     command: []
     restart: 'no'
     mem_limit: 256m
@@ -51,7 +51,7 @@ services:
     command: [serve]
     healthcheck:
       <<: *health
-      test: [CMD, python, -m, open_assets.health, webhook]
+      test: [CMD, open-assets, health, webhook]
     networks:
       hooks:
         ipv4_address: ${WEBHOOK_IP}
@@ -61,7 +61,7 @@ services:
     command: [worker]
     healthcheck:
       <<: *health
-      test: [CMD, python, -m, open_assets.health, publisher]
+      test: [CMD, open-assets, health, publisher]
     volumes: ['./private/repositories.yaml:/config/repositories.yaml:ro','./private/publisher:/run/private:ro','${DATA_ROOT}/publisher:/state','${DATA_ROOT}/images:/images']
   info:
     image: open-assets:local
@@ -73,8 +73,8 @@ services:
     security_opt: ['no-new-privileges:true']
     healthcheck:
       <<: *health
-      test: [CMD, python, -m, open_assets.health, info]
-    entrypoint: [python, -m, open_assets.info]
+      test: [CMD, open-assets, health, info]
+    entrypoint: [open-assets, info]
     environment:
       INFO_AUTH_URL: https://auth-${NODE_NAME}.console.${PUBLIC_BASE}
     volumes: ['${DATA_ROOT}/info:/info:ro','${DATA_ROOT}/info-refresh:/run/info-refresh:ro']
@@ -91,13 +91,13 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: ['no-new-privileges:true']
-    entrypoint: [python, -m, open_assets.object_reader]
+    entrypoint: [open-assets, object-reader]
     environment:
       OBJECT_ENDPOINT: https://storage.internal:9000
       OBJECT_BUCKET: attachments
     healthcheck:
       <<: *health
-      test: [CMD, python, -m, open_assets.health, object-reader]
+      test: [CMD, open-assets, health, object-reader]
     volumes: ['${DATA_ROOT}/publisher/manifests:/manifests:ro','${DATA_ROOT}/publisher/object-retention:/receipts:ro','./private/publisher/ca.crt:/tls/ca.crt:ro']
     tmpfs: ['/tmp:size=16m']
     mem_limit: 256m

@@ -74,7 +74,7 @@ install -m 0644 config/traefik/traefik.example.yaml /app/open-assets-traefik/tra
 
 ```sh
 cd /app/open-assets
-python3 scripts/configure-edge.py \
+bin/open-assets configure-edge \
   --domains private/domains.json \
   --ca private/tls/ca.crt \
   --output /app/open-assets-traefik/dynamic/open-assets.yaml
