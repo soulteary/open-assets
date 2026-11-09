@@ -213,7 +213,7 @@ def s3client(c, bounded=False):
     )
 
 
-def export(c, r, g, sha, dest, check=None):
+def export(c, r, g, sha, dest, check=None, reuse=None):
     """Read committed blobs directly; do not checkout or execute repository code.
 
     Image checks use extensions, not file signatures. Other public files are
@@ -278,11 +278,27 @@ def export(c, r, g, sha, dest, check=None):
         }:
             raise ValueError("image format not allowed")
         blobs.append((oid, rel, path, size))
+        if reuse is not None:
+            reuse["oids"][rel.as_posix()] = oid.decode()
     # Reject all unsafe paths, types and size budgets before reading any blob.
     with GitBatch(g, c, check=check) as batch:
         for oid, rel, path, size in blobs:
             out = dest / rel
             out.parent.mkdir(parents=True, exist_ok=True)
+            if reuse is not None:
+                from .incremental import copy_cached
+
+                cached = copy_cached(reuse, oid, size, rel, out)
+                if cached is not None:
+                    if rel.suffix.lower() == ".svg":
+                        from .svg import validate
+
+                        validate(out)
+                    cached["content_type"] = (
+                        mimetypes.guess_type(path)[0] or "application/octet-stream"
+                    )
+                    files.append(cached)
+                    continue
             with out.open("wb") as stream:
                 batch.write_blob(oid, size, stream)
                 stream.flush()
@@ -533,12 +549,23 @@ def publish(c, j):
     (base / "releases").mkdir(parents=True, exist_ok=True)
     staging = P(tempfile.mkdtemp(prefix=".staging-", dir=base))
     try:
-        files = export(c, r, g, j["sha"], staging)
+        from . import incremental
+
+        reuse = incremental.context(c, r)
+        files = export(c, r, g, j["sha"], staging, reuse=reuse)
         images = image_files(files)  # Validate before the first remote write.
         stage("export")
         s = s3client(c, bounded=True)
         prefix = f"repositories/{r['key']}/releases/{j['sha']}/"
-        upload(c, s, prefix, staging, files)
+        etags = upload(
+            c,
+            s,
+            prefix,
+            staging,
+            files,
+            reuse=reuse["reused"],
+            stats=reuse.setdefault("object_stats", {}),
+        )
         stage("objects")
         manifest = dict(key=r["key"], sha=j["sha"], files=files, config=c["revision"])
         from .object_retention import restoration_record
@@ -593,6 +620,16 @@ def publish(c, j):
         stage("activation")
         j["timings"]["total"] = round(time.monotonic() - started, 6)
         atomic(state / "published" / r["key"], manifest)
+        j["incremental"] = dict(
+            reused_files=reuse["reused_files"],
+            changed_files=len(files) - reuse["reused_files"],
+            object_transfers=reuse["object_stats"],
+        )
+        # A failed optimization receipt must not turn a completed activation into failure.
+        try:
+            incremental.save(c, r["key"], j["sha"], files, reuse, etags)
+        except (OSError, ValueError, KeyError, TypeError):
+            j["incremental"]["seal"] = "unavailable"
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 

@@ -409,9 +409,34 @@ function render(data) {
   }));
   byId('host-details').textContent = h.os + ' · 内核 ' + h.kernel + ' · 采集耗时 ' + data.collection_seconds.toFixed(2) + ' 秒';
 }
-async function update() {
-  try { const r = await fetch('/api/status', {cache: 'no-store'}); if (!r.ok) throw new Error(); render(await r.json()); byId('error').hidden = true; }
-  catch { byId('doctor-notice').textContent='诊断结果无法刷新，下方可能是旧数据，不能作为当前健康结论。';byId('doctor-notice').className='warning';byId('tab-diagnostics').textContent='部署诊断 · 提示';byId('tab-diagnostics').className='tab-attention'; byId('resource-notice').textContent='资源数据无法刷新，下方可能是旧数据。';byId('resource-notice').className='warning'; byId('audit-notice').textContent = '审计容量与归档结果无法刷新，下表可能是旧数据。'; byId('audit-notice').className = 'warning'; byId('restore-close-notice').textContent = '结案结果无法刷新，下表可能是旧数据。'; byId('restore-close-notice').className = 'warning'; byId('restore-check-notice').textContent = '核对结果无法刷新，下表可能是旧数据。'; byId('restore-check-notice').className = 'warning'; byId('restore-notice').textContent = '恢复报告无法刷新，下表可能是旧结果，请复核采样时间。'; byId('restore-notice').className = 'warning'; byId('object-retention-notice').textContent = '对象保留数据无法刷新，下表保留旧结果，请复核采样时间。'; byId('object-retention-notice').className = 'warning'; byId('error').hidden = false; byId('error').textContent = '无法读取最新状态，请检查登录会话与采集定时器。下方可能是上次成功读取的数据。'; const notice = byId('capacity-notice'); notice.className = 'capacity-notice capacity-unknown'; notice.replaceChildren(el('strong', '容量状态待确认'), el('p', '无法取得最新状态，下方保留上次采样，不能作为实时容量依据。')); }
+let manualRefreshing = false;
+let statusGeneration = 0;
+async function update(force = false) {
+  if(manualRefreshing && !force)return;
+  const generation = ++statusGeneration;
+  try { const r = await fetch('/api/status', {cache: 'no-store'}); if (!r.ok || r.redirected) throw new Error(); const data=await r.json(); if(generation!==statusGeneration)return; render(data); byId('error').hidden = true; }
+  catch { if(generation!==statusGeneration)return; byId('doctor-notice').textContent='诊断结果无法刷新，下方可能是旧数据，不能作为当前健康结论。';byId('doctor-notice').className='warning';byId('tab-diagnostics').textContent='部署诊断 · 提示';byId('tab-diagnostics').className='tab-attention'; byId('resource-notice').textContent='资源数据无法刷新，下方可能是旧数据。';byId('resource-notice').className='warning'; byId('audit-notice').textContent = '审计容量与归档结果无法刷新，下表可能是旧数据。'; byId('audit-notice').className = 'warning'; byId('restore-close-notice').textContent = '结案结果无法刷新，下表可能是旧数据。'; byId('restore-close-notice').className = 'warning'; byId('restore-check-notice').textContent = '核对结果无法刷新，下表可能是旧数据。'; byId('restore-check-notice').className = 'warning'; byId('restore-notice').textContent = '恢复报告无法刷新，下表可能是旧结果，请复核采样时间。'; byId('restore-notice').className = 'warning'; byId('object-retention-notice').textContent = '对象保留数据无法刷新，下表保留旧结果，请复核采样时间。'; byId('object-retention-notice').className = 'warning'; byId('error').hidden = false; byId('error').textContent = '无法读取最新状态，请检查登录会话与采集定时器。下方可能是上次成功读取的数据。'; const notice = byId('capacity-notice'); notice.className = 'capacity-notice capacity-unknown'; notice.replaceChildren(el('strong', '容量状态待确认'), el('p', '无法取得最新状态，下方保留上次采样，不能作为实时容量依据。')); }
 }
+async function refreshData() {
+  if(manualRefreshing)return;
+  manualRefreshing=true;
+  ++statusGeneration;
+  const button=byId('refresh-data'), notice=byId('refresh-result');
+  button.disabled=true; button.textContent='正在采集…'; notice.textContent='正在重新采集主机状态，请稍候。';
+  try {
+    const response=await fetch('/api/refresh',{method:'POST',headers:{'X-Open-Assets-Refresh':'1'},cache:'no-store',credentials:'same-origin'});
+    if(response.redirected)throw new Error();
+    const result=await response.json();
+    if(response.ok && result.status==='collected')notice.textContent='采集完成于 '+date(result.collected_at)+'；正在重新读取数据。';
+    else if(result.status==='cooldown')notice.textContent='刚刚已采集，正在读取最近结果，请稍后再试。';
+    else if(result.status==='busy')notice.textContent='主机正在采集，先显示已有结果，请稍后再试。';
+    else throw new Error();
+    await update(true);
+    if(!byId('error').hidden)notice.textContent='采集请求已完成，但最新状态读取失败，请重试。';
+    else if(result.status==='collected')notice.textContent='已刷新 · 主机采集于 '+date(result.collected_at)+'。';
+  } catch {notice.textContent='刷新未完成，请检查登录会话或采集服务；下方保留上次成功读取的数据。';}
+  finally {manualRefreshing=false;button.disabled=false;button.textContent='刷新数据';}
+}
+byId('refresh-data').addEventListener('click',refreshData);
 initializeDetailTabs();
 update(); setInterval(update, 30000);

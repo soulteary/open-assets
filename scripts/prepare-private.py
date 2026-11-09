@@ -37,6 +37,7 @@ for s in ["storage", "publisher", "tls/storage", "tls/console", "generated"]:
 for s, uid in [
     ("publisher", 20010),
     ("images", 20010),
+    ("info-refresh", 20010),
     ("otterio", 20002),
     ("gitea/data", 20001),
     ("gitea/config", 20001),

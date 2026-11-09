@@ -110,7 +110,7 @@ python3 scripts/initialize-services.py
 ```sh
 docker compose run --rm --no-deps \
   -v "$PWD/private/generated:/generated" publisher render /generated
-install -d -o root -g 20010 -m 0750 /data/asset-stack/info
+install -d -o root -g 20010 -m 0750 /data/asset-stack/info /data/asset-stack/info-refresh
 docker compose up -d --no-build nginx webhook publisher info
 docker compose exec -T nginx nginx -c /etc/nginx/open-assets.conf -t
 ```

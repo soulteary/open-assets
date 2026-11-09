@@ -1,0 +1,24 @@
+[Unit]
+Description=Open Assets bounded manual status collection broker
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/app/open-assets
+ExecStart=/usr/bin/python3 -m open_assets.info_refresh --root /app/open-assets
+Environment=DOCKER_CONFIG=/tmp/open-assets-docker
+UMask=0077
+Restart=on-failure
+RestartSec=3
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/data/asset-stack/info /data/asset-stack/info-refresh
+MemoryMax=256M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,7 @@
 """Bounded object transfers and local immutable snapshot image views."""
 
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+import base64
 import errno
 import os
 import shutil
@@ -19,14 +20,45 @@ def policy(config):
     return workers
 
 
-def transfer(client, bucket, prefix, staging, item):
+def transfer(client, bucket, prefix, staging, item, cached=None, existing_keys=None):
     key = prefix + item["path"]
+    if cached and existing_keys is not None and key not in existing_keys:
+        args = dict(
+            Bucket=bucket,
+            Key=key,
+            CopySource={"Bucket": bucket, "Key": cached["key"]},
+            CopySourceIfMatch=cached["etag"],
+            MetadataDirective="REPLACE",
+            Metadata={"sha256": item["sha256"]},
+            ContentType=item["content_type"],
+            CacheControl="public, max-age=31536000, immutable",
+        )
+        try:
+            response = client.copy_object(**args, ChecksumAlgorithm="SHA256")
+        except Exception as error:
+            code = getattr(error, "response", {}).get("Error", {}).get("Code")
+            if code not in ("NotImplemented", "InvalidArgument", "InvalidRequest"):
+                raise
+            response = client.copy_object(**args)
+        etag = response.get("CopyObjectResult", {}).get("ETag")
+        if etag != cached["etag"]:
+            raise ValueError("incremental copy integrity mismatch")
+        checksum = response.get("CopyObjectResult", {}).get("ChecksumSHA256")
+        expected = base64.b64encode(bytes.fromhex(item["sha256"])).decode()
+        if checksum is not None and checksum != expected:
+            raise ValueError("incremental copy SHA-256 mismatch")
+        if checksum is None:
+            # ETags alone are not cryptographic content evidence. Compatible
+            # stores lacking copy checksums retain the original full readback.
+            verify_body(client.get_object(Bucket=bucket, Key=key)["Body"], item)
+        return etag, "copied" if checksum is not None else "copied-readback"
     try:
         existing = client.get_object(Bucket=bucket, Key=key)
     except client.exceptions.NoSuchKey:
         existing = None
     if existing is not None:
-        verify_body(existing["Body"], item)
+        etag = verify_body(existing["Body"], item)
+        return (etag if etag == existing.get("ETag") else None), "existing"
     else:
         with (staging / item["path"]).open("rb") as stream:
             client.put_object(
@@ -38,39 +70,76 @@ def transfer(client, bucket, prefix, staging, item):
                 CacheControl="public, max-age=31536000, immutable",
                 Metadata={"sha256": item["sha256"]},
             )
-        verify_body(client.get_object(Bucket=bucket, Key=key)["Body"], item)
+        response = client.get_object(Bucket=bucket, Key=key)
+        etag = verify_body(response["Body"], item)
+        return (etag if etag == response.get("ETag") else None), "uploaded"
 
 
-def upload(config, client, prefix, staging, files):
+def upload(config, client, prefix, staging, files, reuse=None, stats=None):
     """At most N active futures; drain running work before exposing failure."""
     workers = policy(config)
     iterator = iter(files)
-    pending = set()
+    pending = {}
+    etags = {}
+    stats = stats if stats is not None else {}
+    existing_keys = None
+    if reuse:
+        expected = {prefix + item["path"] for item in files}
+        existing_keys = set()
+        token = None
+        seen = set()
+        while True:
+            args = dict(Bucket=config["bucket"], Prefix=prefix, MaxKeys=1000)
+            if token:
+                args["ContinuationToken"] = token
+            page = client.list_objects_v2(**args)
+            for item in page.get("Contents", []):
+                name = item["Key"]
+                if name not in expected or name in existing_keys:
+                    raise ValueError("unexpected incremental destination object")
+                existing_keys.add(name)
+            if page.get("IsTruncated") is False:
+                break
+            token = page.get("NextContinuationToken")
+            if not isinstance(token, str) or not token or token in seen:
+                raise ValueError("invalid incremental destination pagination")
+            seen.add(token)
+            if len(seen) > len(files):
+                raise ValueError("incremental listing limit")
     with ThreadPoolExecutor(max_workers=workers) as pool:
 
         def submit():
             item = next(iterator, None)
             if item is not None:
-                pending.add(
-                    pool.submit(
-                        transfer, client, config["bucket"], prefix, staging, item
-                    )
+                future = pool.submit(
+                    transfer,
+                    client,
+                    config["bucket"],
+                    prefix,
+                    staging,
+                    item,
+                    (reuse or {}).get(item["path"]),
+                    existing_keys,
                 )
+                pending[future] = item["path"]
 
         try:
             for _ in range(workers):
                 submit()
             while pending:
-                done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                done, _ = wait(pending, return_when=FIRST_COMPLETED)
                 # Observe every completed future before submitting more work.
                 for future in done:
-                    future.result()
+                    etag, mode = future.result()
+                    etags[pending.pop(future)] = etag
+                    stats[mode] = stats.get(mode, 0) + 1
                 for _ in done:
                     submit()
         except BaseException:
             for future in pending:
                 future.cancel()
             raise
+    return etags
 
 
 def link_or_copy(source, destination):

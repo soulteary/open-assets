@@ -4,12 +4,31 @@ import http.server
 import json
 import math
 import os
+import socket
 import time
 import urllib.parse
 from pathlib import Path
 
 STATIC = Path(__file__).parent / "static"
 SNAPSHOT = Path(os.environ.get("INFO_SNAPSHOT", "/info/snapshot.json"))
+
+
+def refresh_snapshot():
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(30)
+        connection.connect(
+            os.environ.get("INFO_REFRESH_SOCKET", "/run/info-refresh/control.sock")
+        )
+        connection.sendall(b"REFRESH\n")
+        with connection.makefile("rb") as stream:
+            value = json.loads(stream.readline(1025))
+    if not isinstance(value, dict) or value.get("status") not in (
+        "collected",
+        "busy",
+        "cooldown",
+    ):
+        raise ValueError("status collection unavailable")
+    return value
 
 
 def read_snapshot(path=None):
@@ -37,6 +56,36 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_HEAD(self):
         self.do_GET()
+
+    def do_POST(self):
+        if self.path != "/api/refresh":
+            self.send_error(501)
+            return
+        origin = self.headers.get("Origin")
+        if (
+            self.headers.get("X-Open-Assets-Refresh") != "1"
+            or (
+                origin is not None
+                and origin != "https://" + self.headers.get("Host", "")
+            )
+            or self.headers.get("Content-Length", "0") != "0"
+            or self.headers.get("Transfer-Encoding") is not None
+        ):
+            self.send_error(403)
+            return
+        try:
+            result = refresh_snapshot()
+            status = {"collected": 200, "busy": 409, "cooldown": 429}[result["status"]]
+        except (OSError, ValueError, TypeError):
+            status, result = 503, dict(status="unavailable")
+        data = json.dumps(result).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def do_GET(self):
         route = self.path.split("?", 1)[0]
