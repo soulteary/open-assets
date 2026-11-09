@@ -24,6 +24,7 @@ SERVICES = (
     "stargate",
     "webhook",
     "info",
+    "object-reader",
 )
 
 

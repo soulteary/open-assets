@@ -299,7 +299,7 @@ def export(c, r, g, sha, dest, check=None, reuse=None):
                     )
                     files.append(cached)
                     continue
-            with out.open("wb") as stream:
+            with out.open("xb") as stream:
                 batch.write_blob(oid, size, stream)
                 stream.flush()
                 os.fsync(stream.fileno())
@@ -332,15 +332,19 @@ def export(c, r, g, sha, dest, check=None, reuse=None):
                     or "application/octet-stream",
                 )
             )
+            if reuse is not None and reuse.get("reference_mode"):
+                from . import immutable
+
+                reuse["verified"][rel.as_posix()] = immutable.record(out, files[-1])
     if not files:
         raise ValueError("empty publication")
     return files
 
 
-def sync_tree(root):
+def sync_tree(root, data_synced=False):
     """Sync a prepared tree before exposing it through a version-directory rename."""
     for directory, _, files in os.walk(root, topdown=False):
-        for name in files:
+        for name in [] if data_synced else files:
             with (P(directory) / name).open("rb") as f:
                 os.fsync(f.fileno())
         fd = os.open(directory, os.O_RDONLY)
@@ -362,7 +366,7 @@ def switch(base, target):
         os.close(d)
 
 
-def verify_tree(root, files, check=None):
+def verify_tree(root, files, check=None, verified=None):
     """Verify the exact serving tree, refusing links and unlisted files."""
     if not stat.S_ISDIR(root.lstat().st_mode):
         raise ValueError("version root is not a directory")
@@ -398,6 +402,13 @@ def verify_tree(root, files, check=None):
             item = expected[relative]
             if path.stat().st_size != item["size"]:
                 raise ValueError("version size mismatch")
+            if verified is not None:
+                from . import immutable
+
+                if not immutable.matches(path, item, verified.get(relative)):
+                    raise ValueError("verified version identity changed")
+                actual.add(relative)
+                continue
             digest = hashlib.sha256()
             with path.open("rb") as stream:
                 for block in iter(lambda: stream.read(1048576), b""):
@@ -422,9 +433,12 @@ def image_files(files):
     return images
 
 
-def activate_images(base, target, files):
+def activate_images(base, target, files, verified=None):
     """Verify before and after switching; restore the exact prior link on error."""
-    verify_tree(base / "releases" / target, files)
+    if verified is None:
+        verify_tree(base / "releases" / target, files)
+    else:
+        verify_tree(base / "releases" / target, files, verified=verified)
     current = base / "current"
     previous = os.readlink(current) if current.is_symlink() else None
     if current.exists() and previous is None:
@@ -434,7 +448,10 @@ def activate_images(base, target, files):
         if os.readlink(current) != "releases/" + target:
             raise ValueError("activation target changed")
         # Resolve only the deliberate current link; tree contents must be regular.
-        verify_tree(current.resolve(strict=True), files)
+        if verified is None:
+            verify_tree(current.resolve(strict=True), files)
+        else:
+            verify_tree(current.resolve(strict=True), files, verified=verified)
     except Exception:
         if previous is None:
             current.unlink(missing_ok=True)
@@ -549,9 +566,10 @@ def publish(c, j):
     (base / "releases").mkdir(parents=True, exist_ok=True)
     staging = P(tempfile.mkdtemp(prefix=".staging-", dir=base))
     try:
-        from . import incremental
+        from . import incremental, object_refs, immutable
 
         reuse = incremental.context(c, r)
+        reuse["reference_mode"] = object_refs.enabled(c)
         files = export(c, r, g, j["sha"], staging, reuse=reuse)
         images = image_files(files)  # Validate before the first remote write.
         stage("export")
@@ -568,6 +586,15 @@ def publish(c, j):
         )
         stage("objects")
         manifest = dict(key=r["key"], sha=j["sha"], files=files, config=c["revision"])
+        if reuse["reference_mode"]:
+            reuse["object_sources"] = {
+                name: dict(key=value["key"], content_type=value["object_content_type"])
+                for name, value in reuse["reused"].items()
+            }
+            manifest.update(
+                object_layout="references-v1", object_sources=reuse["object_sources"]
+            )
+            object_refs.validate(manifest)
         from .object_retention import restoration_record
 
         restoration_record(c, r["key"], j["sha"], restored=True)
@@ -575,8 +602,13 @@ def publish(c, j):
         final = base / "releases" / j["sha"]
         if final.exists():
             verify_tree(final, files)
+            if reuse["reference_mode"]:
+                reuse["verified"] = {
+                    item["path"]: immutable.record(final / item["path"], item)
+                    for item in files
+                }
         else:
-            sync_tree(staging)
+            sync_tree(staging, data_synced=reuse["reference_mode"])
             os.rename(staging, final)
         # Keep the complete public snapshot and a separate image-serving subset.
         image_final = base / "releases" / ("images-" + j["sha"])
@@ -589,9 +621,17 @@ def publish(c, j):
                     final / "images",
                     image_tmp,
                     dirs_exist_ok=True,
-                    copy_function=link_or_copy,
+                    copy_function=(
+                        lambda src, dst: immutable.link(
+                            P(src),
+                            P(dst),
+                            reuse["verified"][P(src).relative_to(final).as_posix()],
+                        )
+                    )
+                    if reuse["reference_mode"]
+                    else link_or_copy,
                 )
-                sync_tree(image_tmp)
+                sync_tree(image_tmp, data_synced=reuse["reference_mode"])
                 os.rename(image_tmp, image_final)
             finally:
                 shutil.rmtree(image_tmp, ignore_errors=True)
@@ -614,7 +654,27 @@ def publish(c, j):
         from .retention import remember_previous
 
         remember_previous(c, r["key"], j["sha"])
-        activate_images(base, "images-" + j["sha"], images)
+        if reuse["reference_mode"]:
+            image_proofs = {
+                name[7:]: value
+                for name, value in reuse["verified"].items()
+                if name.startswith("images/")
+            }
+            target = base / "releases" / ("images-" + j["sha"])
+            if not all(
+                immutable.matches(
+                    target / item["path"], item, image_proofs.get(item["path"])
+                )
+                for item in images
+            ):
+                verify_tree(target, images)
+                image_proofs = {
+                    item["path"]: immutable.record(target / item["path"], item)
+                    for item in images
+                }
+            activate_images(base, "images-" + j["sha"], images, verified=image_proofs)
+        else:
+            activate_images(base, "images-" + j["sha"], images)
         j["status"] = "published"
         j["finished"] = time.time()
         stage("activation")
@@ -772,6 +832,10 @@ def work_once(c, heartbeat=None):
             finally:
                 if heartbeat is not None:
                     heartbeat.update(job_started_at=None, progress_at=time.time())
+        if not ready:
+            from .incremental import audit_idle
+
+            audit_idle(c)
 
 
 def render(c, directory):

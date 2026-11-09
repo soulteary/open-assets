@@ -15,6 +15,7 @@ APP_SERVICES = {
     "webhook",
     "publisher",
     "info",
+    "object-reader",
     "nginx",
     "stargate",
     "gitea",

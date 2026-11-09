@@ -3,6 +3,7 @@
 import errno
 import hashlib
 import io
+import shutil
 import os
 from pathlib import Path
 import subprocess
@@ -95,6 +96,8 @@ class Batch(unittest.TestCase):
             b'<svg xmlns="http://www.w3.org/2000/svg"><script/></svg>',
         ):
             suffix = ".svg" if body.startswith(b"<svg") else ".png"
+            self.git("rm", "-rf", "--ignore-unmatch", "public")
+            shutil.rmtree(self.root / "out", ignore_errors=True)
             with self.subTest(suffix=suffix), self.assertRaises(ValueError):
                 self.export({"images/pic" + suffix: body})
 

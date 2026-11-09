@@ -89,3 +89,5 @@ object-restore.py 需要 OPEN_ASSETS_OBJECT_RESTORE_TEST=1，固定目标为 htt
 专项在限制为 384 MiB 内存的测试容器（源端 Git 打包与 Publisher 在同一容器）内，生成并提交 96 MiB 不可压缩文件，完成真实 Git fetch、首次发布、已有对象的重复发布和完整分块读回，检查图片 current、队列满时的新任务拒绝及重复事件去重。它要求 Publisher 自身峰值 RSS 小于单文件字节数，并输出数值；该值不包含 Git 子进程、存储容器或宿主机缓存，不是部署总内存。测试数据应使用磁盘目录，不放到容器同等大小的 tmpfs 中。
 
 普通单元测试还验证并发准入、归档/隔离记录预算、Git 超时、实际超限拉取后 source 引用不变，以及过长/截短对象响应的关闭与拒绝。小容量测试 tmpfs 显式降低 `git_min_free_bytes`，不改变生产默认值。专项完成后仅删除此次测试容器、网络和临时目录，不做全局 prune。
+
+`fresh-stack.sh` 最后运行 `references.py`，仅在独立验收域名和空白 Docker 环境中启用引用格式，验证变化对象数量、旧/新版本 URL、Range/HEAD/304 与图片回退。不要对生产环境执行该脚本。

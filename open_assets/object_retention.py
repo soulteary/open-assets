@@ -145,6 +145,16 @@ def manifest(config, key, sha):
         or not 0 < len(raw["files"]) <= MAX_OBJECTS
     ):
         raise ValueError("invalid object retention manifest")
+    from . import object_refs
+
+    sources = (
+        object_refs.validate(raw)
+        if raw.get("object_layout") == "references-v1"
+        else {
+            item["path"]: dict(key=prefix(key, sha) + item["path"])
+            for item in raw["files"]
+        }
+    )
     result = {}
     for item in raw["files"]:
         name = item["path"]
@@ -162,8 +172,15 @@ def manifest(config, key, sha):
             or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])
         ):
             raise ValueError("invalid object retention manifest entry")
-        result[prefix(key, sha) + name] = dict(size=item["size"], sha256=item["sha256"])
-    digest = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()
+        object_key = sources[name]["key"]
+        if object_key.startswith(prefix(key, sha)):
+            result[object_key] = dict(size=item["size"], sha256=item["sha256"])
+    identity = (
+        dict(objects=result, sources=sources)
+        if raw.get("object_layout") == "references-v1"
+        else result
+    )
+    digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     return result, digest
 
 
@@ -242,6 +259,13 @@ def plan(config, repository, jobs, budget, now):
     current, protected = local.protected_references(
         config, key, jobs, pins, budget.deadline
     )
+    from . import object_refs
+
+    origins, reference_versions = object_refs.reference_inventory(
+        config, key, budget.deadline
+    )
+    for origin in origins:
+        protected.setdefault(origin, []).append("object-reference")
     objects = listing(config, key, budget)
     versions = {}
     unknown = 0
@@ -254,6 +278,8 @@ def plan(config, repository, jobs, budget, now):
         version = versions.setdefault(sha, dict(sha=sha, objects={}, newest=0))
         version["objects"][name] = obj
         version["newest"] = max(version["newest"], obj["modified"])
+    for sha, newest in reference_versions.items():
+        versions.setdefault(sha, dict(sha=sha, objects={}, newest=newest))
     receipts = Path(config["state_root"]) / "object-retention" / key
     if receipts.exists() or receipts.is_symlink():
         local.real_directory(receipts)

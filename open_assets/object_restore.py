@@ -87,7 +87,7 @@ def canonical_files(manifest, key, sha):
     return result
 
 
-def listing(config, prefix, expected, s3, budget):
+def listing(config, prefix, expected, s3, budget, subset=False):
     found = {}
     token = None
     tokens = set()
@@ -98,6 +98,8 @@ def listing(config, prefix, expected, s3, budget):
         page = budget.call(s3, "list_objects_v2", **args)
         for obj in page.get("Contents", []):
             key = obj["Key"]
+            if key not in expected and subset:
+                continue
             if (
                 key not in expected
                 or key in found
@@ -116,6 +118,45 @@ def listing(config, prefix, expected, s3, budget):
         ):
             raise ValueError("invalid restoration pagination")
         tokens.add(token)
+
+
+def expected_objects(manifest, key, sha):
+    from . import object_refs
+
+    files = canonical_files(manifest, key, sha)
+    sources = object_refs.validate(manifest)
+    expected = {}
+    for name, item in files.items():
+        value = dict(item, content_type=sources[name]["content_type"])
+        object_key = sources[name]["key"]
+        previous = expected.get(object_key)
+        if previous is not None and (
+            previous["size"],
+            previous["sha256"],
+            previous["content_type"],
+        ) != (value["size"], value["sha256"], value["content_type"]):
+            raise ValueError("conflicting shared restoration object")
+        expected[object_key] = value
+    return expected
+
+
+def listing_manifest(config, manifest, expected, s3, budget):
+    prefix = f"repositories/{manifest['key']}/releases/{manifest['sha']}/"
+    found = {}
+    prefixes = {"/".join(name.split("/")[:4]) + "/" for name in expected}
+    for owner_prefix in sorted(prefixes):
+        selected = {k: v for k, v in expected.items() if k.startswith(owner_prefix)}
+        found.update(
+            listing(
+                config,
+                owner_prefix,
+                selected,
+                s3,
+                budget,
+                subset=owner_prefix != prefix,
+            )
+        )
+    return found
 
 
 def get_verified(config, key, item, s3, budget, missing=False):
@@ -300,14 +341,17 @@ def restore_locked(config, repository, sha, report, s3, budget):
         if report["rollback_requested"]:
             # Refuse to switch on top of inconsistent current/published metadata.
             retention.protected_references(config, key, [], [], budget.deadline)
-        prefix = f"repositories/{key}/releases/{sha}/"
-        expected = {prefix + name: item for name, item in files.items()}
+        expected = expected_objects(original, key, sha)
+
+        def list_expected():
+            return listing_manifest(config, original, expected, s3, budget)
+
         report.update(
             phase="preflight",
             files=len(files),
             logical_bytes=sum(item["size"] for item in files.values()),
         )
-        found = listing(config, prefix, expected, s3, budget)
+        found = list_expected()
         repairs = set()
         # All pre-existing bytes must pass before the first write.
         for name in found:
@@ -341,7 +385,7 @@ def restore_locked(config, repository, sha, report, s3, budget):
                 )
             report["uploaded_objects" if current is None else "repaired_objects"] += 1
         report["phase"] = "verify"
-        if set(listing(config, prefix, expected, s3, budget)) != set(expected):
+        if set(list_expected()) != set(expected):
             raise ValueError("incomplete restored object set")
         for name, item in expected.items():
             if not metadata_matches(get_verified(config, name, item, s3, budget), item):
@@ -364,6 +408,9 @@ def restore_locked(config, repository, sha, report, s3, budget):
         # Preserve original manifest bytes/MIME types and grant a new retention window.
         os.utime(manifest_path, None)
         restoration_record(config, key, sha, restored=True)
+        cache = state / "incremental" / (key + ".json")
+        if cache.exists() or cache.is_symlink():
+            core.atomic(cache, dict(version=0, reason="explicit-object-restoration"))
         if report["rollback_requested"]:
             budget.check()
             report.update(phase="activate", activation_uncertain=True)

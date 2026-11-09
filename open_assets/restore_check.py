@@ -137,11 +137,10 @@ def inspect(config, key, sha, report, s3, budget):
         report["source_uncertain"] = evidence.get("uncertain", False)
     except (Exception, KeyboardInterrupt) as error:
         report.update(source_status="unavailable", source_reason=reason(error))
-    prefix = f"repositories/{key}/releases/{sha}/"
 
     def objects():
-        expected = {prefix + name: item for name, item in files.items()}
-        found = restore.listing(config, prefix, expected, s3, budget)
+        expected = restore.expected_objects(original, key, sha)
+        found = restore.listing_manifest(config, original, expected, s3, budget)
         if set(found) != set(expected):
             raise FileNotFoundError("incomplete object set")
         for name, item in expected.items():

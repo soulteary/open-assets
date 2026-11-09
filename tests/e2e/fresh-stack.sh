@@ -35,3 +35,5 @@ python3 tests/e2e/verify.py
 if [ "${OPEN_ASSETS_COMMUNITY_TEST:-}" = 1 ]; then
   python3 tests/e2e/community.py
 fi
+
+python3 tests/e2e/references.py

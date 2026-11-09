@@ -71,6 +71,7 @@ max_file_bytes: 52428800
 - `images_root`：容器内图片版本目录，默认 `/images`。
 - `bucket`：对象存储桶，配方为 attachments。入口路由和权限也按该桶配置，不能只改此字段。
 - `endpoint`：Publisher 使用的 S3 根地址。配方为 `https://storage.internal:9000`，CA 从 S3_CA_FILE 指定的文件读取。
+- `publication.reference_releases`：默认 false。启用前部署只读版本 URL 解析服务和引用保护，详见[引用式版本发布](performance.md#引用式版本发布可选)。
 - `publication.object_workers`：对象上传与读回校验的最大并发，默认 4，允许 1 至 8 的整数；仍在整批验证通过后才写入，见[发布性能说明](performance.md#publisher-的批量读取与并发发布)。
 - `repositories`：仓库规则列表。自动任务和人工 publish 都必须匹配其中启用的项。
 

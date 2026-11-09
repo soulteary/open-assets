@@ -43,7 +43,7 @@ def main():
             if limit < 60 or not worker_healthy(record, time.time(), limit):
                 raise ValueError("worker heartbeat invalid")
         else:
-            port = {"webhook": 9000, "info": 8082}[role]
+            port = {"webhook": 9000, "info": 8082, "object-reader": 8083}[role]
             with urllib.request.urlopen(
                 f"http://127.0.0.1:{port}/healthz", timeout=3
             ) as response:

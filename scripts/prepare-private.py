@@ -36,6 +36,8 @@ for s in ["storage", "publisher", "tls/storage", "tls/console", "generated"]:
     (p / s).mkdir(parents=True, exist_ok=True)
 for s, uid in [
     ("publisher", 20010),
+    ("publisher/manifests", 20010),
+    ("publisher/object-retention", 20010),
     ("images", 20010),
     ("info-refresh", 20010),
     ("otterio", 20002),
