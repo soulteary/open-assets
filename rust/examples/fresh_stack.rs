@@ -645,14 +645,28 @@ fn run() -> Result<()> {
         "unsafe publication changed current version"
     );
     check_image(&client, "2026/10/10/image.svg", updated, "image/svg+xml")?;
-    app(&["operator", "--root", ROOT, "objects", "setup"])?;
+    app(&[
+        "operator",
+        "--root",
+        ROOT,
+        "objects",
+        "setup",
+        "--compaction",
+    ])?;
     let storage_client = storage_fixture_client()?;
     let first_manifest = read(
         state
             .join("manifests/main-images")
             .join(format!("{first}.json")),
     )?;
-    let missing_key = first_manifest["object_sources"]["readme.txt"]["key"]
+    let missing_item = first_manifest["files"]
+        .as_array()
+        .context("fixture file manifest")?
+        .iter()
+        .find(|item| item["path"] == "readme.txt")
+        .context("fixture attachment")?;
+    let missing_source = open_assets::storage::source(&first_manifest, missing_item)?;
+    let missing_key = missing_source["key"]
         .as_str()
         .context("fixture source object")?;
     ensure!(
