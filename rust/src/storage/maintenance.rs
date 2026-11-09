@@ -6,7 +6,7 @@ mod object_cleanup;
 mod restore;
 pub use restore::{barrier, reference_fingerprint, source_evidence};
 mod audit;
-pub use audit::{run as audit_run_unlocked, scan as audit_scan};
+pub use audit::{plan as audit_plan, run as audit_run_unlocked, scan as audit_scan};
 mod dedup;
 pub fn state(c: &Value) -> Result<PathBuf> {
     Ok(PathBuf::from(text(c, "state_root")?))

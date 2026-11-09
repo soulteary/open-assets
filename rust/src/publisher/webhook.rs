@@ -132,6 +132,8 @@ fn handle(mut stream: TcpStream) -> Result<()> {
     stream.set_write_timeout(Some(Duration::from_secs(15)))?;
     let response = stream.try_clone()?;
     let request = read_request(response, Instant::now() + Duration::from_secs(15));
+    let mut phase = "request";
+    let mut diagnostic_config = None;
     let result = (|| -> Result<(u16, Vec<u8>)> {
         let (request, _) = request?;
         if request.method == "GET" {
@@ -143,6 +145,7 @@ fn handle(mut stream: TcpStream) -> Result<()> {
         if request.method != "POST" {
             return Ok((501, Vec::new()));
         }
+        phase = "event";
         let signature = request
             .headers
             .get("x-gitea-signature")
@@ -157,8 +160,11 @@ fn handle(mut stream: TcpStream) -> Result<()> {
             .get("x-gitea-delivery")
             .map(String::as_str)
             .unwrap_or("");
+        phase = "configuration";
         let secret = read_regular(Path::new(&std::env::var("WEBHOOK_SECRET_FILE")?), 65536)?;
         let c = load(None)?;
+        diagnostic_config = Some(c.clone());
+        phase = "event";
         let id = super::admit_event(
             &c,
             &request.body,
@@ -172,6 +178,14 @@ fn handle(mut stream: TcpStream) -> Result<()> {
     let (status, body) = match result {
         Ok(v) => v,
         Err(error) => {
+            super::private_diagnostic(
+                diagnostic_config
+                    .as_ref()
+                    .unwrap_or(&json!({"state_root":"/state"})),
+                "webhook",
+                phase,
+                &error,
+            );
             let code = error.to_string();
             if error.downcast_ref::<std::io::Error>().is_some()
                 || code.starts_with("queue_")

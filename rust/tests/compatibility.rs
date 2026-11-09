@@ -26,7 +26,10 @@ fn original_yaml_configuration_revision_is_byte_exact() {
     let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../config/repositories.example.yaml");
     let bytes = std::fs::read(&file).unwrap();
-    let config = common::load(Some(&file)).unwrap();
+    let fixture = tempfile::tempdir().unwrap();
+    let safe = fixture.path().join("repositories.yaml");
+    std::fs::write(&safe, &bytes).unwrap();
+    let config = common::load(Some(&safe)).unwrap();
     assert_eq!(config["revision"], hex::encode(Sha256::digest(bytes)));
     assert_eq!(config["publication"]["reference_releases"], false);
 }
@@ -58,5 +61,23 @@ fn python_generated_restoration_validation_fixtures() {
         if let Ok(actual) = result {
             assert_eq!(actual, fixture["expected"], "fixture {index}");
         }
+    }
+}
+
+#[test]
+fn python_float_roundtrip_including_real_timestamp_precision() {
+    let fixtures: Vec<Value> =
+        serde_json::from_str(include_str!("fixtures/python-floats.json")).unwrap();
+    for (i, f) in fixtures.into_iter().enumerate() {
+        let bytes = common::python_json(&f["value"], true).unwrap();
+        assert_eq!(
+            std::str::from_utf8(&bytes).unwrap(),
+            f["expected"].as_str().unwrap(),
+            "float fixture {i}"
+        );
+        assert_eq!(
+            common::digest(&f["value"]).unwrap(),
+            f["digest"].as_str().unwrap()
+        );
     }
 }

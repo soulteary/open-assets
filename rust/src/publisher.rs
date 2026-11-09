@@ -910,6 +910,91 @@ pub fn record_limit(c: &Value, code: &str, key: &str, category: &str) {
     })();
     let _ = result;
 }
+/// Two bounded private observations; public status never includes raw exceptions.
+pub fn private_diagnostic(c: &Value, category: &str, phase: &str, error: &anyhow::Error) {
+    let result = (|| -> Result<()> {
+        ensure!(
+            ["publication", "webhook"].contains(&category),
+            "invalid diagnostic category"
+        );
+        let phase = if [
+            "request",
+            "event",
+            "configuration",
+            "fetch",
+            "export",
+            "objects",
+            "snapshot",
+            "activation",
+            "evidence",
+        ]
+        .contains(&phase)
+        {
+            phase
+        } else {
+            "unknown"
+        };
+        let message = error.to_string();
+        let code = if [
+            "git_repository_bytes",
+            "git_total_bytes",
+            "git_fetch_bytes",
+            "git_min_free_bytes",
+            "git_timeout_seconds",
+            "git_output_bytes",
+            "scan_entries",
+            "queue_active_records",
+            "queue_total_records",
+            "queue_reserved_bytes",
+            "unsafe_resource_entry",
+        ]
+        .contains(&message.as_str())
+        {
+            message.as_str()
+        } else if let Some(error) = error.downcast_ref::<std::io::Error>() {
+            match error.kind() {
+                std::io::ErrorKind::NotFound => "file_missing",
+                std::io::ErrorKind::PermissionDenied => "permission_denied",
+                std::io::ErrorKind::TimedOut => "timed_out",
+                std::io::ErrorKind::WouldBlock => "resource_busy",
+                _ => "io_failed",
+            }
+        } else if error.downcast_ref::<reqwest::Error>().is_some() {
+            "remote_request_failed"
+        } else {
+            match message.as_str() {
+                "Git command failed" | "Git batch process failed" => "git_failed",
+                "signature mismatch" => "signature_refused",
+                "unknown repository"
+                | "wrong branch"
+                | "invalid event"
+                | "invalid signed event" => "event_refused",
+                _ => "validation_refused",
+            }
+        };
+        let root = state(c)?.join("private-diagnostics");
+        fs::create_dir_all(&root)?;
+        ensure!(
+            fs::symlink_metadata(&root)?.is_dir(),
+            "unsafe diagnostic directory"
+        );
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
+        atomic(
+            &root.join(format!("{category}.json")),
+            &json!({"schema_version":1,"at":now(),"phase":phase,"code":code}),
+        )
+    })();
+    let _ = result;
+}
+fn publication_phase(j: &Value) -> &'static str {
+    for stage in ["fetch", "export", "objects", "snapshot", "activation"] {
+        if j["timings"].get(stage).is_none() {
+            return stage;
+        }
+    }
+    "evidence"
+}
 pub fn work_once(c: &Value) -> Result<()> {
     work_once_heartbeat(c, None)
 }
@@ -960,6 +1045,7 @@ fn work_once_heartbeat(c: &Value, heartbeat: Option<&Arc<Mutex<Value>>>) -> Resu
             h["progress_at"] = now().into();
         }
         if let Err(error) = publish(c, &mut j) {
+            private_diagnostic(c, "publication", publication_phase(&j), &error);
             j["status"] = "failed".into();
             j["error"] = "PublicationError".into();
             let code = error.to_string();
@@ -1691,5 +1777,31 @@ mod additional_safety_tests {
         )
         .unwrap();
         snapshot::verify(dest.path(), &exported.files, Some(&exported.proofs)).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod private_diagnostic_tests {
+    use super::*;
+    #[test]
+    fn diagnostics_are_bounded_private_and_never_store_exception_text() {
+        let t = tempfile::tempdir().unwrap();
+        let c = json!({"state_root":t.path()});
+        let secret = "https://credential:secret@example.invalid/private?token=TOKEN";
+        private_diagnostic(&c, "publication", "export", &anyhow!(secret));
+        let p = t.path().join("private-diagnostics/publication.json");
+        let raw = fs::read_to_string(&p).unwrap();
+        assert!(!raw.contains(secret) && !raw.contains("TOKEN"));
+        assert_eq!(read_json(&p, 4096).unwrap()["code"], "validation_refused");
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(fs::metadata(p).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(t.path().join("private-diagnostics"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
     }
 }

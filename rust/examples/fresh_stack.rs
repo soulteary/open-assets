@@ -155,10 +155,6 @@ fn wait_job(sha: &str, published: bool) -> Result<Value> {
                         Some("published" | "failed" | "superseded")
                     )
                 {
-                    ensure!(
-                        v["status"] == if published { "published" } else { "failed" },
-                        "unexpected publication outcome"
-                    );
                     found = Some(v);
                     return Ok(true);
                 }
@@ -167,7 +163,12 @@ fn wait_job(sha: &str, published: bool) -> Result<Value> {
         },
         120,
     )?;
-    found.context("missing fixture job")
+    let found = found.context("missing fixture job")?;
+    ensure!(
+        found["status"] == if published { "published" } else { "failed" },
+        "unexpected publication outcome"
+    );
+    Ok(found)
 }
 fn git(path: &Path, args: &[&str]) -> Result<String> {
     let mut full = vec!["-C", path.to_str().context("fixture Git path")?];
@@ -185,7 +186,11 @@ fn commit_push(path: &Path, message: &str) -> Result<String> {
     Ok(sha)
 }
 fn check_image(client: &Client, path: &str, body: &[u8], mime: &str) -> Result<()> {
-    let url = format!("http://127.0.0.1:18081/{path}");
+    let url = if path.starts_with("https://") {
+        path.to_owned()
+    } else {
+        format!("http://127.0.0.1:18081/{path}")
+    };
     let r = client.get(&url).send()?;
     ensure!(
         r.status() == 200
@@ -219,6 +224,48 @@ fn check_image(client: &Client, path: &str, body: &[u8], mime: &str) -> Result<(
         "image conditional GET mismatch"
     );
     Ok(())
+}
+fn fixture_s3(
+    client: &Client,
+    method: reqwest::Method,
+    key: &str,
+    etag: Option<&str>,
+) -> Result<reqwest::blocking::Response> {
+    use sha2::{Digest, Sha256};
+    ensure!(
+        key.starts_with("repositories/main-images/releases/") && key.ends_with("/readme.txt"),
+        "fixture object scope"
+    );
+    let access = fs::read_to_string(format!("{ROOT}/private/object-cleaner/cleaner_access"))?;
+    let secret = fs::read_to_string(format!("{ROOT}/private/object-cleaner/cleaner_secret"))?;
+    let url = reqwest::Url::parse(&format!("https://storage.internal:19000/attachments/{key}"))?;
+    let mut headers = reqwest::header::HeaderMap::new();
+    if let Some(etag) = etag {
+        headers.insert("if-match", etag.parse()?);
+    }
+    let signed = open_assets::storage::signing_headers(
+        method.as_str(),
+        &url,
+        &headers,
+        &hex::encode(Sha256::digest(b"")),
+        access.trim(),
+        secret.trim(),
+        &chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string(),
+    )?;
+    Ok(client.request(method, url).headers(signed).send()?)
+}
+fn storage_fixture_client() -> Result<Client> {
+    let mut builder = Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(10))
+        .resolve("storage.internal", "127.0.0.1:19000".parse()?);
+    for ca in
+        reqwest::Certificate::from_pem_bundle(&fs::read(format!("{ROOT}/private/tls/ca.crt"))?)?
+    {
+        builder = builder.add_root_certificate(ca);
+    }
+    Ok(builder.build()?)
 }
 fn edge_fixture(client: &Client) -> Result<(Client, Value)> {
     let p = PathBuf::from(format!("{ROOT}/private/e2e/edge"));
@@ -368,8 +415,12 @@ fn edge_fixture(client: &Client) -> Result<(Client, Value)> {
             "anonymous management access was not redirected"
         );
         let location = response.headers()["location"].to_str()?;
+        let target = reqwest::Url::parse(location)?;
         ensure!(
-            location.contains(domains["auth"].as_str().unwrap()),
+            target.scheme() == "https"
+                && target.host_str() == domains["auth"].as_str()
+                && target.username().is_empty()
+                && target.password().is_none(),
             "management redirect escaped authentication entry"
         );
     }
@@ -412,7 +463,7 @@ fn run() -> Result<()> {
     fs::write(
         "private/e2e-ports.yaml",
         serde_json::to_vec(
-            &json!({"services":{"nginx":{"ports":["127.0.0.1:18081:8080"]},"info":{"ports":["127.0.0.1:18082:8082"]},"object-reader":{"ports":["127.0.0.1:18083:8083"]}}}),
+            &json!({"services":{"nginx":{"ports":["127.0.0.1:18081:8080"]},"info":{"ports":["127.0.0.1:18082:8082"]},"object-reader":{"ports":["127.0.0.1:18083:8083"]},"webhook":{"ports":["127.0.0.1:19080:9000"]}}}),
         )?,
     )?;
     compose(&["config", "--quiet"])?;
@@ -469,6 +520,24 @@ fn run() -> Result<()> {
         "object-reader",
         "info",
     ])?;
+    wait(
+        || {
+            Ok(client
+                .get("http://127.0.0.1:19080/healthz")
+                .send()?
+                .status()
+                == 200
+                && client
+                    .get("http://127.0.0.1:18082/healthz")
+                    .send()?
+                    .status()
+                    == 200
+                && read("/data/asset-stack/publisher/worker-heartbeat.json")?["updated_at"]
+                    .as_f64()
+                    .is_some_and(|t| open_assets::common::now() - t < 30.0))
+        },
+        60,
+    )?;
     fs::create_dir_all("private/e2e/client/public/images/2026/10/10")?;
     let fixture = Path::new(ROOT).join("private/e2e");
     fs::set_permissions(&fixture, fs::Permissions::from_mode(0o700))?;
@@ -565,14 +634,89 @@ fn run() -> Result<()> {
         "unsafe publication changed current version"
     );
     check_image(&client, "2026/10/10/image.svg", updated, "image/svg+xml")?;
-    worker(&["restore-objects", "main-images", &first])?;
+    app(&["operator", "--root", ROOT, "objects", "setup"])?;
+    let storage_client = storage_fixture_client()?;
+    let first_manifest = read(
+        state
+            .join("manifests/main-images")
+            .join(format!("{first}.json")),
+    )?;
+    let missing_key = first_manifest["object_sources"]["readme.txt"]["key"]
+        .as_str()
+        .context("fixture source object")?;
+    ensure!(
+        missing_key == format!("repositories/main-images/releases/{first}/readme.txt"),
+        "refusing unexpected fixture deletion target"
+    );
+    let original_object = fixture_s3(&storage_client, reqwest::Method::GET, missing_key, None)?;
+    ensure!(
+        original_object.status() == 200,
+        "fixture object missing before deletion"
+    );
+    let object_etag = original_object.headers()["etag"].to_str()?.to_owned();
+    ensure!(
+        &original_object.bytes()?[..] == b"original attachment",
+        "fixture object bytes before deletion"
+    );
+    ensure!(
+        fixture_s3(
+            &storage_client,
+            reqwest::Method::DELETE,
+            missing_key,
+            Some(&object_etag)
+        )?
+        .status()
+        .is_success(),
+        "fixture deletion failed"
+    );
+    ensure!(
+        fixture_s3(&storage_client, reqwest::Method::HEAD, missing_key, None)?.status() == 404,
+        "fixture object was not removed"
+    );
+    let restored: Value =
+        serde_json::from_slice(&worker(&["restore-objects", "main-images", &first])?)?;
+    ensure!(
+        restored["status"] == "complete"
+            && restored["uploaded_objects"]
+                .as_u64()
+                .is_some_and(|n| n >= 1),
+        "missing object was not restored"
+    );
+    let object = fixture_s3(&storage_client, reqwest::Method::GET, missing_key, None)?;
+    ensure!(
+        object.status() == 200
+            && object.headers()["content-type"]
+                .to_str()?
+                .starts_with("text/plain")
+            && &object.bytes()?[..] == b"original attachment",
+        "restored object metadata or bytes mismatch"
+    );
+    let full = images.join("releases").join(&first);
+    let saved = images.join(".e2e-saved-local");
+    fs::rename(&full, &saved)?;
+    let rebuilt: Value = serde_json::from_slice(&worker(&[
+        "restore-objects",
+        "main-images",
+        &first,
+        "--with-local",
+    ])?)?;
+    ensure!(
+        rebuilt["local_full_rebuilt"] == true
+            && rebuilt["local_verified"] == true
+            && fs::read(full.join("images/fixed.png"))? == png,
+        "missing local snapshot was not rebuilt"
+    );
+    ensure!(
+        read(state.join("published/main-images"))?["sha"] == second,
+        "restore without rollback changed publication"
+    );
+    worker(&["deduplicate-local", "--apply"])?;
     let checked: Value =
         serde_json::from_slice(&worker(&["check-restore", "main-images", &first])?)?;
     ensure!(
         checked["diagnosis"] == "verified",
         "restoration verification failed"
     );
-    app(&["operator", "--root", ROOT, "objects", "setup"])?;
     let preview: Value =
         serde_json::from_slice(&compose(&["run", "--rm", "--no-deps", "object-cleaner"])?)?;
     ensure!(
@@ -606,18 +750,24 @@ fn run() -> Result<()> {
         image.status() == 200 && &image.bytes()?[..] == updated,
         "HTTPS image route mismatch"
     );
-    let attachment = secured
-        .get(format!(
-            "https://{}/attachments/repositories/main-images/releases/{second}/images/fixed.png",
-            domains["oss"].as_str().unwrap()
-        ))
-        .send()?;
-    ensure!(
-        attachment.status() == 200
-            && attachment.headers()["x-content-type-options"] == "nosniff"
-            && &attachment.bytes()?[..] == png.as_slice(),
-        "HTTPS reference resolver mismatch"
-    );
+    for (path, body, mime) in [
+        ("images/fixed.png", png.as_slice(), "image/png"),
+        (
+            "images/2026/10/10/image.svg",
+            updated.as_slice(),
+            "image/svg+xml",
+        ),
+    ] {
+        check_image(
+            &secured,
+            &format!(
+                "https://{}/attachments/repositories/main-images/releases/{second}/{path}",
+                domains["oss"].as_str().unwrap()
+            ),
+            body,
+            mime,
+        )?;
+    }
     for role in ["publisher", "webhook", "info", "object-reader"] {
         compose(&["exec", "-T", role, "open-assets", "health", role])?;
         ensure!(
@@ -642,8 +792,23 @@ fn run() -> Result<()> {
     Ok(())
 }
 fn main() {
-    if run().is_err() {
-        eprintln!("Rust fresh-stack acceptance failed; inspect this disposable environment. Private fixtures are never uploaded.");
+    if let Err(error) = run() {
+        eprintln!(
+            "Rust fresh-stack acceptance failed: {error}; private fixtures are never uploaded."
+        );
+        for role in ["publication", "webhook"] {
+            let p = Path::new("/data/asset-stack/publisher/private-diagnostics")
+                .join(format!("{role}.json"));
+            if let Ok(v) = read(p) {
+                let mut safe = json!({});
+                for k in ["schema_version", "phase", "code", "at"] {
+                    if let Some(value) = v.get(k) {
+                        safe[k] = value.clone();
+                    }
+                }
+                eprintln!("Private diagnostic category {role}: {safe}");
+            }
+        }
         std::process::exit(1);
     }
 }

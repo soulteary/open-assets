@@ -1863,12 +1863,12 @@ fn collect_audits(c: &Value, keys: &[String], data: &Path, force: bool) -> Resul
         cache["repositories"][&key]["attempted_at"] = json!(now());
         let sample = (|| -> Result<Value> {
             ensure!(Instant::now() < deadline, "audit time budget");
-            let (paths, rows) = crate::storage::maintenance::audit_scan(&host, &key, deadline)?;
-            let plan = crate::storage::maintenance::audit_run_unlocked(
+            let (paths, rows) = crate::storage::maintenance::audit_scan(
                 &host,
-                "restore-audit-archive",
-                std::slice::from_ref(&key),
+                &key,
+                deadline.min(Instant::now() + Duration::from_secs(30)),
             )?;
+            let plan = crate::storage::maintenance::audit_plan(&rows, None, 20, 30, 100, now())?;
             ensure!(plan["status"] == "complete", "audit plan unavailable");
             let mut sample = json!({"measured_at":now(),"invalid_records":rows.iter().filter(|r|r["invalid"]==true).count(),"candidate_records":plan["candidates"].as_array().context("audit candidates")?.len(),"candidate_bytes":plan["candidate_bytes"],"eligible_records":plan["candidates"].as_array().unwrap().len()as u64+plan["protection_counts"]["batch-limit"].as_u64().unwrap_or(0),"protection_counts":plan["protection_counts"]});
             let mut scanned = 0;

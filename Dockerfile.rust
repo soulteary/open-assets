@@ -9,7 +9,10 @@ RUN mkdir -p rust/src && printf 'pub fn dependency_cache() {}\n' > rust/src/lib.
 COPY rust ./rust
 COPY open_assets/static ./open_assets/static
 COPY config/repositories.example.yaml ./config/repositories.example.yaml
-RUN cargo build --locked --release --bin open-assets
+RUN cargo clean --release --package open-assets \
+    && find rust -type f -name '*.rs' -exec touch {} + \
+    && cargo build --locked --release --bin open-assets \
+    && /src/target/release/open-assets --version | grep '^open-assets [0-9]'
 
 FROM public.ecr.aws/docker/library/debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client ca-certificates openssl && rm -rf /var/lib/apt/lists/* \

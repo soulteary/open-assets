@@ -2,9 +2,13 @@ use anyhow::{ensure, Context, Result};
 use regex::Regex;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::fs::{self, OpenOptions};
+#[cfg(test)]
+use std::fs;
+use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Component, Path};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -39,19 +43,83 @@ pub fn relative(s: &str) -> bool {
         && s.split('/').all(|p| !p.is_empty() && p != "." && p != "..")
 }
 
-pub fn read_regular(path: &Path, max: u64) -> Result<Vec<u8>> {
-    let file = OpenOptions::new()
+fn parent_directory(path: &Path, create: bool) -> Result<(File, std::ffi::CString)> {
+    // macOS exposes these root-owned system aliases; normalize only these exact
+    // prefixes, never an arbitrary deployment-state symlink.
+    #[cfg(target_os = "macos")]
+    let owned = if let Ok(rest) = path.strip_prefix("/var") {
+        Path::new("/private/var").join(rest)
+    } else if let Ok(rest) = path.strip_prefix("/tmp") {
+        Path::new("/private/tmp").join(rest)
+    } else {
+        path.to_path_buf()
+    };
+    #[cfg(target_os = "macos")]
+    let path = owned.as_path();
+    let parent = path.parent().context("missing record parent")?;
+    let name = std::ffi::CString::new(path.file_name().context("missing record name")?.as_bytes())?;
+    let mut directory = OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .context("cannot open protected record")?;
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(if parent.is_absolute() {
+            Path::new("/")
+        } else {
+            Path::new(".")
+        })?;
+    for part in parent.components() {
+        let component = match part {
+            Component::RootDir | Component::CurDir => continue,
+            Component::Normal(c) => c,
+            _ => anyhow::bail!("unsafe record parent"),
+        };
+        let component = std::ffi::CString::new(component.as_bytes())?;
+        if create {
+            let made = unsafe { libc::mkdirat(directory.as_raw_fd(), component.as_ptr(), 0o700) };
+            if made < 0 {
+                let e = std::io::Error::last_os_error();
+                if e.kind() != std::io::ErrorKind::AlreadyExists {
+                    return Err(e.into());
+                }
+            } else {
+                directory.sync_all()?;
+            }
+        }
+        let fd = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                component.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        directory = unsafe { File::from_raw_fd(fd) };
+    }
+    Ok((directory, name))
+}
+
+pub fn read_regular(path: &Path, max: u64) -> Result<Vec<u8>> {
+    let (parent, name) = parent_directory(path, false)?;
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let file = unsafe { File::from_raw_fd(fd) };
     let meta = file.metadata()?;
     ensure!(
         meta.is_file() && meta.len() <= max,
         "invalid record type or size"
     );
     let mut data = Vec::new();
-    file.take(max + 1).read_to_end(&mut data)?;
+    file.take(max.checked_add(1).context("invalid record limit")?)
+        .read_to_end(&mut data)?;
     ensure!(data.len() as u64 <= max, "record exceeds size limit");
     Ok(data)
 }
@@ -61,24 +129,70 @@ pub fn read_json(path: &Path, max: u64) -> Result<Value> {
 }
 
 pub fn sync_directory(path: &Path) -> Result<()> {
-    let f = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
-        .open(path)?;
-    f.sync_all()?;
+    let (parent, _) = parent_directory(&path.join(".sync-sentinel"), false)?;
+    parent.sync_all()?;
     Ok(())
 }
 
 pub fn atomic(path: &Path, value: &Value) -> Result<()> {
-    let parent = path.parent().context("missing record parent")?;
-    fs::create_dir_all(parent)?;
-    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
-    tmp.as_file()
-        .set_permissions(fs::Permissions::from_mode(0o600))?;
-    tmp.write_all(&json_bytes(value, false, false)?)?;
-    tmp.as_file().sync_all()?;
-    tmp.persist(path).map_err(|e| e.error)?;
-    sync_directory(parent)
+    let (parent, name) = parent_directory(path, true)?;
+    let mut existing = std::mem::MaybeUninit::<libc::stat>::uninit();
+    let status = unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            existing.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if status == 0 {
+        let existing = unsafe { existing.assume_init() };
+        ensure!(
+            existing.st_mode & libc::S_IFMT == libc::S_IFREG,
+            "unsafe record destination"
+        );
+    } else {
+        let e = std::io::Error::last_os_error();
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(e.into());
+        }
+    }
+    let temporary = std::ffi::CString::new(format!(".tmp{}", uuid::Uuid::new_v4().simple()))?;
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            temporary.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let mut file = unsafe { File::from_raw_fd(fd) };
+    let result = (|| -> Result<()> {
+        file.write_all(&json_bytes(value, false, false)?)?;
+        file.sync_all()?;
+        let status = unsafe {
+            libc::renameat(
+                parent.as_raw_fd(),
+                temporary.as_ptr(),
+                parent.as_raw_fd(),
+                name.as_ptr(),
+            )
+        };
+        if status < 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        parent.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        unsafe {
+            libc::unlinkat(parent.as_raw_fd(), temporary.as_ptr(), 0);
+        }
+    }
+    result
 }
 
 pub fn python_json(value: &Value, sort_keys: bool) -> Result<Vec<u8>> {
@@ -392,6 +506,19 @@ mod tests {
         std::os::unix::fs::symlink(&p, t.path().join("link")).unwrap();
         assert!(read_json(&t.path().join("link"), 1024).is_err());
         assert!(read_json(&p, 1).is_err());
+    }
+    #[test]
+    fn ancestor_symlinks_cannot_escape_protected_record_io() {
+        let t = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let state = t.path().join("state");
+        fs::create_dir(&state).unwrap();
+        std::os::unix::fs::symlink(outside.path(), state.join("object-restores")).unwrap();
+        let path = state.join("object-restores/images/report.json");
+        assert!(atomic(&path, &json!({"status":"complete"})).is_err());
+        assert!(!outside.path().join("images").exists());
+        fs::write(outside.path().join("secret.json"), b"{}").unwrap();
+        assert!(read_json(&state.join("object-restores/secret.json"), 1024).is_err());
     }
     #[test]
     fn configuration_rejects_wrong_types_and_overlap() {

@@ -465,6 +465,132 @@ fn option(args: &[String], name: &str, default: u64, low: u64, high: u64) -> Res
     ensure!((low..=high).contains(&n), "invalid audit limit");
     Ok(n)
 }
+pub fn plan(
+    rows: &[Value],
+    sha: Option<&str>,
+    keep: u64,
+    age: u64,
+    max: u64,
+    now: f64,
+) -> Result<Value> {
+    ensure!(
+        rows.len() <= 20000
+            && (1..=1000).contains(&keep)
+            && age <= 36500
+            && (1..=500).contains(&max)
+            && now.is_finite()
+            && now >= 0.,
+        "invalid audit planning options"
+    );
+    if let Some(sha) = sha {
+        ensure!(valid_sha(sha), "invalid audit planning SHA");
+    }
+    for row in rows {
+        ensure!(
+            row["audit_id"].as_str().is_some_and(audit_id)
+                && row["locations"].as_array().is_some_and(|a| !a.is_empty()
+                    && a.len() <= 3
+                    && a.iter()
+                        .all(|v| matches!(v.as_str(), Some("online" | "archive" | "retired")))),
+            "invalid audit planning row"
+        );
+    }
+    let online = |r: &Value| {
+        r["locations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s == "online")
+    };
+    let retired = |r: &Value| {
+        r["locations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s == "retired")
+    };
+    let online_count = rows.iter().filter(|r| online(r)).count();
+    let mut ordered = rows
+        .iter()
+        .filter(|r| online(r) && r["invalid"] != true)
+        .collect::<Vec<_>>();
+    ordered.sort_by(|a, b| {
+        b["started_at"]
+            .as_f64()
+            .unwrap_or(0.)
+            .total_cmp(&a["started_at"].as_f64().unwrap_or(0.))
+            .then_with(|| b["audit_id"].as_str().cmp(&a["audit_id"].as_str()))
+    });
+    let protected_ids = ordered
+        .iter()
+        .take(keep as usize)
+        .filter_map(|r| r["audit_id"].as_str())
+        .collect::<BTreeSet<_>>();
+    let covered = rows
+        .iter()
+        .filter(|r| r["status"] == "closed" && r["invalid"] != true)
+        .filter_map(|r| r["source_digest"].as_str())
+        .collect::<BTreeSet<_>>();
+    let mut chronological = rows.iter().collect::<Vec<_>>();
+    chronological.sort_by(|a, b| {
+        a["started_at"]
+            .as_f64()
+            .unwrap_or(0.)
+            .total_cmp(&b["started_at"].as_f64().unwrap_or(0.))
+            .then_with(|| a["audit_id"].as_str().cmp(&b["audit_id"].as_str()))
+    });
+    let (mut candidates, mut protected) = (Vec::new(), Vec::new());
+    for row in chronological {
+        if sha.is_some_and(|s| row["sha"] != s) && row["invalid"] != true {
+            continue;
+        }
+        if !online(row) && !retired(row) {
+            continue;
+        }
+        let id = text(row, "audit_id")?;
+        let mut reason = if row["invalid"] == true {
+            Some("invalid")
+        } else if row["status"] == "running" {
+            Some("unfinished")
+        } else if protected_ids.contains(id) {
+            Some("keep-last")
+        } else if row["source_uncertain"] == true
+            && row["status"] != "closed"
+            && !row["source_digest"]
+                .as_str()
+                .is_some_and(|s| covered.contains(s))
+        {
+            Some("unresolved-source")
+        } else if row["finished_at"].as_f64().unwrap_or(now) > now - age as f64 * 86400. {
+            Some("recent")
+        } else {
+            None
+        };
+        if retired(row) && row["invalid"] != true {
+            reason = None;
+        }
+        if let Some(reason) = reason {
+            let mut row = row.clone();
+            row["protection"] = json!(reason);
+            protected.push(row);
+        } else if candidates.len() < max as usize {
+            candidates.push(row.clone());
+        } else {
+            let mut row = row.clone();
+            row["protection"] = json!("batch-limit");
+            protected.push(row);
+        }
+    }
+    let mut counts = BTreeMap::<String, u64>::new();
+    for row in &protected {
+        *counts
+            .entry(text(row, "protection")?.to_owned())
+            .or_default() += 1;
+    }
+    Ok(
+        json!({"status":"complete","online_records":online_count,"candidates":candidates,"protected":protected.iter().take(1000).collect::<Vec<_>>(),"protected_total":protected.len(),"protected_truncated":protected.len()>1000,"protection_counts":counts,"archived_records":0,"partial_possible":false,"info_limit":512,"invalid_records":rows.iter().filter(|r|r["invalid"]==true).count(),"candidate_bytes":candidates.iter().map(|r|r["bytes"].as_u64().unwrap_or(0)).sum::<u64>(),"projected_online_records":online_count-candidates.iter().filter(|r|online(r)).count()}),
+    )
+}
 pub fn run(c: &Value, command: &str, args: &[String]) -> Result<Value> {
     let key = args
         .first()
@@ -518,88 +644,10 @@ pub fn run(c: &Value, command: &str, args: &[String]) -> Result<Value> {
             json!({"status":if rows.iter().any(|r|r["invalid"]==true){"failed"}else{"complete"},"key":key,"total":rows.len(),"offset":offset,"has_more":rows.len()>offset+limit,"records":rows.into_iter().skip(offset).take(limit).collect::<Vec<_>>()}),
         );
     }
-    let online = |r: &Value| {
-        r["locations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|s| s == "online")
-    };
-    let retired = |r: &Value| {
-        r["locations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|s| s == "retired")
-    };
-    let online_count = rows.iter().filter(|r| online(r)).count();
-    let mut ordered = rows
-        .iter()
-        .filter(|r| online(r) && r["invalid"] != true)
-        .collect::<Vec<_>>();
-    ordered.sort_by(|a, b| {
-        b["started_at"]
-            .as_f64()
-            .unwrap_or(0.)
-            .total_cmp(&a["started_at"].as_f64().unwrap_or(0.))
-    });
-    let protected_ids = ordered
-        .iter()
-        .take(keep as usize)
-        .filter_map(|r| r["audit_id"].as_str())
-        .collect::<BTreeSet<_>>();
-    let covered = rows
-        .iter()
-        .filter(|r| r["status"] == "closed" && r["invalid"] != true)
-        .filter_map(|r| r["source_digest"].as_str())
-        .collect::<BTreeSet<_>>();
-    let mut candidates = Vec::new();
-    let mut protected = Vec::new();
-    for row in &rows {
-        if sha.is_some_and(|s| row["sha"] != s) && row["invalid"] != true {
-            continue;
-        }
-        if !online(row) && !retired(row) {
-            continue;
-        }
-        let id = text(row, "audit_id")?;
-        let reason = if row["invalid"] == true {
-            Some("invalid")
-        } else if retired(row) {
-            None
-        } else if row["status"] == "running" {
-            Some("unfinished")
-        } else if protected_ids.contains(id) {
-            Some("keep-last")
-        } else if row["source_uncertain"] == true
-            && row["status"] != "closed"
-            && !row["source_digest"]
-                .as_str()
-                .is_some_and(|s| covered.contains(s))
-        {
-            Some("unresolved-source")
-        } else if row["finished_at"].as_f64().unwrap_or(crate::common::now())
-            > crate::common::now() - age as f64 * 86400.
-        {
-            Some("recent")
-        } else if candidates.len() >= max as usize {
-            Some("batch-limit")
-        } else {
-            None
-        };
-        if let Some(reason) = reason {
-            let mut row = row.clone();
-            row["protection"] = json!(reason);
-            protected.push(row);
-        } else {
-            candidates.push(row.clone());
-        }
-    }
-    let mut counts = BTreeMap::<String, u64>::new();
-    for r in &protected {
-        *counts.entry(text(r, "protection")?.to_owned()).or_default() += 1;
-    }
-    let mut result = json!({"status":"complete","key":key,"mode":if apply{"apply"}else{"preview"},"online_records":online_count,"candidates":candidates,"protected":protected.iter().take(1000).collect::<Vec<_>>(),"protected_total":protected.len(),"protected_truncated":protected.len()>1000,"protection_counts":counts,"archived_records":0,"partial_possible":false,"info_limit":512,"invalid_records":rows.iter().filter(|r|r["invalid"]==true).count(),"candidate_bytes":candidates.iter().map(|r|r["bytes"].as_u64().unwrap_or(0)).sum::<u64>(),"projected_online_records":online_count-candidates.iter().filter(|r|online(r)).count()});
+    let mut result = plan(&rows, sha, keep, age, max, crate::common::now())?;
+    result["key"] = json!(key);
+    result["mode"] = json!(if apply { "apply" } else { "preview" });
+    let candidates = result["candidates"].as_array().unwrap().clone();
     if !apply {
         return Ok(result);
     }
@@ -771,5 +819,37 @@ mod tests {
         let path = dir.path().join("archive.tar.gz");
         fs::write(&path, raw).unwrap();
         assert!(verify_archive(&path, "images", &id).is_err());
+    }
+    #[test]
+    fn pure_plan_keeps_latest_and_uncertain_sources_and_bounds_retired_batch() {
+        let row = |id: &str, status: &str, time: f64, location: &str| json!({"audit_id":id.repeat(32),"sha":"a".repeat(40),"status":status,"started_at":time,"finished_at":time+1.,"locations":[location],"bytes":10});
+        let mut rows = vec![
+            row("a", "refused", 1., "online"),
+            row("b", "refused", 2., "online"),
+            row("c", "refused", 3., "online"),
+            row("d", "refused", 4., "retired"),
+            row("e", "refused", 5., "retired"),
+        ];
+        rows[1]["source_uncertain"] = json!(true);
+        rows[1]["source_digest"] = json!("f".repeat(64));
+        let original = rows.clone();
+        let plan = plan(&rows, None, 1, 0, 1, 100.).unwrap();
+        assert_eq!(rows, original);
+        assert_eq!(plan["candidates"].as_array().unwrap().len(), 1);
+        assert_eq!(plan["candidates"][0]["audit_id"], "a".repeat(32));
+        assert_eq!(plan["protection_counts"]["keep-last"], 1);
+        assert_eq!(plan["protection_counts"]["unresolved-source"], 1);
+        assert_eq!(plan["protection_counts"]["batch-limit"], 2);
+    }
+    #[test]
+    fn pure_plan_matches_old_timestamp_and_sha_filter_ordering() {
+        let row = |id: &str, time: f64| json!({"audit_id":id.repeat(32),"sha":"a".repeat(40),"status":"refused","started_at":time,"finished_at":time+1.,"locations":["online"],"bytes":10});
+        let rows = vec![row("a", 50.), row("b", 10.), row("c", 90.)];
+        let a = plan(&rows, None, 1, 0, 100, 100.).unwrap();
+        assert_eq!(a["candidates"][0]["audit_id"], "b".repeat(32));
+        assert_eq!(a["candidates"][1]["audit_id"], "a".repeat(32));
+        let filtered = plan(&rows, Some(&"b".repeat(40)), 1, 0, 100, 100.).unwrap();
+        assert!(filtered["candidates"].as_array().unwrap().is_empty());
+        assert!(plan(&rows, None, 0, 0, 100, 100.).is_err());
     }
 }
