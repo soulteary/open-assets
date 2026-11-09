@@ -1,11 +1,22 @@
 """Verified one-off object compaction; keep every logical release and URL."""
 
+import base64
 import concurrent.futures
+import hashlib
 from pathlib import Path
 import uuid
 import urllib.request
 
 from . import object_refs, retention
+
+
+def delete_checksum(params, **kwargs):
+    body = params["body"]
+    if not isinstance(body, bytes):
+        raise ValueError("unexpected bulk deletion body")
+    params["headers"]["Content-MD5"] = base64.b64encode(
+        hashlib.md5(body, usedforsecurity=False).digest()
+    ).decode("ascii")
 
 
 def reader_ready():
@@ -22,6 +33,13 @@ def reader_ready():
 def run(config, client, apply=False):
     from . import __main__ as core
     from .resources import verify_body
+
+    if getattr(client, "meta", None) is not None:
+        client.meta.events.register(
+            "before-call.s3.DeleteObjects",
+            delete_checksum,
+            unique_id="open-assets-compaction-md5",
+        )
 
     if apply:
         reader_ready()

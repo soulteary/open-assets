@@ -97,6 +97,21 @@ class Compact(unittest.TestCase):
                 object_compact.run(self.f.config, self.f.store, apply=True)
         self.assertFalse(self.f.store.deleted)
 
+    def test_bulk_delete_hashes_exact_serialized_xml(self):
+        import base64
+
+        body = "<Delete><Object><Key>中文 &amp; %.svg</Key></Object></Delete>".encode()
+        params = dict(body=body, headers={})
+        object_compact.delete_checksum(params)
+        self.assertEqual(
+            params["headers"]["Content-MD5"],
+            base64.b64encode(
+                hashlib.md5(body, usedforsecurity=False).digest()
+            ).decode(),
+        )
+        with self.assertRaises(ValueError):
+            object_compact.delete_checksum(dict(body=iter([body]), headers={}))
+
     def test_bad_old_source_stops_before_metadata_or_delete(self):
         f = self.f
         name = next(iter(f.store.objects))
