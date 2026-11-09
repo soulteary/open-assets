@@ -96,6 +96,14 @@ fn cpu_sample() -> Result<(u64, u64)> {
     ensure!(v.len() == 8, "cpu sample");
     Ok((v.iter().sum(), v[3] + v[4]))
 }
+fn online_cpu_count() -> usize {
+    // /proc load and CPU samples describe the host, not the collector's CPUQuota.
+    // Match os.cpu_count() from the previous implementation even in a cgroup.
+    usize::try_from(unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) })
+        .ok()
+        .filter(|n| *n > 0)
+        .unwrap_or(1)
+}
 pub fn host_metrics() -> Result<Value> {
     let mut fields = BTreeMap::new();
     for line in fs::read_to_string("/proc/meminfo")?.lines() {
@@ -128,7 +136,7 @@ pub fn host_metrics() -> Result<Value> {
         })
         .unwrap_or_else(|| "Linux".into());
     Ok(
-        json!({"cpu_count":std::thread::available_parallelism().map(|n|n.get()).unwrap_or(1),"cpu_percent":null,"load":load,"uptime_seconds":uptime,"os":os,"kernel":fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default().trim(),"memory":{"total":total,"available":available,"used":total.saturating_sub(available)},"swap":{"total":swap,"used":swap.saturating_sub(get("SwapFree"))}}),
+        json!({"cpu_count":online_cpu_count(),"cpu_percent":null,"load":load,"uptime_seconds":uptime,"os":os,"kernel":fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default().trim(),"memory":{"total":total,"available":available,"used":total.saturating_sub(available)},"swap":{"total":swap,"used":swap.saturating_sub(get("SwapFree"))}}),
     )
 }
 fn disk(path: &Path, label: &str) -> Result<Value> {
@@ -1298,6 +1306,29 @@ mod migration_tests {
         assert_eq!(
             cleanup_results(d.path(), ["assets"].into_iter())["assets"]["status"],
             "unavailable"
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod online_cpu_tests {
+    use super::*;
+    #[test]
+    fn host_cpu_count_matches_proc_even_with_collector_cpu_quota() {
+        let stat = fs::read_to_string("/proc/stat").unwrap();
+        let online = stat
+            .lines()
+            .filter_map(|line| line.split_whitespace().next())
+            .filter(|name| {
+                name.strip_prefix("cpu").is_some_and(|suffix| {
+                    !suffix.is_empty() && suffix.bytes().all(|c| c.is_ascii_digit())
+                })
+            })
+            .count();
+        assert!(online > 0);
+        assert_eq!(
+            host_metrics().unwrap()["cpu_count"].as_u64(),
+            Some(online as u64)
         );
     }
 }
