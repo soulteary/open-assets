@@ -112,6 +112,23 @@ class Compact(unittest.TestCase):
         with self.assertRaises(ValueError):
             object_compact.delete_checksum(dict(body=iter([body]), headers={}))
 
+    def test_legacy_unlisted_object_remains_available_but_is_never_deleted(self):
+        from open_assets import object_reader
+
+        sha = self.versions[0]
+        name = f"repositories/assets/releases/{sha}/manual-extra.txt"
+        self.f.store.objects[name] = (b"extra", dict(ContentType="text/plain"))
+        object_compact.run(self.f.config, self.f.store, apply=True)
+        self.assertIn(name, self.f.store.objects)
+        with (
+            patch.object(object_reader, "MANIFESTS", self.state / "manifests"),
+            patch.object(object_reader, "RECEIPTS", self.state / "object-retention"),
+        ):
+            object_reader.CACHE.clear()
+            self.assertEqual(
+                object_reader.resolve("/attachments/" + name), (name, None)
+            )
+
     def test_bad_old_source_stops_before_metadata_or_delete(self):
         f = self.f
         name = next(iter(f.store.objects))

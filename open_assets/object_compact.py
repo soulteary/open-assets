@@ -91,6 +91,8 @@ def run(config, client, apply=False):
                 updated = dict(
                     original, object_layout="references-v1", object_sources={}
                 )
+                if original.get("object_layout") != "references-v1":
+                    updated["legacy_extra_objects"] = True
                 for item in original["files"]:
                     source = refs[item["path"]]
                     identity = (key, item["sha256"], item["size"])

@@ -61,6 +61,7 @@ def resolve(path):
                 refs,
                 files,
                 manifest.get("object_layout") == "references-v1",
+                manifest.get("legacy_extra_objects") is True,
             )
             CACHE[cache_key] = entry
             while (
@@ -78,7 +79,7 @@ def resolve(path):
             raise FileNotFoundError("retired object release")
     item = entry[2].get(relative)
     if item is None:
-        if not entry[3]:
+        if not entry[3] or entry[4]:
             return f"repositories/{key}/releases/{sha}/{relative}", None
         raise FileNotFoundError("object absent from complete manifest")
     return entry[1][relative]["key"], item["content_type"]
