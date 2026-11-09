@@ -618,16 +618,26 @@ def publish(c, j):
 
         reuse = incremental.context(c, r)
         reuse["reference_mode"] = object_refs.enabled(c)
-        connection = c.get("_s3_connection")
-        s = (
-            connection.get(c, lambda: s3client(c, bounded=True))
-            if connection is not None
-            else s3client(c, bounded=True)
-        )
+        s = None
         source_check = None
+
+        def get_client():
+            nonlocal s
+            if s is None:
+                connection = c.get("_s3_connection")
+                s = (
+                    connection.get(c, lambda: s3client(c, bounded=True))
+                    if connection is not None
+                    else s3client(c, bounded=True)
+                )
+            return s
 
         def verify_plan(blobs):
             nonlocal source_pool, source_check
+            if not any(
+                relative.as_posix().startswith("images/") for _, relative, _, _ in blobs
+            ):
+                raise ValueError("missing images")
             if not reuse["reference_mode"]:
                 return
             planned = {}
@@ -642,12 +652,16 @@ def publish(c, j):
                 source_check = (
                     planned,
                     source_pool.submit(
-                        object_refs.verify_sources, c, s, list(planned.values())
+                        object_refs.verify_sources,
+                        c,
+                        get_client(),
+                        list(planned.values()),
                     ),
                 )
 
         files = export(c, r, g, j["sha"], staging, reuse=reuse, on_plan=verify_plan)
         images = image_files(files)  # Validate before the first remote write.
+        s = get_client()
         stage("export")
         prefix = f"repositories/{r['key']}/releases/{j['sha']}/"
         etags = upload(
