@@ -366,7 +366,23 @@ def collect(root, refresh_storage=False):
     )
     from .storage_info import collect_storage, cleanup_service, capacity
 
-    result["storage"] = collect_storage(root, data_root, force=refresh_storage)
+    result["storage"] = collect_storage(root, data_root, measure_now=False)
+    if refresh_storage:
+        # Fixed, host-only background work; the web service cannot supply args.
+        try:
+            subprocess.run(
+                [
+                    "systemctl",
+                    "start",
+                    "--no-block",
+                    "open-assets-storage-info.service",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
     result["storage"]["cleanup_service"] = cleanup_service()
     from .object_info import summary
 

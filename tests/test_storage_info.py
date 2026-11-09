@@ -83,6 +83,17 @@ class StorageInfo(unittest.TestCase):
         self.assertEqual(row["partial_versions"], 0)
         self.assertEqual(result["status"], "ok")
 
+    def test_host_snapshot_reads_cache_without_repeating_large_scan(self):
+        self.collect(True)
+        cache = self.data / "info/repositories-cache.json"
+        before = cache.read_bytes()
+        with patch.object(
+            s, "measure", side_effect=AssertionError("host refresh must not scan")
+        ):
+            result = s.collect_storage(self.root, self.data, measure_now=False)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(cache.read_bytes(), before)
+
     def test_counts_allocated_bytes_policy_and_allowlist(self):
         result = self.collect(True)
         self.assertEqual(result["status"], "ok")

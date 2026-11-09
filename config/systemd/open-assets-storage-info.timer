@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh bounded local capacity statistics every five minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=5min
+AccuracySec=10s
+Unit=open-assets-storage-info.service
+
+[Install]
+WantedBy=timers.target

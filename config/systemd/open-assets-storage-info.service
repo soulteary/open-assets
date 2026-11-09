@@ -1,0 +1,19 @@
+[Unit]
+Description=Open Assets bounded local capacity sampler
+After=docker.service
+ConditionPathExists=!/app/open-assets/private/maintenance.flag
+
+[Service]
+Type=oneshot
+WorkingDirectory=/app/open-assets
+ExecStart=/usr/bin/python3 -m open_assets.storage_scan --root /app/open-assets
+UMask=0077
+Nice=19
+CPUQuota=25%
+MemoryMax=256M
+TimeoutStartSec=100
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/data/asset-stack/info

@@ -355,7 +355,9 @@ def source_marker(data_root, key):
     return values
 
 
-def collect_storage(root, data_root, force=False, now=None):
+def collect_storage(
+    root, data_root, force=False, now=None, *, measure_now=True, scan_seconds=None
+):
     now = time.time() if now is None else now
     cache_path = data_root / "info/repositories-cache.json"
     try:
@@ -401,7 +403,10 @@ def collect_storage(root, data_root, force=False, now=None):
         or cache.get("config_digest") != digest
         or cache.get("measurement_version") != 2
     )
-    deadline, counter = time.monotonic() + SCAN_SECONDS, [0]
+    deadline, counter = (
+        time.monotonic() + (SCAN_SECONDS if scan_seconds is None else scan_seconds),
+        [0],
+    )
     completed = cleanup_results(data_root, keys)
     rows, measurements, markers, failures = [], {}, {}, []
     old_markers = cache.get("markers", {})
@@ -428,7 +433,7 @@ def collect_storage(root, data_root, force=False, now=None):
         old = cached_metrics(cached.get(key))
         try:
             marker = source_marker(data_root, key)
-            if (
+            if measure_now and (
                 refresh
                 or old is None
                 or key in old_failures
@@ -436,6 +441,8 @@ def collect_storage(root, data_root, force=False, now=None):
                 or now - old["measured_at"] >= CACHE_SECONDS
             ):
                 old = dict(measure(data_root, key, deadline, counter), measured_at=now)
+            if old is None:
+                raise ValueError("no completed storage sample")
             markers[key] = marker
             row.update(old, measurement_status="ok")
         except (OSError, ValueError, TypeError):
@@ -451,20 +458,21 @@ def collect_storage(root, data_root, force=False, now=None):
                 or row["measurement_status"] != "ok"
             )
         rows.append(row)
-    try:
-        write_cache(
-            cache_path,
-            dict(
-                schema_version=1,
-                measurement_version=2,
-                config_digest=digest,
-                repositories=measurements,
-                markers=markers,
-                failures=failures,
-            ),
-        )
-    except OSError:
-        pass  # An unwritable cache must not invalidate a measured snapshot.
+    if measure_now:
+        try:
+            write_cache(
+                cache_path,
+                dict(
+                    schema_version=1,
+                    measurement_version=2,
+                    config_digest=digest,
+                    repositories=measurements,
+                    markers=markers,
+                    failures=failures,
+                ),
+            )
+        except OSError:
+            pass  # An unwritable cache must not invalidate a measured snapshot.
     return dict(
         status="ok"
         if all(
