@@ -466,6 +466,7 @@ fn run() -> Result<()> {
     compose(&["config", "--quiet"])?;
     compose(&["pull", "otterio", "oc", "stargate", "gitea", "nginx"])?;
     compose(&["build", "publisher"])?;
+    command("sh", &["scripts/install-runtime.sh", "open-assets:local"])?;
     compose(&[
         "up",
         "-d",

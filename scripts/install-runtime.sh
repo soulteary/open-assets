@@ -3,6 +3,7 @@
 # initialize services, or rewrite configuration/data.
 set -eu
 umask 077
+[ "$(uname -s)" = Linux ] || { echo 'Install the Linux runtime on the Linux deployment host; use cargo build for native development.' >&2; exit 1; }
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 image=${1:-open-assets:local}
 [ ! -L "$root/bin" ] || { echo 'Refusing linked runtime directory.' >&2; exit 1; }
