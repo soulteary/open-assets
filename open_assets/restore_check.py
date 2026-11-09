@@ -156,7 +156,7 @@ def inspect(config, key, sha, report, s3, budget):
         for path in (Path(config["images_root"]), base.parent, base, base / "releases"):
             retention.real_directory(path)
         core.verify_tree(
-            base / "releases" / (("images-" if image else "") + sha),
+            base / "releases" / (core.image_target(original) if image else sha),
             core.image_files(list(files.values())) if image else list(files.values()),
             check=budget.check,
         )

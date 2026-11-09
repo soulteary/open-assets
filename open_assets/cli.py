@@ -5,6 +5,8 @@ import re
 
 INTERNAL = {"render", "serve", "worker", "once"}
 DESCRIPTIONS = {
+    "materialize-image-views": "校验并重建旧目录格式，供旧程序回退；默认预览。",
+    "deduplicate-local": "完整校验后去重本地相同内容；默认预览，--apply 才执行。",
     "validate": "校验配置，不修改服务。",
     "render": "生成 Nginx 配置（内部部署命令）。",
     "serve": "启动 Webhook（由 Compose 管理）。",
@@ -98,6 +100,8 @@ def add_worker_commands(parser, *, internal=True):
                 "key", type=key, help="稳定仓库 key，不是 owner/repository 名称"
             )
             command.add_argument("sha", type=sha, help="完整 commit SHA")
+        if name in ("deduplicate-local", "materialize-image-views"):
+            command.add_argument("--apply", action="store_true")
         if name == "render":
             command.add_argument("destination", help="配置输出目录")
         if name == "retry":

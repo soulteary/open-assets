@@ -388,38 +388,51 @@ def verify_tree(root, files, check=None, verified=None):
             raise ValueError("invalid manifest entry")
         expected[name] = item
     actual = set()
-    for directory, directories, names in os.walk(root, followlinks=False):
+    stack = [(root, "")]
+    while stack:
+        directory, prefix = stack.pop()
         if check is not None:
             check()
-        for name in directories:
-            if not stat.S_ISDIR((P(directory) / name).lstat().st_mode):
-                raise ValueError("linked version directory")
-        for name in names:
-            path = P(directory) / name
-            relative = path.relative_to(root).as_posix()
-            if relative not in expected or not stat.S_ISREG(path.lstat().st_mode):
-                raise ValueError("unexpected version entry")
-            item = expected[relative]
-            if path.stat().st_size != item["size"]:
-                raise ValueError("version size mismatch")
-            if verified is not None:
-                from . import immutable
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                info = entry.stat(follow_symlinks=False)
+                relative = prefix + entry.name
+                if stat.S_ISDIR(info.st_mode):
+                    stack.append((P(entry.path), relative + "/"))
+                    continue
+                if relative not in expected or not stat.S_ISREG(info.st_mode):
+                    raise ValueError("unexpected version entry")
+                item = expected[relative]
+                if info.st_size != item["size"]:
+                    raise ValueError("version size mismatch")
+                if verified is not None:
+                    from . import immutable
 
-                if not immutable.matches(path, item, verified.get(relative)):
-                    raise ValueError("verified version identity changed")
+                    if not immutable.matches_stat(info, item, verified.get(relative)):
+                        raise ValueError("verified version identity changed")
+                else:
+                    digest = hashlib.sha256()
+                    with open(entry.path, "rb") as stream:
+                        for block in iter(lambda: stream.read(1048576), b""):
+                            if check is not None:
+                                check()
+                            digest.update(block)
+                    if digest.hexdigest() != item["sha256"]:
+                        raise ValueError("version bytes mismatch")
                 actual.add(relative)
-                continue
-            digest = hashlib.sha256()
-            with path.open("rb") as stream:
-                for block in iter(lambda: stream.read(1048576), b""):
-                    if check is not None:
-                        check()
-                    digest.update(block)
-            if digest.hexdigest() != item["sha256"]:
-                raise ValueError("version bytes mismatch")
-            actual.add(relative)
     if actual != set(expected):
         raise ValueError("missing version file")
+
+
+def image_target(manifest):
+    sha = manifest["sha"]
+    if not SHA.fullmatch(sha):
+        raise ValueError("invalid image version")
+    return (
+        sha + "/images"
+        if manifest.get("image_layout") == "snapshot-v1"
+        else "images-" + sha
+    )
 
 
 def image_files(files):
@@ -500,7 +513,7 @@ def rollback_images_locked(c, key, sha):
     saved = read_json(published) if had_published else None
     remember_previous(c, key, sha)
     try:
-        activate_images(base, "images-" + sha, image_files(manifest["files"]))
+        activate_images(base, image_target(manifest), image_files(manifest["files"]))
         atomic(published, manifest)
     except Exception:
         if previous is None:
@@ -512,7 +525,9 @@ def rollback_images_locked(c, key, sha):
             not (base / "current").is_symlink()
             or os.readlink(base / "current") != previous
         ):
-            if not re.fullmatch(r"releases/images-[0-9a-f]{40}", previous):
+            if not re.fullmatch(
+                r"releases/(?:images-[0-9a-f]{40}|[0-9a-f]{40}/images)", previous
+            ):
                 raise ValueError("invalid previous activation reference")
             switch(base, previous.removeprefix("releases/"))
         if not had_published:
@@ -592,7 +607,9 @@ def publish(c, j):
                 for name, value in reuse["reused"].items()
             }
             manifest.update(
-                object_layout="references-v1", object_sources=reuse["object_sources"]
+                object_layout="references-v1",
+                object_sources=reuse["object_sources"],
+                image_layout="snapshot-v1",
             )
             object_refs.validate(manifest)
         from .object_retention import restoration_record
@@ -611,7 +628,7 @@ def publish(c, j):
             sync_tree(staging, data_synced=reuse["reference_mode"])
             os.rename(staging, final)
         # Keep the complete public snapshot and a separate image-serving subset.
-        image_final = base / "releases" / ("images-" + j["sha"])
+        image_final = base / "releases" / image_target(manifest)
         if not (final / "images").is_dir():
             raise ValueError("missing images directory")
         if not image_final.exists():
@@ -638,12 +655,14 @@ def publish(c, j):
         stage("snapshot")
         # Recheck before activation. A Push can still race after this check;
         # Git head and the filesystem link do not share a commit boundary.
-        fetch(c, r, g)
-        if (
-            j["kind"] == "auto"
-            and git(g, "rev-parse", "refs/heads/source", c=c).decode().strip()
-            != j["sha"]
-        ):
+        if reuse["reference_mode"] and j["kind"] == "auto":
+            from .resources import remote_head
+
+            head = remote_head(c, r, g)
+        else:
+            fetch(c, r, g)
+            head = git(g, "rev-parse", "refs/heads/source", c=c).decode().strip()
+        if j["kind"] == "auto" and head != j["sha"]:
             j["status"] = "superseded"
             return
         previous = (
@@ -660,7 +679,7 @@ def publish(c, j):
                 for name, value in reuse["verified"].items()
                 if name.startswith("images/")
             }
-            target = base / "releases" / ("images-" + j["sha"])
+            target = base / "releases" / image_target(manifest)
             if not all(
                 immutable.matches(
                     target / item["path"], item, image_proofs.get(item["path"])
@@ -672,7 +691,7 @@ def publish(c, j):
                     item["path"]: immutable.record(target / item["path"], item)
                     for item in images
                 }
-            activate_images(base, "images-" + j["sha"], images, verified=image_proofs)
+            activate_images(base, image_target(manifest), images, verified=image_proofs)
         else:
             activate_images(base, "images-" + j["sha"], images)
         j["status"] = "published"
@@ -1030,9 +1049,15 @@ def execute(a, o):
                 stop.wait(10)
 
         threading.Thread(target=beat, daemon=True).start()
+        from .queue_wakeup import QueueWakeup
+
+        directory = P(c["state_root"]) / "jobs"
+        directory.mkdir(parents=True, exist_ok=True)
+        wakeup = QueueWakeup(directory)
         try:
             delay = 2
             while True:
+                wakeup.drain()
                 heartbeat["progress_at"] = time.time()
                 try:
                     work_once(load(), heartbeat)
@@ -1040,9 +1065,20 @@ def execute(a, o):
                 except OSError as error:
                     queue_notice("queue-io-failed", error)
                     delay = min(delay * 2, 60)
-                time.sleep(delay)
+                    time.sleep(delay)
+                    continue
+                wakeup.wait(delay)
         finally:
+            wakeup.close()
             stop.set()
+    elif o.command == "materialize-image-views":
+        from .local_dedup import legacy_views
+
+        print(json.dumps(legacy_views(c, apply=o.apply)))
+    elif o.command == "deduplicate-local":
+        from .local_dedup import run
+
+        print(json.dumps(run(c, apply=o.apply)))
     elif o.command == "once":
         work_once(c)
     elif o.command == "publish":

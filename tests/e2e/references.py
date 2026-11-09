@@ -80,6 +80,15 @@ def main():
             / (second + ".json")
         ).read_text()
     )
+    assert manifest["image_layout"] == "snapshot-v1"
+    assert not (
+        Path("/data/asset-stack/images/repos/main-images/releases")
+        / ("images-" + second)
+    ).exists()
+    assert (
+        Path("/data/asset-stack/images/repos/main-images/current").readlink().as_posix()
+        == "releases/" + second + "/images"
+    )
     assert manifest["object_sources"]
     jobs = [
         json.loads(p.read_text())

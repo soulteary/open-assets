@@ -195,18 +195,19 @@ def metadata_matches(response, item):
     )
 
 
-def prepare_local(base, sha, staging, files, budget):
+def prepare_local(base, sha, staging, files, budget, direct=False):
     """Validate every existing copy before network writes; never replace conflicts."""
     from . import __main__ as core
 
     releases = base / "releases"
     directories(releases)
-    full, image = releases / sha, releases / ("images-" + sha)
+    full = releases / sha
+    image = full / "images" if direct else releases / ("images-" + sha)
     image_files = core.image_files(files)
     for path, expected in ((full, files), (image, image_files)):
         if path.exists() or path.is_symlink():
             core.verify_tree(path, expected, check=budget.check)
-    if image.exists():
+    if direct or image.exists():
         return None
     temporary = Path(tempfile.mkdtemp(prefix=".restore-images-", dir=base))
     try:
@@ -219,19 +220,25 @@ def prepare_local(base, sha, staging, files, budget):
         raise
 
 
-def install_local(config, key, sha, staging, image_staging, files, report, budget):
+def install_local(
+    config, key, sha, staging, image_staging, files, report, budget, direct=False
+):
     from . import __main__ as core
 
     releases = Path(config["images_root"]) / "repos" / key / "releases"
-    for source, target, expected, field in (
+    entries = [
         (staging, releases / sha, files, "local_full_rebuilt"),
-        (
-            image_staging,
-            releases / ("images-" + sha),
-            core.image_files(files),
-            "local_images_rebuilt",
-        ),
-    ):
+    ]
+    if not direct:
+        entries.append(
+            (
+                image_staging,
+                releases / ("images-" + sha),
+                core.image_files(files),
+                "local_images_rebuilt",
+            )
+        )
+    for source, target, expected, field in entries:
         budget.check()
         if target.exists() or target.is_symlink():
             core.verify_tree(target, expected, check=budget.check)
@@ -250,7 +257,9 @@ def install_local(config, key, sha, staging, image_staging, files, report, budge
     # A successful pair is verified again after both renames, not inferred from flags.
     core.verify_tree(releases / sha, files, check=budget.check)
     core.verify_tree(
-        releases / ("images-" + sha), core.image_files(files), check=budget.check
+        releases / (sha + "/images" if direct else "images-" + sha),
+        core.image_files(files),
+        check=budget.check,
     )
     report.update(local_verified=True, local_partial_possible=False)
 
@@ -336,7 +345,12 @@ def restore_locked(config, repository, sha, report, s3, budget):
         if report["with_local"]:
             report["phase"] = "local-preflight"
             image_staging = prepare_local(
-                images / "repos" / key, sha, staging, list(files.values()), budget
+                images / "repos" / key,
+                sha,
+                staging,
+                list(files.values()),
+                budget,
+                direct=original.get("image_layout") == "snapshot-v1",
             )
         if report["rollback_requested"]:
             # Refuse to switch on top of inconsistent current/published metadata.
@@ -404,6 +418,7 @@ def restore_locked(config, repository, sha, report, s3, budget):
                 list(files.values()),
                 report,
                 budget,
+                direct=original.get("image_layout") == "snapshot-v1",
             )
         # Preserve original manifest bytes/MIME types and grant a new retention window.
         os.utime(manifest_path, None)
