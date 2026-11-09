@@ -58,7 +58,8 @@ def record(path, item):
 
 
 def link(source, destination, proof):
-    before = source.lstat()
+    source = os.fspath(source)
+    before = os.lstat(source)
     if not matches_stat(before, proof, proof):
         raise ValueError("immutable source identity changed")
     try:
@@ -77,10 +78,12 @@ def link(source, destination, proof):
         with destination.open("rb") as stream:
             for chunk in iter(lambda: stream.read(1048576), b""):
                 digest.update(chunk)
-        if digest.hexdigest() != proof["sha256"] or not matches(source, proof, proof):
+        if digest.hexdigest() != proof["sha256"] or not matches_stat(
+            os.lstat(source), proof, proof
+        ):
             raise ValueError("immutable fallback copy differs")
         return record(destination, proof)
-    after = source.lstat()
+    after = os.lstat(source)
     current = identity(after)
     previous = proof["fingerprint"]
     if (

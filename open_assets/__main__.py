@@ -39,7 +39,7 @@ def atomic(path, value):
     fd, tmp = tempfile.mkstemp(dir=path.parent)
     try:
         with os.fdopen(fd, "w") as f:
-            json.dump(value, f, ensure_ascii=False)
+            f.write(json.dumps(value, ensure_ascii=False))
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
@@ -287,18 +287,33 @@ def export(c, r, g, sha, dest, check=None, reuse=None, on_plan=None):
             reuse["oids"][rel.as_posix()] = oid.decode()
     if on_plan is not None:
         on_plan(blobs)
-    prepared_parents = set()
+    from functools import lru_cache
+    from .snapshot_export import prepare
+
+    @lru_cache(maxsize=4096)
+    def prepare_parent(directory):
+        if check is not None:
+            check()
+        if directory != dest:
+            prepare_parent(directory.parent)
+        try:
+            directory.mkdir(parents=directory == dest)
+        except FileExistsError:
+            if not stat.S_ISDIR(directory.lstat().st_mode):
+                raise ValueError("unsafe snapshot directory") from None
+
+    prepared = prepare(c, dest, blobs, reuse, prepare_parent, check=check)
     # Reject all unsafe paths, types and size budgets before reading any blob.
     with GitBatch(g, c, check=check) as batch:
-        for oid, rel, path, size in blobs:
+        for index, (oid, rel, path, size) in enumerate(blobs):
             out = dest / rel
-            if out.parent not in prepared_parents:
-                out.parent.mkdir(parents=True, exist_ok=True)
-                prepared_parents.add(out.parent)
+            prepare_parent(out.parent)
             if reuse is not None:
                 from .incremental import copy_cached
 
-                cached = copy_cached(reuse, oid, size, rel, out)
+                cached = prepared.get(index)
+                if cached is None:
+                    cached = copy_cached(reuse, oid, size, rel, out)
                 if cached is not None:
                     if rel.suffix.lower() == ".svg":
                         from .svg import validate

@@ -219,7 +219,14 @@ def fetch(c, repository, path, check=None):
     initial, _ = usage(path, p["scan_entries"])
     aggregate, _ = usage(root, p["scan_entries"])
 
-    def monitor():
+    next_monitor = 0
+
+    def monitor(force=False):
+        nonlocal next_monitor
+        now = time.monotonic()
+        if not force and now < next_monitor:
+            return
+        next_monitor = now + 0.1
         current, _ = usage(path, p["scan_entries"])
         if current > p["git_repository_bytes"]:
             raise ResourceLimit("git_repository_bytes")
@@ -231,7 +238,7 @@ def fetch(c, repository, path, check=None):
             raise ResourceLimit("git_min_free_bytes")
 
     temporary = "refs/open-assets/fetch-" + uuid.uuid4().hex
-    monitor()
+    monitor(force=True)
     promoted = False
     try:
         run_git(
@@ -279,7 +286,7 @@ def fetch(c, repository, path, check=None):
             sha = raw[:40].decode()
         if not re.fullmatch(r"[a-f0-9]{40}", sha):
             raise ValueError("invalid fetched Git commit")
-        monitor()
+        monitor(force=True)
         transaction = (
             f"update refs/heads/source {sha}\ndelete {temporary} {sha}\n".encode()
         )
