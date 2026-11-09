@@ -133,3 +133,19 @@ Git 拉取的缓存预算在开始前及提升临时 ref 前强制完整核对�
 下一次发布仍验证 Git 完整计划、全部待用视图文件的身份/只读字节凭据、SVG 和全部远端来源对象。只在同一发布基线、配置和清单摘要下消费视图；变更及删除只作用于未发布视图，解除硬链接同样核对前后身份和 nlink。已同步的不变目录可保留，只同步本轮变化目录及其全部祖先；新字节先 fsync，子目录先于父目录同步，激活前后仍检查完整服务树。旧 Publisher 可忽略该可选视图，沿用原 v3 凭据和完整发布/回退流程；损坏或过期的视图会退回现有校验流程。
 
 待用视图与发布基线不再一致时，只回收检查点登记的私有前缀目录；使用防符号链接攻击的目录回收，核对共享 inode 的 nlink 减量和回收前后的完整当前树，再刷新仅由回收造成的 ctime，不延长字节校验时间。已有生产凭据证明的同一 inode 可用于刷新待用视图的别名凭据；实际文件身份仍必须匹配。这样回退、正常链接清理及一次缓存回退后仍可继续准备新视图，不累积无用视图。
+
+### Git control round trips
+
+Fetch returns the exact commit whose temporary ref passed the resource checks and
+was promoted atomically. Publication uses that value instead of spawning another
+`rev-parse`; equal commit identities need no ancestry subprocess. Manual publication
+of a different commit still checks ancestry, and automatic activation still reads
+the authenticated remote branch again. Fetch does not write the unused FETCH_HEAD.
+Git child completion wakes the bounded monitor promptly instead of sleeping a full
+poll interval after an already completed command. Time, output, memory and disk
+budgets and process-group cleanup remain in force.
+
+SSH connection reuse avoids repeated handshakes, but each command still has channel
+opening, remote authorization and Git advertisement/report-status exchanges. Measure
+real client push-to-published time separately from server job time; a warm SSH master
+alone does not imply a three-second end-to-end publication.

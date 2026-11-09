@@ -122,7 +122,9 @@ class Resources(unittest.TestCase):
         path = self.root / "state/git/assets"
         path.parent.mkdir(parents=True)
         subprocess.run(["git", "init", "--bare", "-q", str(path)], check=True)
-        limits.fetch(self.c, dict(remote=str(source), branch=branch), path)
+        fetched = limits.fetch(self.c, dict(remote=str(source), branch=branch), path)
+        self.assertEqual(fetched, git("rev-parse", "HEAD").decode().strip())
+        self.assertFalse((path / "FETCH_HEAD").exists())
         head = core.git(path, "rev-parse", "refs/heads/source")
         self.c["resource_limits"] = dict(git_repository_bytes=1)
         with self.assertRaisesRegex(limits.ResourceLimit, "git_repository_bytes"):

@@ -228,11 +228,34 @@ class Recovery(unittest.TestCase):
             self.assertEqual(publish.call_args.args[1]["id"], jid)
         self.assertTrue((jobs / "bad.json").exists())
 
+    def test_fetched_identity_avoids_redundant_git_but_keeps_ancestor_checks(self):
+        self.c["repositories"][0]["max_bytes"] = 1
+        for kind, head in (
+            ("auto", self.sha),
+            ("manual", self.sha),
+            ("manual", "f" * 40),
+        ):
+            with (
+                self.subTest(kind=kind, head=head),
+                patch("open_assets.resources.fetch", return_value=head),
+                patch.object(m, "git") as git,
+                patch.object(m, "export", side_effect=ValueError("preflight barrier")),
+            ):
+                with self.assertRaisesRegex(ValueError, "preflight barrier"):
+                    m.publish(self.c, dict(key="fixture", sha=self.sha, kind=kind))
+                if head == self.sha:
+                    git.assert_not_called()
+                else:
+                    self.assertEqual(
+                        git.call_args.args[1:],
+                        ("merge-base", "--is-ancestor", self.sha, head),
+                    )
+
     def test_attachment_only_publication_fails_before_remote_side_effects(self):
         repository = self.c["repositories"][0]
         repository.update(max_bytes=1)
         with (
-            patch("open_assets.resources.fetch"),
+            patch("open_assets.resources.fetch", return_value=self.sha),
             patch.object(m, "git", return_value=self.sha.encode()),
             patch.object(
                 m,

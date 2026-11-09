@@ -9,7 +9,6 @@ import stat
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 
 DEFAULTS = {
@@ -182,7 +181,10 @@ def run_git(path, args, c=None, output=None, check=None, monitor=None, input_dat
                     monitor()
                 if process.poll() is not None:
                     break
-                threading.Event().wait(0.02)
+                try:
+                    process.wait(timeout=0.02)
+                except subprocess.TimeoutExpired:
+                    pass
             if process.returncode:
                 raise subprocess.CalledProcessError(
                     process.returncode, ["git", args[0]]
@@ -260,6 +262,7 @@ def fetch(c, repository, path, check=None):
                 "core.hooksPath=/dev/null",
                 "fetch",
                 "--no-tags",
+                "--no-write-fetch-head",
                 "--no-recurse-submodules",
                 repository["remote"],
                 "+refs/heads/" + repository["branch"] + ":" + temporary,
@@ -292,6 +295,7 @@ def fetch(c, repository, path, check=None):
         )
         run_git(path, ["update-ref", "--stdin"], c, input_data=transaction)
         promoted = True
+        return sha
     finally:
         if not promoted:
             with contextlib.suppress(Exception):
