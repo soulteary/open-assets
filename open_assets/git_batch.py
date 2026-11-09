@@ -112,3 +112,62 @@ class GitBatch:
                 self.process.kill()
             self.process.stdout.close()
             self.process.wait()
+
+
+def tree_entries(path, config, sha, directory, sources, check=None, max_files=10000):
+    """Avoid resolving sizes of already proven Git OIDs; bound new metadata reads."""
+    from .resources import run_git
+
+    if not sources:
+        return run_git(
+            path, ["ls-tree", "-rlz", sha, "--", directory], config, check=check
+        ).split(b"\0")
+    entries = run_git(
+        path, ["ls-tree", "-rz", sha, "--", directory], config, check=check
+    ).split(b"\0")
+    parsed, sizes, missing = [], {}, set()
+    for entry in entries:
+        if not entry:
+            continue
+        meta, name = entry.split(b"\t", 1)
+        mode, kind, oid = meta.split()
+        if (
+            mode not in (b"100644", b"100755")
+            or kind != b"blob"
+            or not re.fullmatch(rb"[0-9a-f]{40}", oid)
+        ):
+            raise ValueError("unsupported Git entry")
+        record = sources.get(oid.decode())
+        if record is not None:
+            sizes[oid] = record["item"]["size"]
+        else:
+            missing.add(oid)
+        if len(parsed) >= max_files:
+            raise ValueError("publication limit exceeded")
+        parsed.append((meta, name, oid))
+    missing = sorted(missing)
+    for offset in range(0, len(missing), 1024):
+        requested = missing[offset : offset + 1024]
+        output = run_git(
+            path,
+            ["cat-file", "--batch-check"],
+            config,
+            check=check,
+            input_data=b"\n".join(requested) + b"\n",
+        ).splitlines()
+        if len(output) != len(requested):
+            raise ValueError("incomplete Git blob metadata")
+        for expected, line in zip(requested, output):
+            parts = line.split()
+            if (
+                len(parts) != 3
+                or parts[0] != expected
+                or parts[1] != b"blob"
+                or not parts[2].isdigit()
+            ):
+                raise ValueError("invalid Git blob metadata")
+            sizes[expected] = int(parts[2])
+    return [
+        meta + b" " + str(sizes[oid]).encode() + b"\t" + name
+        for meta, name, oid in parsed
+    ]

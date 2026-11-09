@@ -182,13 +182,13 @@ def lock(c, name="worker", blocking=True):
 
 
 def s3client(c, bounded=False):
-    import boto3
+    from .s3_timestamps import session
     from botocore.config import Config
 
     def secret(name):
         return P(os.environ[name + "_FILE"]).read_text().strip()
 
-    return boto3.client(
+    return session().client(
         "s3",
         endpoint_url=c["endpoint"],
         region_name="us-east-1",
@@ -213,18 +213,23 @@ def s3client(c, bounded=False):
     )
 
 
-def export(c, r, g, sha, dest, check=None, reuse=None):
+def export(c, r, g, sha, dest, check=None, reuse=None, on_plan=None):
     """Read committed blobs directly; do not checkout or execute repository code.
 
     Image checks use extensions, not file signatures. Other public files are
     attachments and remain subject to the same path and size limits.
     """
-    from .resources import run_git
-    from .git_batch import GitBatch
+    from .git_batch import GitBatch, tree_entries
 
-    entries = run_git(
-        g, ["ls-tree", "-rlz", sha, "--", r["source_directory"]], c, check=check
-    ).split(b"\0")
+    entries = tree_entries(
+        g,
+        c,
+        sha,
+        r["source_directory"],
+        (reuse or {}).get("sources", {}),
+        check=check,
+        max_files=r.get("max_files", 10000),
+    )
     files = []
     blobs = []
     total = 0
@@ -280,6 +285,8 @@ def export(c, r, g, sha, dest, check=None, reuse=None):
         blobs.append((oid, rel, path, size))
         if reuse is not None:
             reuse["oids"][rel.as_posix()] = oid.decode()
+    if on_plan is not None:
+        on_plan(blobs)
     prepared_parents = set()
     # Reject all unsafe paths, types and size budgets before reading any blob.
     with GitBatch(g, c, check=check) as batch:
@@ -605,20 +612,57 @@ def publish(c, j):
     base = P(c["images_root"]) / "repos" / r["key"]
     (base / "releases").mkdir(parents=True, exist_ok=True)
     staging = P(tempfile.mkdtemp(prefix=".staging-", dir=base))
+    source_pool = None
     try:
         from . import incremental, object_refs, immutable
 
         reuse = incremental.context(c, r)
         reuse["reference_mode"] = object_refs.enabled(c)
-        files = export(c, r, g, j["sha"], staging, reuse=reuse)
+        s = None
+        source_check = None
+
+        def get_client():
+            nonlocal s
+            if s is None:
+                connection = c.get("_s3_connection")
+                s = (
+                    connection.get(c, lambda: s3client(c, bounded=True))
+                    if connection is not None
+                    else s3client(c, bounded=True)
+                )
+            return s
+
+        def verify_plan(blobs):
+            nonlocal source_pool, source_check
+            if not any(
+                relative.as_posix().startswith("images/") for _, relative, _, _ in blobs
+            ):
+                raise ValueError("missing images")
+            if not reuse["reference_mode"]:
+                return
+            planned = {}
+            for oid, relative, _, size in blobs:
+                cached = reuse["sources"].get(oid.decode())
+                if cached is not None and cached["item"]["size"] == size:
+                    planned[relative.as_posix()] = cached
+            if planned:
+                from concurrent.futures import ThreadPoolExecutor
+
+                source_pool = ThreadPoolExecutor(max_workers=1)
+                source_check = (
+                    planned,
+                    source_pool.submit(
+                        object_refs.verify_sources,
+                        c,
+                        get_client(),
+                        list(planned.values()),
+                    ),
+                )
+
+        files = export(c, r, g, j["sha"], staging, reuse=reuse, on_plan=verify_plan)
         images = image_files(files)  # Validate before the first remote write.
+        s = get_client()
         stage("export")
-        connection = c.get("_s3_connection")
-        s = (
-            connection.get(c, lambda: s3client(c, bounded=True))
-            if connection is not None
-            else s3client(c, bounded=True)
-        )
         prefix = f"repositories/{r['key']}/releases/{j['sha']}/"
         etags = upload(
             c,
@@ -628,6 +672,7 @@ def publish(c, j):
             files,
             reuse=reuse["reused"],
             stats=reuse.setdefault("object_stats", {}),
+            source_check=source_check,
         )
         stage("objects")
         manifest = dict(key=r["key"], sha=j["sha"], files=files, config=c["revision"])
@@ -736,6 +781,8 @@ def publish(c, j):
         j["finished"] = time.time()
         j["timings"]["total"] = round(time.monotonic() - started, 6)
     finally:
+        if source_pool is not None:
+            source_pool.shutdown(wait=True, cancel_futures=True)
         shutil.rmtree(staging, ignore_errors=True)
 
 

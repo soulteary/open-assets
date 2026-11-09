@@ -104,13 +104,25 @@ def transfer(client, bucket, prefix, staging, item, cached=None, existing_keys=N
         ), "uploaded"
 
 
-def upload(config, client, prefix, staging, files, reuse=None, stats=None):
+def upload(
+    config, client, prefix, staging, files, reuse=None, stats=None, source_check=None
+):
     """At most N active futures; drain running work before exposing failure."""
     workers = policy(config)
     from . import object_refs
 
+    if source_check is not None and (
+        not object_refs.enabled(config) or source_check[0] != reuse
+    ):
+        raise ValueError("source verification plan changed")
     if object_refs.enabled(config) and reuse:
-        checked = object_refs.verify_sources(config, client, list(reuse.values()))
+        if source_check is None:
+            checked = object_refs.verify_sources(config, client, list(reuse.values()))
+        else:
+            expected, future = source_check
+            if expected != reuse:
+                raise ValueError("source verification plan changed")
+            checked = future.result()
         if stats is not None:
             stats.update(checked)
         transfers = [item for item in files if item["path"] not in reuse]
