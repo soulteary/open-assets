@@ -332,6 +332,10 @@ def export(c, r, g, sha, dest, check=None, reuse=None, on_plan=None):
                     )
                     files.append(cached)
                     continue
+                if reuse.get("hardlink_only"):
+                    raise ValueError(
+                        "prepared snapshot requires proven immutable bytes"
+                    )
             with out.open("xb") as stream:
                 batch.write_blob(oid, size, stream)
                 stream.flush()

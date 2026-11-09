@@ -207,6 +207,28 @@ class PreparedSnapshot(unittest.TestCase):
         self.assertFalse(prepared_snapshot.state_path(case.config, "assets").exists())
         self.assertFalse(list(case.base.glob(".staging-prefetch-*")))
 
+    def test_incomplete_git_provenance_never_creates_copied_idle_bytes(self):
+        case, first = self.case()
+        path = Path(case.config["state_root"]) / "incremental/assets.json"
+        seal = object_refs.read(path)
+        seal["records"]["images/photos/000/image.png"]["oid"] = "f" * 40
+        core.atomic(path, seal)
+        originals = {
+            p.stat().st_ino
+            for p in (case.base / "releases" / first).rglob("*")
+            if p.is_file()
+        }
+        with core.lock(case.config):
+            prepared_snapshot.prepare_idle(case.config)
+        record = object_refs.read(prepared_snapshot.state_path(case.config, "assets"))
+        self.assertEqual(record["status"], "building")
+        created = {
+            p.stat().st_ino
+            for p in (case.base / record["directory"]).rglob("*")
+            if p.is_file()
+        }
+        self.assertFalse(created - originals)
+
     def test_dirty_sync_rejects_paths_outside_staging(self):
         with tempfile.TemporaryDirectory() as folder:
             with self.assertRaises(ValueError):
