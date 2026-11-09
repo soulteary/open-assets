@@ -4,6 +4,7 @@ import copy
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 import time
 import uuid
@@ -97,6 +98,93 @@ def claim(config, destination, blobs, reuse, sha):
     return retained
 
 
+def discard(config, repository, record):
+    """Remove only our checkpointed private view, proving each shared inode delta."""
+    from . import __main__ as core, incremental
+
+    name = record.get("directory", "")
+    if not re.fullmatch(r"\.staging-prefetch-[a-f0-9]{32}", name):
+        raise ValueError("unsafe prepared directory")
+    state = Path(config["state_root"])
+    manifest = object_refs.read(state / "published" / repository["key"])
+    seal_path = state / "incremental" / (repository["key"] + ".json")
+    seal = object_refs.read(seal_path)
+    if (
+        seal["sha"] != manifest["sha"]
+        or seal["config"] != config["revision"]
+        or seal["manifest"]
+        != incremental.digest(
+            dict(
+                files=manifest["files"],
+                object_sources=manifest.get("object_sources", {}),
+            )
+        )
+    ):
+        raise ValueError("prepared cleanup baseline changed")
+    base = Path(config["images_root"]) / "repos" / repository["key"]
+    full = base / "releases" / manifest["sha"]
+    proofs = {n: v["immutable"] for n, v in seal["records"].items()}
+    core.verify_tree(full, manifest["files"], verified=proofs)
+    tracked = {}
+    for item in manifest["files"]:
+        proof = proofs[item["path"]]
+        identity = tuple(proof["fingerprint"][:2])
+        tracked.setdefault(
+            identity, dict(source=full / item["path"], proof=proof, count=0)
+        )
+    root = base / name
+    if not stat.S_ISDIR(root.lstat().st_mode):
+        raise ValueError("unsafe prepared cleanup root")
+    entries = 0
+    for directory, dirs, files in os.walk(root, followlinks=False):
+        entries += 1 + len(files) + len(dirs)
+        if entries > 200000:
+            raise ValueError("prepared cleanup entry budget exceeded")
+        if not stat.S_ISDIR(os.lstat(directory).st_mode):
+            raise ValueError("unsafe prepared cleanup directory")
+        for filename in files:
+            info = os.lstat(Path(directory) / filename)
+            shared = tracked.get((info.st_dev, info.st_ino))
+            if shared is not None:
+                if not immutable.matches_stat(info, shared["proof"], shared["proof"]):
+                    raise ValueError("prepared cleanup identity changed")
+                shared["count"] += 1
+    for value in tracked.values():
+        info = os.lstat(value["source"])
+        if not immutable.matches_stat(info, value["proof"], value["proof"]):
+            raise ValueError("prepared cleanup source changed")
+        value["before"] = info.st_nlink
+    # rmtree's descriptor-based implementation does not follow directory links.
+    if not shutil.rmtree.avoids_symlink_attacks:
+        raise ValueError("safe prepared cleanup unavailable")
+    shutil.rmtree(root)
+    changed = {}
+    for identity, value in tracked.items():
+        if not value["count"]:
+            continue
+        info = os.lstat(value["source"])
+        current, old = immutable.identity(info), value["proof"]["fingerprint"]
+        if (
+            current[:4] != old[:4]
+            or current[5:] != old[5:]
+            or info.st_nlink != value["before"] - value["count"]
+        ):
+            raise ValueError("prepared cleanup changed source")
+        changed[identity] = current
+    for value in seal["records"].values():
+        current = changed.get(tuple(value["immutable"]["fingerprint"][:2]))
+        if current is not None:
+            value["fingerprint"] = current[:5]
+            value["immutable"]["fingerprint"] = current[:]
+    core.verify_tree(
+        full,
+        manifest["files"],
+        verified={n: v["immutable"] for n, v in seal["records"].items()},
+    )
+    core.atomic(seal_path, seal)
+    state_path(config, repository["key"]).unlink()
+
+
 def prepare_idle(config):
     """Caller holds the publisher lock. Failures disable this optional view."""
     if not object_refs.enabled(config):
@@ -123,13 +211,19 @@ def prepare_idle(config):
                 old = object_refs.read(path)
                 name = old.get("directory", "")
                 if (
-                    old.get("status") == "claimed"
-                    and re.fullmatch(r"\.staging-prefetch-[a-f0-9]{32}", name)
+                    re.fullmatch(r"\.staging-prefetch-[a-f0-9]{32}", name)
                     and not (
                         Path(config["images_root"]) / "repos" / key / name
                     ).exists()
+                    and not (
+                        Path(config["images_root"]) / "repos" / key / name
+                    ).is_symlink()
                 ):
                     path.unlink()
+                elif (
+                    old.get("sha") != object_refs.read(state / "published" / key)["sha"]
+                ):
+                    discard(config, repository, old)
                 else:
                     continue
             manifest = object_refs.read(state / "published" / key)

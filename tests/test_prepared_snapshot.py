@@ -114,6 +114,9 @@ class PreparedSnapshot(unittest.TestCase):
         self.assertNotIn("snapshot", job)
         self.assertEqual(case.store.puts, puts)
         self.assertFalse((case.base / "current/unlisted.txt").exists())
+        self.warm(case)
+        self.assertFalse(root.exists())
+        self.assertEqual(len(list(case.base.glob(".staging-prefetch-*"))), 1)
 
     def test_dirty_sync_failure_leaves_previous_current(self):
         case, first = self.case()
@@ -228,6 +231,26 @@ class PreparedSnapshot(unittest.TestCase):
             if p.is_file()
         }
         self.assertFalse(created - originals)
+
+    def test_authorized_link_receipt_refresh_keeps_the_ready_view_usable(self):
+        case, _ = self.case()
+        self.warm(case)
+        path = Path(case.config["state_root"]) / "incremental/assets.json"
+        seal = object_refs.read(path)
+        name = "images/photos/004/image.png"
+        source = case.base / "releases" / seal["sha"] / name
+        proof = seal["records"][name]["immutable"]
+        immutable.link(source, case.root / "other-private-view", proof)
+        seal["records"][name]["fingerprint"] = proof["fingerprint"][:5]
+        core.atomic(path, seal)
+        self.assertTrue(
+            incremental.context(case.config, case.config["repositories"][0]).get(
+                "prepared"
+            )
+        )
+        _, job = case.publish()
+        self.assertEqual(job["status"], "published")
+        self.assertTrue(job["snapshot"]["prepared"])
 
     def test_dirty_sync_rejects_paths_outside_staging(self):
         with tempfile.TemporaryDirectory() as folder:

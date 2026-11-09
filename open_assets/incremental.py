@@ -87,6 +87,18 @@ def _context(config, repository, audit=False, prepared=None):
             ):
                 return result
             full = prepared["_root"]
+            live_proofs = {
+                tuple(v["immutable"]["fingerprint"][:2]): v["immutable"]
+                for v in records.values()
+            }
+            for name, old_proof in prepared["proofs"].items():
+                fresh = live_proofs.get(tuple(old_proof["fingerprint"][:2]))
+                if (
+                    fresh
+                    and fresh["sha256"] == old_proof["sha256"]
+                    and fresh["size"] == old_proof["size"]
+                ):
+                    prepared["proofs"][name] = fresh
             records = {
                 n: dict(
                     v,
