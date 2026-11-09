@@ -343,11 +343,13 @@ fn open_readonly_file(path: &Path) -> Result<File> {
 pub(crate) fn revalidate_proof(
     path: &Path,
     item: &Value,
+    record: &Value,
     deadline: Option<Instant>,
 ) -> Result<Value> {
     let size = item["size"].as_u64().context("proof size")?;
     let expected = item["sha256"].as_str().context("proof SHA256")?;
     ensure!(super::hex_string(expected, 64), "invalid proof digest");
+    ensure!(source_record_valid(record), "invalid source receipt");
     let mut file = open_readonly_file(path)?;
     let before = file.metadata()?;
     ensure!(
@@ -356,6 +358,9 @@ pub(crate) fn revalidate_proof(
     );
     let fingerprint = identity(&before)?;
     let mut hash = Sha256::new();
+    let mut git_hash = sha1::Sha1::new();
+    git_hash.update(format!("blob {size}\0").as_bytes());
+    let mut etag_hash = md5::Context::new();
     let mut bytes = 0u64;
     let mut buffer = vec![0u8; 1024 * 1024];
     loop {
@@ -371,7 +376,14 @@ pub(crate) fn revalidate_proof(
         bytes += count as u64;
         ensure!(bytes <= size, "proof size mismatch");
         hash.update(&buffer[..count]);
+        git_hash.update(&buffer[..count]);
+        etag_hash.consume(&buffer[..count]);
     }
+    ensure!(
+        hex::encode(git_hash.finalize()) == record["oid"].as_str().unwrap_or("")
+            && format!("\"{:x}\"", etag_hash.finalize()) == record["etag"].as_str().unwrap_or(""),
+        "proof Git/object receipt mismatch"
+    );
     ensure!(
         bytes == size && hex::encode(hash.finalize()) == expected,
         "proof bytes mismatch"
@@ -672,18 +684,28 @@ fn source_context(c: &Value, r: &Value, force_bytes: bool) -> Result<BTreeMap<St
         "cache byte budget"
     );
     let tree = inspect_tree(&full, files)?;
-    let mut verified = BTreeMap::<(u64, u64), Value>::new();
+    let mut verified = BTreeMap::<(u64, u64, String, String), Value>::new();
     if !force_bytes {
         for item in files {
             let name = item["path"].as_str().context("manifest path")?;
-            let proof = &seal["records"][name]["immutable"];
-            if matches(&full.join(name), item, proof, false) {
+            let record = &seal["records"][name];
+            let proof = &record["immutable"];
+            if source_record_valid(record) && matches(&full.join(name), item, proof, false) {
                 let info = &tree[name];
-                verified.insert((info.dev(), info.ino()), proof.clone());
+                verified.insert(
+                    (
+                        info.dev(),
+                        info.ino(),
+                        record["oid"].as_str().unwrap().into(),
+                        record["etag"].as_str().unwrap().into(),
+                    ),
+                    proof.clone(),
+                );
             }
         }
     }
     let mut changed = false;
+    let mut admitted = 0usize;
     for item in files {
         let name = item["path"].as_str().context("manifest path")?;
         let rec = seal["records"][name].clone();
@@ -697,12 +719,17 @@ fn source_context(c: &Value, r: &Value, force_bytes: bool) -> Result<BTreeMap<St
         {
             continue;
         }
-        let id = (info.dev(), info.ino());
+        let id = (
+            info.dev(),
+            info.ino(),
+            oid.to_owned(),
+            rec["etag"].as_str().unwrap().to_owned(),
+        );
         let proof =
             if let Some(proof) = verified.get(&id).filter(|p| matches(&path, item, p, false)) {
                 proof.clone()
             } else {
-                match revalidate_proof(&path, item, None) {
+                match revalidate_proof(&path, item, &rec, None) {
                     Ok(proof) => {
                         verified.insert(id, proof.clone());
                         proof
@@ -710,6 +737,7 @@ fn source_context(c: &Value, r: &Value, force_bytes: bool) -> Result<BTreeMap<St
                     Err(_) => continue,
                 }
             };
+        admitted += 1;
         let short = Value::Array(
             proof["fingerprint"]
                 .as_array()
@@ -747,6 +775,10 @@ fn source_context(c: &Value, r: &Value, force_bytes: bool) -> Result<BTreeMap<St
             result.insert(oid.into(), source);
         }
     }
+    ensure!(
+        !force_bytes || admitted == files.len(),
+        "incomplete source receipt revalidation"
+    );
     if changed {
         ensure!(
             read_json(&manifest_path, 8 << 20)? == manifest
@@ -1033,6 +1065,51 @@ mod proof_reuse_regression {
         );
     }
     #[test]
+    fn expired_receipts_must_match_git_oid_and_object_md5_for_identical_size() {
+        for field in ["oid", "etag"] {
+            let f = Fixture::new(3, false);
+            f.age(&[1], 3700.);
+            let mut seal = f.seal();
+            seal["records"]["images/0001.png"][field] = if field == "oid" {
+                json!("b".repeat(40))
+            } else {
+                json!(format!("\"{}\"", "0".repeat(32)))
+            };
+            atomic(&f.seal_path, &seal).unwrap();
+            let path = f.full.join("images/0001.png");
+            let before = fingerprint(&path).unwrap();
+            let admitted = sources(&f.c, f.repository()).unwrap();
+            assert_eq!(admitted.len(), 2);
+            assert_eq!(
+                f.seal()["records"]["images/0001.png"],
+                seal["records"]["images/0001.png"]
+            );
+            assert_eq!(fingerprint(&path).unwrap(), before);
+            assert!(sources_reverified(&f.c, f.repository()).is_err());
+        }
+    }
+    #[test]
+    fn expired_wrong_alias_receipt_cannot_borrow_fresh_inode_proof() {
+        for field in ["oid", "etag"] {
+            let f = Fixture::new(2, true);
+            f.age(&[1], 3700.);
+            let mut seal = f.seal();
+            seal["records"]["images/0001.png"][field] = if field == "oid" {
+                json!("b".repeat(40))
+            } else {
+                json!(format!("\"{}\"", "0".repeat(32)))
+            };
+            atomic(&f.seal_path, &seal).unwrap();
+            let admitted = sources(&f.c, f.repository()).unwrap();
+            assert_eq!(admitted.len(), 1);
+            assert!(admitted.contains_key(&f.oids["images/0000.png"]));
+            assert_eq!(
+                f.seal()["records"]["images/0001.png"],
+                seal["records"]["images/0001.png"]
+            );
+        }
+    }
+    #[test]
     fn own_ctime_change_requires_full_bytes_but_does_not_recopy_data() {
         let f = Fixture::new(2, false);
         let file = f.full.join("images/0000.png");
@@ -1077,9 +1154,21 @@ mod proof_reuse_regression {
         fs::set_permissions(&p, fs::Permissions::from_mode(0o644)).unwrap();
         let admitted = sources(&f.c, f.repository()).unwrap();
         assert_eq!(admitted.len(), 1);
-        assert!(revalidate_proof(&p, &f.files[1], None).is_err());
+        assert!(revalidate_proof(
+            &p,
+            &f.files[1],
+            &f.seal()["records"]["images/0001.png"],
+            None
+        )
+        .is_err());
         let alias = f._temporary.path().join("linked-parent");
         std::os::unix::fs::symlink(&f.full, &alias).unwrap();
-        assert!(revalidate_proof(&alias.join("images/0000.png"), &f.files[0], None).is_err());
+        assert!(revalidate_proof(
+            &alias.join("images/0000.png"),
+            &f.files[0],
+            &f.seal()["records"]["images/0000.png"],
+            None
+        )
+        .is_err());
     }
 }

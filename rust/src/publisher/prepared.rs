@@ -614,7 +614,7 @@ fn audit_slice(
         .join(manifest["sha"].as_str().context("SHA")?);
     let files = manifest["files"].as_array().context("files")?;
     let tree = snapshot::inspect_tree(&full, files)?;
-    type InodeContent = (u64, u64, String, u64);
+    type InodeContent = (u64, u64, String, u64, String, String);
     type AuditEntries = Vec<(String, Value)>;
     let mut groups: BTreeMap<InodeContent, AuditEntries> = BTreeMap::new();
     for item in files {
@@ -641,6 +641,8 @@ fn audit_slice(
                 metadata.ino(),
                 item["sha256"].as_str().context("SHA256")?.into(),
                 metadata.len(),
+                record["oid"].as_str().unwrap().into(),
+                record["etag"].as_str().unwrap().into(),
             ))
             .or_default()
             .push((name.into(), item.clone()));
@@ -660,7 +662,7 @@ fn audit_slice(
         }
     }
     let (mut attempted, mut changed) = (0usize, false);
-    let mut renewed = BTreeMap::<(u64, u64), Value>::new();
+    let mut renewed = BTreeMap::<(u64, u64, String, String), Value>::new();
     let mut last = None;
     for group in groups {
         if attempted >= max_groups || Instant::now() >= deadline || queued()? {
@@ -669,10 +671,20 @@ fn audit_slice(
         attempted += 1;
         let (name, item) = &group[0];
         last = Some(name.clone());
-        if let Ok(proof) = snapshot::revalidate_proof(&full.join(name), item, Some(deadline)) {
+        if let Ok(proof) = snapshot::revalidate_proof(
+            &full.join(name),
+            item,
+            &seal["records"][name],
+            Some(deadline),
+        ) {
             let id = (
                 proof["fingerprint"][0].as_u64().context("dev")?,
                 proof["fingerprint"][1].as_u64().context("inode")?,
+                seal["records"][name]["oid"].as_str().context("OID")?.into(),
+                seal["records"][name]["etag"]
+                    .as_str()
+                    .context("etag")?
+                    .into(),
             );
             renewed.insert(id, proof);
         }
@@ -682,7 +694,13 @@ fn audit_slice(
     for item in files {
         let name = item["path"].as_str().context("path")?;
         let metadata = &tree[name];
-        if let Some(proof) = renewed.get(&(metadata.dev(), metadata.ino())) {
+        let receipt = &seal["records"][name];
+        if let Some(proof) = renewed.get(&(
+            metadata.dev(),
+            metadata.ino(),
+            receipt["oid"].as_str().unwrap_or("").into(),
+            receipt["etag"].as_str().unwrap_or("").into(),
+        )) {
             if snapshot::matches(&full.join(name), item, proof, false) {
                 let record = seal["records"].get_mut(name).context("seal record")?;
                 record["immutable"] = proof.clone();
@@ -712,7 +730,10 @@ fn audit_slice(
                         proof["fingerprint"][0].as_u64(),
                         proof["fingerprint"][1].as_u64(),
                     ) {
-                        if let Some(fresh) = renewed.get(&(dev, inode)) {
+                        if let Some(fresh) = renewed
+                            .iter()
+                            .find_map(|((d, i, _, _), p)| (*d == dev && *i == inode).then_some(p))
+                        {
                             if proof["fingerprint"] == fresh["fingerprint"]
                                 && proof["sha256"] == fresh["sha256"]
                                 && proof["size"] == fresh["size"]
@@ -789,6 +810,45 @@ mod proof_maintenance_regression {
                     .as_f64()
                     .unwrap()
         );
+    }
+    #[test]
+    fn audit_never_renews_alias_with_wrong_git_or_object_receipt() {
+        for field in ["oid", "etag"] {
+            let f = Fixture::new(2, true);
+            f.age(&[0, 1], 3700.);
+            let mut seal = f.seal();
+            seal["records"]["images/0001.png"][field] = if field == "oid" {
+                json!("b".repeat(40))
+            } else {
+                json!(format!("\"{}\"", "0".repeat(32)))
+            };
+            atomic(&f.seal_path, &seal).unwrap();
+            assert_eq!(
+                audit_slice(
+                    &f.c,
+                    f.repository(),
+                    Instant::now() + Duration::from_secs(2),
+                    usize::MAX,
+                    || Ok(false)
+                )
+                .unwrap(),
+                2
+            );
+            let after = f.seal();
+            assert!(
+                after["records"]["images/0000.png"]["immutable"]["verified_at"]
+                    .as_f64()
+                    .unwrap()
+                    > seal["records"]["images/0000.png"]["immutable"]["verified_at"]
+                        .as_f64()
+                        .unwrap()
+            );
+            assert_eq!(
+                after["records"]["images/0001.png"],
+                seal["records"]["images/0001.png"]
+            );
+            assert!(snapshot::sources_reverified(&f.c, f.repository()).is_err());
+        }
     }
     #[test]
     fn audit_same_oid_inode_hashes_once_and_updates_all_aliases() {
