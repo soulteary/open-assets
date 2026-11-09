@@ -80,6 +80,15 @@ def main():
             / (second + ".json")
         ).read_text()
     )
+    assert manifest["image_layout"] == "snapshot-v1"
+    assert not (
+        Path("/data/asset-stack/images/repos/main-images/releases")
+        / ("images-" + second)
+    ).exists()
+    assert (
+        Path("/data/asset-stack/images/repos/main-images/current").readlink().as_posix()
+        == "releases/" + second + "/images"
+    )
     assert manifest["object_sources"]
     jobs = [
         json.loads(p.read_text())
@@ -143,6 +152,56 @@ def main():
         "main-images",
         second,
     )
+    command(
+        "docker",
+        "compose",
+        "exec",
+        "-T",
+        "publisher",
+        "python",
+        "-m",
+        "open_assets",
+        "deduplicate-local",
+        "--apply",
+    )
+    command("python3", "-m", "open_assets.admin", "objects", "setup", "--compaction")
+    try:
+        command(
+            "docker",
+            "compose",
+            "run",
+            "--rm",
+            "--no-deps",
+            "--entrypoint",
+            "python",
+            "object-cleaner",
+            "-m",
+            "open_assets",
+            "compact-objects",
+            "--apply",
+        )
+    except RuntimeError:
+        # Worker CLI emits only allowlisted diagnostics. Never print captured
+        # raw Docker output, private files or credentials.
+        for line in (ROOT / "private/e2e/last-error.txt").read_text().splitlines():
+            try:
+                diagnostic = json.loads(line)
+            except ValueError:
+                continue
+            if diagnostic.get("status") == "failed":
+                print(
+                    "COMPACTION_FAILURE",
+                    {k: diagnostic.get(k) for k in ("error", "command")},
+                    flush=True,
+                )
+        raise
+    finally:
+        command("python3", "-m", "open_assets.admin", "objects", "setup")
+    # Previously complete physical versions now resolve through canonical objects.
+    for sha in (first, second):
+        url = f"https://{domains['oss']}/attachments/repositories/main-images/releases/{sha}/{path}"
+        with urllib.request.urlopen(url, context=context) as response:
+            assert response.read() == data
     print(
         "PASS reference delta, old/new URLs, streaming Range/HEAD/304 and image rollback"
     )

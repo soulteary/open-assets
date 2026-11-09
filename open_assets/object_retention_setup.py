@@ -12,7 +12,7 @@ from .object_retention import policy, prefix
 from .retention import read_json, real_directory
 
 
-def iam_policy(config):
+def iam_policy(config, compaction=False):
     statements = [
         dict(
             Effect="Allow",
@@ -43,7 +43,8 @@ def iam_policy(config):
     writable = [
         f"arn:aws:s3:::{config['bucket']}/" + prefix(r["key"]) + "*"
         for r in config["repositories"]
-        if policy(config, r)["enabled"] and policy(config, r)["exclusive_writer"]
+        if compaction
+        or (policy(config, r)["enabled"] and policy(config, r)["exclusive_writer"])
     ]
     if writable:
         statements.append(
@@ -52,7 +53,7 @@ def iam_policy(config):
     return dict(Version="2012-10-17", Statement=statements)
 
 
-def setup(manager):
+def setup(manager, compaction=False):
     config, _, _ = scope(manager.private / "repositories.yaml")
     for r in config["repositories"]:
         policy(config, r)
@@ -98,7 +99,7 @@ def setup(manager):
     policies = set(filter(None, info.get("policyName", "").split(",")))
     if policies - {"assets-object-retention"}:
         raise ValueError("unexpected cleaner policy binding")
-    value = iam_policy(config)
+    value = iam_policy(config, compaction=compaction)
     write_private(manager.private / "oc-cli/object-retention.json", json.dumps(value))
     manager.oc(
         "admin",

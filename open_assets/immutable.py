@@ -11,7 +11,10 @@ MAX_PROOF_AGE = 3600
 
 
 def fingerprint(path):
-    value = path.lstat()
+    return identity(path.lstat())
+
+
+def identity(value):
     if not stat.S_ISREG(value.st_mode):
         raise ValueError("unsafe immutable file")
     return [
@@ -25,6 +28,10 @@ def fingerprint(path):
 
 
 def matches(path, item, proof, allow_expired=False):
+    return matches_stat(path.lstat(), item, proof, allow_expired)
+
+
+def matches_stat(value, item, proof, allow_expired=False):
     return (
         isinstance(proof, dict)
         and proof.get("sha256") == item["sha256"]
@@ -32,7 +39,7 @@ def matches(path, item, proof, allow_expired=False):
         and type(proof.get("verified_at")) in (int, float)
         and 0 <= time.time() - proof["verified_at"]
         and (allow_expired or time.time() - proof["verified_at"] <= MAX_PROOF_AGE)
-        and fingerprint(path) == proof.get("fingerprint")
+        and identity(value) == proof.get("fingerprint")
         and not (proof["fingerprint"][-1] & 0o222)
     )
 
@@ -51,9 +58,9 @@ def record(path, item):
 
 
 def link(source, destination, proof):
-    if not matches(source, proof, proof):
-        raise ValueError("immutable source identity changed")
     before = source.lstat()
+    if not matches_stat(before, proof, proof):
+        raise ValueError("immutable source identity changed")
     try:
         os.link(source, destination, follow_symlinks=False)
     except OSError as error:
@@ -74,7 +81,7 @@ def link(source, destination, proof):
             raise ValueError("immutable fallback copy differs")
         return record(destination, proof)
     after = source.lstat()
-    current = fingerprint(source)
+    current = identity(after)
     previous = proof["fingerprint"]
     if (
         current[:4] != previous[:4]

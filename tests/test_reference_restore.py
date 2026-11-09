@@ -1,6 +1,7 @@
 """A reference release restores the exact source object without changing MIME owners."""
 
 import copy
+from pathlib import Path
 import unittest
 
 from open_assets import __main__ as core, object_restore, restore_check
@@ -55,3 +56,27 @@ class ReferenceRestore(unittest.TestCase):
         with self.assertRaises(ValueError):
             object_restore.run(f.config, "assets", self.sha, f.store)
         self.assertEqual(f.store.puts, [])
+
+    def test_direct_snapshot_local_recovery_and_rollback(self):
+        import shutil
+
+        f = self.fixture
+        self.manifest["image_layout"] = "snapshot-v1"
+        core.atomic(f.state / "manifests/assets" / (self.sha + ".json"), self.manifest)
+        core.atomic(f.state / "published/assets", self.manifest)
+        # Switch to the direct format then lose only this disposable local tree.
+        base = Path(f.config["images_root"]) / "repos/assets"
+        core.switch(base, self.sha + "/images")
+        shutil.rmtree(base / "releases" / self.sha)
+        shutil.rmtree(base / "releases" / ("images-" + self.sha))
+        report = object_restore.run(
+            f.config, "assets", self.sha, f.store, with_local=True
+        )
+        self.assertTrue(report["local_verified"])
+        core.rollback_images(f.config, "assets", self.sha)
+        self.assertFalse((base / "releases" / ("images-" + self.sha)).exists())
+        self.assertEqual(
+            (base / "current").readlink().as_posix(), "releases/" + self.sha + "/images"
+        )
+        checked = restore_check.run(f.config, "assets", self.sha, f.store)
+        self.assertEqual(checked["checks"]["images"]["status"], "ok")

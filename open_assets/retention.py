@@ -118,12 +118,23 @@ def current_sha(base, check_target=True):
         if path.exists():
             raise ValueError("current must be a symlink")
         return None
-    match = re.fullmatch(r"releases/images-([0-9a-f]{40})", os.readlink(path))
-    if not match or not valid_sha(match[1]):
-        raise ValueError("invalid current target")
+    target = os.readlink(path)
+    sha = activation_sha(target)
     if check_target:
-        real_directory(base / "releases" / ("images-" + match[1]))
-    return match[1]
+        if target.endswith("/images"):
+            real_directory(base / "releases" / sha)
+        real_directory(base / target)
+    return sha
+
+
+def activation_sha(target):
+    match = re.fullmatch(
+        r"releases/(?:images-([0-9a-f]{40})|([0-9a-f]{40})/images)", target
+    )
+    sha = (match[1] or match[2]) if match else None
+    if not valid_sha(sha):
+        raise ValueError("invalid activation target")
+    return sha
 
 
 def remember_previous(config, key, next_sha):
@@ -250,10 +261,7 @@ def protected_references(config, key, jobs, pins, deadline=None):
             job["sha"] == current
             or job["status"] in ("pending", "running", "images_prepared", "failed")
         ) and job.get("previous"):
-            previous = re.fullmatch(r"releases/images-([0-9a-f]{40})", job["previous"])
-            if not previous:
-                raise ValueError("invalid previous version reference")
-            protect(previous[1], "previous-job")
+            protect(activation_sha(job["previous"]), "previous-job")
     return current, protected
 
 

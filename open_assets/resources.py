@@ -253,6 +253,20 @@ def fetch(c, repository, path, check=None):
             run_git(path, ["update-ref", "-d", temporary], c)
 
 
+def remote_head(c, repository, path):
+    """Recheck the advertised branch without downloading another object pack."""
+    ref = "refs/heads/" + repository["branch"]
+    value = run_git(
+        path, ["ls-remote", "--exit-code", "--refs", repository["remote"], ref], c
+    )
+    import re
+
+    match = re.fullmatch(rb"([a-f0-9]{40})\t" + re.escape(ref.encode()) + rb"\n", value)
+    if not match:
+        raise ValueError("invalid remote branch advertisement")
+    return match[1].decode()
+
+
 def verify_body(body, item):
     """Read at most the expected length plus one byte; always close the body."""
     digest = hashlib.sha256()

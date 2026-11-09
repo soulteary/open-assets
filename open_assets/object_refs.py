@@ -1,5 +1,6 @@
 """Complete logical manifests over immutable, directly addressed source objects."""
 
+import contextlib
 import json
 import os
 import errno
@@ -196,3 +197,37 @@ def reference_inventory(config, key, deadline):
             if sha != path.stem:
                 protected.add(sha)
     return protected, versions
+
+
+@contextlib.contextmanager
+def read_guard(path, exclusive=False, required=False):
+    """Coordinate readers with physical object compaction, using one fixed inode."""
+    import fcntl
+    import time
+
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        if required:
+            raise ValueError(
+                "upgrade the object reader and install its compaction lock first"
+            ) from None
+        yield
+        return
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("unsafe compaction guard")
+        deadline = time.monotonic() + (30 if exclusive else 5)
+        while True:
+            try:
+                fcntl.flock(
+                    fd, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB
+                )
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.01)
+        yield
+    finally:
+        os.close(fd)

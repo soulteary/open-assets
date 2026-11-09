@@ -124,7 +124,8 @@ class ReferencePublication(unittest.TestCase):
         self.assertEqual(job["status"], "failed")
         self.assertEqual(self.store.puts, 3)
         self.assertEqual(
-            (self.base / "current").readlink().as_posix(), "releases/images-" + first
+            (self.base / "current").readlink().as_posix(),
+            "releases/" + first + "/images",
         )
 
     def test_activation_checks_new_inode_after_switch_and_restores_previous(self):
@@ -142,7 +143,8 @@ class ReferencePublication(unittest.TestCase):
             _, job = self.publish()
         self.assertEqual(job["status"], "failed")
         self.assertEqual(
-            (self.base / "current").readlink().as_posix(), "releases/images-" + first
+            (self.base / "current").readlink().as_posix(),
+            "releases/" + first + "/images",
         )
         self.assertEqual((self.base / "current/a.png").read_bytes(), b"a")
 
@@ -203,7 +205,7 @@ class ReferencePublication(unittest.TestCase):
             aged = time.time() - (3 - index) * 86400
             for path in (
                 self.base / "releases" / sha,
-                self.base / "releases" / ("images-" + sha),
+                self.base / "releases" / sha / "images",
                 Path(self.config["state_root"]) / "manifests/assets" / (sha + ".json"),
             ):
                 os.utime(path, (aged, aged))

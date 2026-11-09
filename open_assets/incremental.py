@@ -1,8 +1,4 @@
-"""Reuse verified bytes with sealed local identity and conditional S3 copies.
-
-Release object paths remain complete and independent; retention needs no graph.
-The seal is an optimization only. Missing/stale evidence falls back to full reads.
-"""
+"""Reuse proven immutable bytes; missing evidence falls back to full reads."""
 
 import hashlib
 import json
@@ -40,6 +36,8 @@ def valid_etag(value):
 def context(config, repository, audit=False):
     """Admit only the current release under exactly the same validation config."""
     result = dict(oids={}, reused={}, sources={}, reused_files=0, verified={})
+    from .__main__ import image_target
+
     key = repository["key"]
     state = Path(config["state_root"])
     base = Path(config["images_root"]) / "repos" / key
@@ -68,7 +66,8 @@ def context(config, repository, audit=False):
                     object_sources=manifest.get("object_sources", {}),
                 )
             )
-            or (base / "current").readlink().as_posix() != "releases/images-" + sha
+            or (base / "current").readlink().as_posix()
+            != "releases/" + image_target(manifest)
         ):
             return result
         full = base / "releases" / sha
@@ -76,6 +75,31 @@ def context(config, repository, audit=False):
             if not stat.S_ISDIR(parent.lstat().st_mode):
                 return result
         records = seal["records"]
+        tree = {}
+        entries_seen = 0
+        from .resources import policy
+
+        entry_limit = policy(config)["scan_entries"]
+        stack = [(full, "")]
+        while stack:
+            directory, prefix = stack.pop()
+            import os
+
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    entries_seen += 1
+                    if entries_seen > entry_limit:
+                        raise ValueError("incremental scan budget exceeded")
+                    info = entry.stat(follow_symlinks=False)
+                    name = prefix + entry.name
+                    if stat.S_ISDIR(info.st_mode):
+                        stack.append((Path(entry.path), name + "/"))
+                    elif stat.S_ISREG(info.st_mode):
+                        tree[name] = info
+                    else:
+                        return result
+        if set(tree) != {item["path"] for item in manifest["files"]}:
+            return result
         for item in manifest["files"]:
             path = item["path"]
             relative = Path(path)
@@ -95,23 +119,21 @@ def context(config, repository, audit=False):
             if modified is not None and (type(modified) is not int or modified < 0):
                 continue
             source = full / path
-            if any(
-                not stat.S_ISDIR(p.lstat().st_mode)
-                for p in source.parents
-                if p != full and full in p.parents
-            ):
-                continue
-            if (
-                fingerprint(source) != record.get("fingerprint")
-                or source.stat().st_size != item["size"]
-            ):
+            info = tree[path]
+            if [
+                info.st_dev,
+                info.st_ino,
+                info.st_size,
+                info.st_mtime_ns,
+                info.st_ctime_ns,
+            ] != record.get("fingerprint") or info.st_size != item["size"]:
                 continue
             from . import object_refs, immutable
 
             object_source = object_refs.source(manifest, item)
             byte_proof = record.get("immutable")
-            if object_refs.enabled(config) and not immutable.matches(
-                source, item, byte_proof, allow_expired=audit
+            if object_refs.enabled(config) and not immutable.matches_stat(
+                info, item, byte_proof, allow_expired=audit
             ):
                 continue
             result["sources"].setdefault(
@@ -172,7 +194,9 @@ def save(config, key, sha, files, context, etags):
                 oid=context["oids"][name],
                 etag=value["etag"],
                 modified=modified,
-                fingerprint=fingerprint(full / name),
+                fingerprint=context["verified"][name]["fingerprint"][:5]
+                if context.get("reference_mode") and name in context["verified"]
+                else fingerprint(full / name),
                 immutable=context["verified"].get(name),
             )
     atomic(

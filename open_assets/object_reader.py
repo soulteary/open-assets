@@ -1,5 +1,6 @@
 """Read-only version URL resolver. No storage credentials or Docker access."""
 
+import contextlib
 from collections import OrderedDict
 import http.client
 import http.server
@@ -60,6 +61,7 @@ def resolve(path):
                 refs,
                 files,
                 manifest.get("object_layout") == "references-v1",
+                manifest.get("legacy_extra_objects") is True,
             )
             CACHE[cache_key] = entry
             while (
@@ -77,7 +79,7 @@ def resolve(path):
             raise FileNotFoundError("retired object release")
     item = entry[2].get(relative)
     if item is None:
-        if not entry[3]:
+        if not entry[3] or entry[4]:
             return f"repositories/{key}/releases/{sha}/{relative}", None
         raise FileNotFoundError("object absent from complete manifest")
     return entry[1][relative]["key"], item["content_type"]
@@ -92,6 +94,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def error(self, status):
         self.send_response(status)
+        if status == 200:
+            self.send_header("X-Open-Assets-Reader", "guard-v1")
         self.send_header("Content-Length", "0")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -107,7 +111,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         connection = None
         headers_sent = False
+        guard = contextlib.ExitStack()
         try:
+            guard.enter_context(object_refs.read_guard(RECEIPTS / "compaction.lock"))
             key, mime = resolve(self.path)
             endpoint = urllib.parse.urlsplit(ENDPOINT)
             if (
@@ -183,6 +189,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         finally:
             if connection:
                 connection.close()
+            guard.close()
             ACTIVE.release()
 
 
