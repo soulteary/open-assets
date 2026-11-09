@@ -7,12 +7,14 @@ from . import incremental
 from .publication import policy
 
 
-def prepare(config, destination, blobs, reuse, prepare_parent, check=None):
+def prepare(config, destination, blobs, reuse, prepare_parent, check=None, skip=None):
     if not reuse or not reuse.get("reference_mode"):
         return {}
     groups = {}
     count = 0
     for index, (oid, relative, _, size) in enumerate(blobs):
+        if skip and index in skip:
+            continue
         record = reuse["sources"].get(oid.decode())
         if record is None or record["item"]["size"] != size:
             continue
@@ -37,6 +39,7 @@ def prepare(config, destination, blobs, reuse, prepare_parent, check=None):
         local = dict(
             sources=reuse["sources"],
             reference_mode=True,
+            hardlink_only=reuse.get("hardlink_only", False),
             reused={},
             verified={},
             reused_files=0,

@@ -289,6 +289,9 @@ def export(c, r, g, sha, dest, check=None, reuse=None, on_plan=None):
         on_plan(blobs)
     from functools import lru_cache
     from .snapshot_export import prepare
+    from .prepared_snapshot import claim, dirty
+
+    retained = claim(c, dest, blobs, reuse, sha)
 
     @lru_cache(maxsize=4096)
     def prepare_parent(directory):
@@ -298,11 +301,16 @@ def export(c, r, g, sha, dest, check=None, reuse=None, on_plan=None):
             prepare_parent(directory.parent)
         try:
             directory.mkdir(parents=directory == dest)
+            if reuse is not None:
+                dirty(reuse, dest, directory)
         except FileExistsError:
             if not stat.S_ISDIR(directory.lstat().st_mode):
                 raise ValueError("unsafe snapshot directory") from None
 
-    prepared = prepare(c, dest, blobs, reuse, prepare_parent, check=check)
+    prepared = dict(retained)
+    prepared.update(
+        prepare(c, dest, blobs, reuse, prepare_parent, check=check, skip=retained)
+    )
     # Reject all unsafe paths, types and size budgets before reading any blob.
     with GitBatch(g, c, check=check) as batch:
         for index, (oid, rel, path, size) in enumerate(blobs):
@@ -366,7 +374,7 @@ def export(c, r, g, sha, dest, check=None, reuse=None, on_plan=None):
     return files
 
 
-def sync_tree(root, data_synced=False):
+def sync_tree(root, data_synced=False, directories=None):
     """Sync a prepared tree before exposing it through a version-directory rename."""
     if data_synced:
         from concurrent.futures import ThreadPoolExecutor
@@ -374,7 +382,18 @@ def sync_tree(root, data_synced=False):
 
         levels = {}
         entries = 0
-        for directory, _, names in os.walk(root, topdown=False):
+        if directories is not None:
+            directories = {P(value) for value in directories}
+            if any(value.is_absolute() or ".." in value.parts for value in directories):
+                raise ValueError("unsafe sync directory")
+        walk = (
+            os.walk(root, topdown=False)
+            if directories is None
+            else ((str(root / p), (), ()) for p in directories)
+        )
+        for directory, _, names in walk:
+            if not stat.S_ISDIR(P(directory).lstat().st_mode):
+                raise ValueError("unsafe sync directory")
             entries += 1 + len(names)
             if entries > 200000:
                 raise ValueError("snapshot sync entry budget exceeded")
@@ -715,7 +734,11 @@ def publish(c, j):
                     for item in files
                 }
         else:
-            sync_tree(staging, data_synced=reuse["reference_mode"])
+            sync_tree(
+                staging,
+                data_synced=reuse["reference_mode"],
+                directories=reuse.get("snapshot_dirty"),
+            )
             os.rename(staging, final)
             from .retention import sync_directory
 
@@ -782,6 +805,12 @@ def publish(c, j):
         stage("activation")
         j["timings"]["total"] = round(time.monotonic() - started, 6)
         atomic(state / "published" / r["key"], manifest)
+        if "snapshot_retained" in reuse:
+            j["snapshot"] = dict(
+                prepared=True,
+                retained_files=reuse["snapshot_retained"],
+                synced_directories=len(reuse["snapshot_dirty"]),
+            )
         j["incremental"] = dict(
             reused_files=reuse["reused_files"],
             changed_files=len(files) - reuse["reused_files"],
@@ -941,7 +970,9 @@ def work_once(c, heartbeat=None):
                     heartbeat.update(job_started_at=None, progress_at=time.time())
         if not ready:
             from .incremental import audit_idle
+            from .prepared_snapshot import prepare_idle
 
+            prepare_idle(c)
             audit_idle(c)
 
 
