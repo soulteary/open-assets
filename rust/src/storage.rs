@@ -147,16 +147,22 @@ pub fn source(manifest: &Value, item: &Value) -> Result<Value> {
     let name = relative(text(item, "path")?)?;
     let refs = manifest
         .get("object_sources")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    ensure!(refs.is_object(), "invalid source map");
-    if !refs.as_object().unwrap().is_empty() {
+        .map(|value| {
+            value
+                .as_object()
+                .ok_or_else(|| anyhow!("invalid source map"))
+        })
+        .transpose()?;
+    if refs.is_some_and(|refs| !refs.is_empty()) {
         ensure!(
             manifest["object_layout"] == "references-v1",
             "unsupported references"
         );
     }
-    let value=refs.get(name).cloned().unwrap_or_else(||json!({"key":format!("repositories/{key}/releases/{sha}/{name}"),"content_type":item["content_type"]}));
+    let value = refs
+        .and_then(|refs| refs.get(name))
+        .cloned()
+        .unwrap_or_else(|| json!({"key":format!("repositories/{key}/releases/{sha}/{name}"),"content_type":item["content_type"]}));
     ensure!(
         value.as_object().is_some_and(|m| m.len() == 2
             && m.contains_key("key")

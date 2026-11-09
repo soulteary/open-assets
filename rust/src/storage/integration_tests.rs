@@ -370,3 +370,81 @@ fn forged_job_identity_refuses_cleanup_without_deleting_eligible_release() {
 fn oversized_job_refuses_cleanup_without_deleting_eligible_release() {
     assert_bad_job_refuses_cleanup(true);
 }
+
+fn large_reference_manifest() -> Value {
+    let mut files = Vec::with_capacity(3583);
+    let mut sources = serde_json::Map::new();
+    for index in 0..3583 {
+        let name = format!("images/2026/11/10/fixture-{index:05}.png");
+        files.push(json!({"path":name,"size":index+1,"sha256":format!("{index:064x}"),"content_type":"image/png"}));
+        if index < 3580 {
+            sources.insert(name.clone(),json!({"key":format!("repositories/images/releases/{}/{}","b".repeat(40),name),"content_type":"image/jpeg"}));
+        }
+    }
+    json!({"key":"images","sha":"a".repeat(40),"object_layout":"references-v1","files":files,"object_sources":sources})
+}
+#[test]
+fn large_reference_manifest_resolves_all_entries_and_keeps_owned_results() {
+    let manifest = large_reference_manifest();
+    let original = manifest.clone();
+    let resolved = validate_manifest(&manifest).unwrap();
+    assert_eq!(resolved.len(), 3583);
+    for (index, item) in manifest["files"].as_array().unwrap().iter().enumerate() {
+        let name = item["path"].as_str().unwrap();
+        if index < 3580 {
+            assert_eq!(resolved[name], manifest["object_sources"][name]);
+            assert_eq!(resolved[name]["content_type"], "image/jpeg");
+        } else {
+            assert_eq!(
+                resolved[name],
+                json!({"key":format!("repositories/images/releases/{}/{}","a".repeat(40),name),"content_type":"image/png"})
+            );
+        }
+    }
+    let item = &manifest["files"][3579];
+    let name = item["path"].as_str().unwrap();
+    let mut selected = source(&manifest, item).unwrap();
+    selected["key"] = json!("only the owned result changed");
+    assert_eq!(manifest, original);
+    assert_ne!(selected, manifest["object_sources"][name]);
+}
+#[test]
+fn large_reference_manifest_still_validates_late_records_and_unknown_entries() {
+    let original = large_reference_manifest();
+    let name = original["files"][3579]["path"].as_str().unwrap().to_owned();
+    for replacement in [
+        json!({"key":format!("repositories/foreign/releases/{}/{}","b".repeat(40),name),"content_type":"image/jpeg"}),
+        json!({"key":format!("repositories/images/releases/{}/{}","b".repeat(39),name),"content_type":"image/jpeg"}),
+        json!({"key":format!("repositories/images/releases/{}/images/../escape.png","b".repeat(40)),"content_type":"image/jpeg"}),
+        json!({"key":format!("repositories/images/releases/{}/{}","b".repeat(40),name),"content_type":"image/jpeg\r\ninjected: value"}),
+        json!({"key":format!("repositories/images/releases/{}/{}","b".repeat(40),name),"content_type":"image/jpeg","unexpected":true}),
+        Value::Null,
+    ] {
+        let mut manifest = original.clone();
+        manifest["object_sources"][&name] = replacement;
+        assert!(validate_manifest(&manifest).is_err());
+    }
+    let mut unknown = original.clone();
+    unknown["object_sources"]["images/not-in-manifest.png"] =
+        original["object_sources"][&name].clone();
+    assert!(validate_manifest(&unknown).is_err());
+    let mut layout = original;
+    layout["object_layout"] = json!("unknown");
+    assert!(validate_manifest(&layout).is_err());
+}
+#[test]
+fn missing_reference_map_still_defaults_but_present_non_object_maps_are_rejected() {
+    let manifest = large_reference_manifest();
+    let item = &manifest["files"][3582];
+    let mut missing = manifest.clone();
+    missing.as_object_mut().unwrap().remove("object_sources");
+    missing.as_object_mut().unwrap().remove("object_layout");
+    let expected = json!({"key":format!("repositories/images/releases/{}/{}","a".repeat(40),item["path"].as_str().unwrap()),"content_type":"image/png"});
+    assert_eq!(source(&missing, item).unwrap(), expected);
+    missing["object_sources"] = json!({});
+    assert_eq!(source(&missing, item).unwrap(), expected);
+    for invalid in [Value::Null, json!([]), json!("not a map"), json!(false)] {
+        missing["object_sources"] = invalid;
+        assert!(source(&missing, item).is_err());
+    }
+}
