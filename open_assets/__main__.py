@@ -182,13 +182,13 @@ def lock(c, name="worker", blocking=True):
 
 
 def s3client(c, bounded=False):
-    import boto3
+    from .s3_timestamps import session
     from botocore.config import Config
 
     def secret(name):
         return P(os.environ[name + "_FILE"]).read_text().strip()
 
-    return boto3.client(
+    return session().client(
         "s3",
         endpoint_url=c["endpoint"],
         region_name="us-east-1",
