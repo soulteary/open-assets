@@ -11,7 +11,7 @@ import re
 import shutil
 import stat
 
-VERSION = 1
+VERSION = 2
 
 
 def fingerprint(path):
@@ -83,6 +83,9 @@ def context(config, repository):
                 record.get("etag")
             ):
                 continue
+            modified = record.get("modified")
+            if modified is not None and (type(modified) is not int or modified < 0):
+                continue
             source = full / path
             if any(
                 not stat.S_ISDIR(p.lstat().st_mode)
@@ -102,6 +105,7 @@ def context(config, repository):
                     source=source,
                     fingerprint=record["fingerprint"],
                     etag=record["etag"],
+                    modified=record.get("modified"),
                     key=f"repositories/{key}/releases/{sha}/{path}",
                 ),
             )
@@ -134,10 +138,15 @@ def save(config, key, sha, files, context, etags):
     records = {}
     for item in files:
         name = item["path"]
-        if valid_etag(etags.get(name)):
+        value = etags.get(name) or {}
+        if valid_etag(value.get("etag")):
+            modified = value.get("modified")
+            if modified is not None and (type(modified) is not int or modified < 0):
+                continue
             records[name] = dict(
                 oid=context["oids"][name],
-                etag=etags[name],
+                etag=value["etag"],
+                modified=modified,
                 fingerprint=fingerprint(full / name),
             )
     atomic(

@@ -2,6 +2,7 @@
 
 import hashlib
 import base64
+import datetime
 import io
 import json
 from pathlib import Path
@@ -30,6 +31,7 @@ class Store:
         data = self.objects[Key][0]
         return dict(
             Body=io.BytesIO(data),
+            LastModified=datetime.datetime.fromtimestamp(123, datetime.timezone.utc),
             ETag='"' + hashlib.md5(data, usedforsecurity=False).hexdigest() + '"',
         )
 
@@ -39,6 +41,8 @@ class Store:
 
     def copy_object(self, Bucket, Key, CopySource, CopySourceIfMatch, **metadata):
         source = self.objects[CopySource["Key"]][0]
+        if "CopySourceIfUnmodifiedSince" in metadata:
+            assert int(metadata["CopySourceIfUnmodifiedSince"].timestamp()) == 123
         etag = '"' + hashlib.md5(source, usedforsecurity=False).hexdigest() + '"'
         if etag != CopySourceIfMatch:
             raise ValueError("copy precondition failed")
@@ -47,6 +51,9 @@ class Store:
         return dict(
             CopyObjectResult=dict(
                 ETag='"wrong"' if self.bad_copy else etag,
+                LastModified=datetime.datetime.fromtimestamp(
+                    123, datetime.timezone.utc
+                ),
                 ChecksumSHA256=base64.b64encode(
                     hashlib.sha256(source).digest()
                 ).decode(),
@@ -232,8 +239,46 @@ class Incremental(unittest.TestCase):
         context = incremental.context(self.config, self.config["repositories"][0])
         self.assertFalse(context["sources"])
 
-    def test_compatible_copy_without_checksum_retains_full_readback(self):
+    def test_compatible_copy_reuses_verified_source_identity(self):
         self.publish()
+        original = self.store.copy_object
+
+        def without_checksum(**kwargs):
+            result = original(**kwargs)
+            result["CopyObjectResult"].pop("ChecksumSHA256")
+            return result
+
+        with patch.object(self.store, "copy_object", side_effect=without_checksum):
+            _, job = self.publish()
+        self.assertEqual(job["status"], "published")
+        self.assertEqual(
+            job["incremental"]["object_transfers"], {"copied-verified-source": 3}
+        )
+        self.assertEqual(self.store.reads, 3)
+
+    def test_copy_sha256_mismatch_is_rejected_even_with_matching_etag(self):
+        first, _ = self.publish()
+        original = self.store.copy_object
+
+        def bad_checksum(**kwargs):
+            result = original(**kwargs)
+            result["CopyObjectResult"]["ChecksumSHA256"] = "incorrect"
+            return result
+
+        with patch.object(self.store, "copy_object", side_effect=bad_checksum):
+            _, job = self.publish()
+        self.assertEqual(job["status"], "failed")
+        self.assertEqual(
+            (self.base / "current").readlink().as_posix(), "releases/images-" + first
+        )
+
+    def test_incomplete_source_proof_still_requires_full_readback(self):
+        self.publish()
+        path = Path(self.config["state_root"]) / "incremental/assets.json"
+        seal = json.loads(path.read_text())
+        for record in seal["records"].values():
+            record["modified"] = None
+        path.write_text(json.dumps(seal))
         original = self.store.copy_object
 
         def without_checksum(**kwargs):
@@ -247,16 +292,16 @@ class Incremental(unittest.TestCase):
         self.assertEqual(job["incremental"]["object_transfers"], {"copied-readback": 3})
         self.assertEqual(self.store.reads, 6)
 
-    def test_copy_sha256_mismatch_is_rejected_even_with_matching_etag(self):
+    def test_source_modified_after_verification_stops_activation(self):
         first, _ = self.publish()
-        original = self.store.copy_object
 
-        def bad_checksum(**kwargs):
-            result = original(**kwargs)
-            result["CopyObjectResult"]["ChecksumSHA256"] = "incorrect"
-            return result
+        def changed_source(**kwargs):
+            self.assertEqual(
+                int(kwargs["CopySourceIfUnmodifiedSince"].timestamp()), 123
+            )
+            raise ValueError("source modification precondition failed")
 
-        with patch.object(self.store, "copy_object", side_effect=bad_checksum):
+        with patch.object(self.store, "copy_object", side_effect=changed_source):
             _, job = self.publish()
         self.assertEqual(job["status"], "failed")
         self.assertEqual(

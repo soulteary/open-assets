@@ -2,6 +2,7 @@
 
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import base64
+import datetime
 import errno
 import os
 import shutil
@@ -20,6 +21,16 @@ def policy(config):
     return workers
 
 
+def proof(response, etag):
+    modified = response.get("LastModified")
+    return dict(
+        etag=etag,
+        modified=int(modified.timestamp())
+        if isinstance(modified, datetime.datetime)
+        else None,
+    )
+
+
 def transfer(client, bucket, prefix, staging, item, cached=None, existing_keys=None):
     key = prefix + item["path"]
     if cached and existing_keys is not None and key not in existing_keys:
@@ -33,6 +44,10 @@ def transfer(client, bucket, prefix, staging, item, cached=None, existing_keys=N
             ContentType=item["content_type"],
             CacheControl="public, max-age=31536000, immutable",
         )
+        if cached.get("modified") is not None:
+            args["CopySourceIfUnmodifiedSince"] = datetime.datetime.fromtimestamp(
+                cached["modified"], datetime.timezone.utc
+            )
         try:
             response = client.copy_object(**args, ChecksumAlgorithm="SHA256")
         except Exception as error:
@@ -47,18 +62,25 @@ def transfer(client, bucket, prefix, staging, item, cached=None, existing_keys=N
         expected = base64.b64encode(bytes.fromhex(item["sha256"])).decode()
         if checksum is not None and checksum != expected:
             raise ValueError("incremental copy SHA-256 mismatch")
-        if checksum is None:
-            # ETags alone are not cryptographic content evidence. Compatible
-            # stores lacking copy checksums retain the original full readback.
-            verify_body(client.get_object(Bucket=bucket, Key=key)["Body"], item)
-        return etag, "copied" if checksum is not None else "copied-readback"
+        if checksum is None and cached.get("modified") is None:
+            # Old/incomplete receipts cannot authenticate an unchanged source.
+            readback = client.get_object(Bucket=bucket, Key=key)
+            verified = verify_body(readback["Body"], item)
+            return proof(
+                readback, verified if verified == readback.get("ETag") else None
+            ), "copied-readback"
+        mode = "copied" if checksum is not None else "copied-verified-source"
+        return proof(response["CopyObjectResult"], etag), mode
+
     try:
         existing = client.get_object(Bucket=bucket, Key=key)
     except client.exceptions.NoSuchKey:
         existing = None
     if existing is not None:
         etag = verify_body(existing["Body"], item)
-        return (etag if etag == existing.get("ETag") else None), "existing"
+        return proof(
+            existing, etag if etag == existing.get("ETag") else None
+        ), "existing"
     else:
         with (staging / item["path"]).open("rb") as stream:
             client.put_object(
@@ -72,7 +94,9 @@ def transfer(client, bucket, prefix, staging, item, cached=None, existing_keys=N
             )
         response = client.get_object(Bucket=bucket, Key=key)
         etag = verify_body(response["Body"], item)
-        return (etag if etag == response.get("ETag") else None), "uploaded"
+        return proof(
+            response, etag if etag == response.get("ETag") else None
+        ), "uploaded"
 
 
 def upload(config, client, prefix, staging, files, reuse=None, stats=None):
