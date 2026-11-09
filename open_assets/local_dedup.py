@@ -4,6 +4,7 @@ import hashlib
 import os
 from pathlib import Path
 import stat
+import time
 import uuid
 
 from . import immutable, object_refs, retention
@@ -23,6 +24,15 @@ def run(config, apply=False):
             raise ValueError("wait for queued publications before local deduplication")
         groups = {}
         hashed = {}
+        verified_at = {}
+        final_proofs = {}
+        seals = {}
+        for repository in config["repositories"]:
+            p = state / "incremental" / (repository["key"] + ".json")
+            try:
+                seals[repository["key"]] = object_refs.read(p)
+            except (OSError, ValueError):
+                pass
         # Complete preflight before replacing a single directory entry.
         for repository in config["repositories"]:
             key = repository["key"]
@@ -71,6 +81,7 @@ def run(config, apply=False):
                             if immutable.fingerprint(p) != fingerprint:
                                 raise ValueError("dedup source changed while hashing")
                             hashed[identity] = digest.hexdigest()
+                            verified_at[identity] = time.time()
                         if (
                             fingerprint[2] != item["size"]
                             or hashed[identity] != item["sha256"]
@@ -85,7 +96,7 @@ def run(config, apply=False):
                             raise ValueError("dedup scan budget exceeded")
         # Logical entries may already share inodes. Count each redundant physical
         # inode once; application data outside these manifests is never touched.
-        for entries in groups.values():
+        for group, entries in groups.items():
             source, initial, item = entries[0]
             seen = {tuple(initial[:2])}
             for _, proof, _ in entries[1:]:
@@ -99,6 +110,8 @@ def run(config, apply=False):
                 if immutable.fingerprint(p) != before:
                     raise ValueError("dedup preflight identity changed")
             proof = immutable.record(source, item)
+            proof["verified_at"] = verified_at[tuple(initial)]
+            final_proofs[group] = proof
             for p, before, _ in entries[1:]:
                 if immutable.fingerprint(p)[:2] == proof["fingerprint"][:2]:
                     continue
@@ -125,14 +138,65 @@ def run(config, apply=False):
                 finally:
                     temporary.unlink(missing_ok=True)
         if apply:
-            # Hardlink and mode changes invalidate old inode proofs. They are
-            # optimization receipts; keep a journal and require fresh validation.
+            # Full preflight plus controlled replacements can renew local
+            # evidence without changing the previously verified S3 provenance.
+            # Missing/stale seals still fall back to a complete publication.
+            from . import incremental
+
             for repository in config["repositories"]:
-                p = state / "incremental" / (repository["key"] + ".json")
-                if p.exists():
-                    core.atomic(
-                        p, dict(version=0, reason="verified local deduplication")
-                    )
+                key = repository["key"]
+                p = state / "incremental" / (key + ".json")
+                seal = seals.get(key, {})
+                try:
+                    manifest = object_refs.read(state / "published" / key)
+                    base = Path(config["images_root"]) / "repos" / key
+                    if (
+                        seal.get("version") != incremental.VERSION
+                        or seal.get("sha") != manifest["sha"]
+                        or seal.get("config") != config["revision"]
+                        or manifest["key"] != key
+                        or retention.current_sha(base) != manifest["sha"]
+                        or seal.get("manifest")
+                        != incremental.digest(
+                            dict(
+                                files=manifest["files"],
+                                object_sources=manifest.get("object_sources", {}),
+                            )
+                        )
+                    ):
+                        raise ValueError("stale incremental provenance")
+                    records = {}
+                    for item in manifest["files"]:
+                        proof = final_proofs[(key, item["sha256"], item["size"])]
+                        path = base / "releases" / manifest["sha"] / item["path"]
+                        if not immutable.matches(path, item, proof):
+                            raise ValueError("deduplicated current identity changed")
+                        record = seal["records"].get(item["path"], {})
+                        import re
+
+                        if (
+                            not re.fullmatch(r"[a-f0-9]{40}", record.get("oid", ""))
+                            or not incremental.valid_etag(record.get("etag"))
+                            or type(record.get("modified")) is not int
+                        ):
+                            continue
+                        records[item["path"]] = dict(
+                            record,
+                            fingerprint=proof["fingerprint"][:5],
+                            immutable=proof,
+                        )
+                    seal["records"] = records
+                    core.atomic(p, seal)
+                    report["seals_refreshed"] = report.get("seals_refreshed", 0) + 1
+                except (OSError, ValueError, KeyError, TypeError):
+                    if p.exists():
+                        core.atomic(
+                            p,
+                            dict(
+                                version=0,
+                                reason="verified local deduplication; no reusable source provenance",
+                            ),
+                        )
             core.atomic(state / "local-dedup.json", report)
     return report
 

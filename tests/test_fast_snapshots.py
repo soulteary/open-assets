@@ -34,6 +34,17 @@ class FastSnapshot(unittest.TestCase):
         core.rollback_images(self.config, "assets", first)
         self.assertEqual((self.base / "current/a.png").read_bytes(), b"a")
 
+    def test_dedup_rebuilds_only_local_proof_without_reupload(self):
+        self.publish()
+        self.publish()
+        before = self.store.puts
+        report = local_dedup.run(self.config, apply=True)
+        self.assertEqual(report["seals_refreshed"], 1)
+        _, job = self.publish()
+        self.assertEqual(job["incremental"]["changed_files"], 0)
+        self.assertEqual(self.store.puts, before)
+        self.assertEqual(job["incremental"]["object_transfers"]["referenced"], 3)
+
     def test_materialize_legacy_view_preserves_bytes_and_rollback(self):
         sha, _ = self.publish()
         self.assertEqual(local_dedup.legacy_views(self.config)["versions"], 1)
