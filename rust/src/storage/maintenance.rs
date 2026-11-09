@@ -251,11 +251,15 @@ pub fn tree_stats(root: &Path, deadline: Instant) -> Result<(u64, f64)> {
         for e in fs::read_dir(dir)? {
             count += 1;
             ensure!(count <= 1000000, "tree entry budget");
-            let p = e?.path();
-            let m = fs::symlink_metadata(&p)?;
-            newest = newest.max(mtime(&p)?);
+            let entry = e?;
+            let m = entry.metadata()?;
+            newest = newest.max(
+                m.modified()?
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_secs_f64(),
+            );
             if m.is_dir() {
-                stack.push(p);
+                stack.push(entry.path());
             } else {
                 ensure!(m.is_file(), "unsafe maintenance tree entry");
                 size += m.len();
