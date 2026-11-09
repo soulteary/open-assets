@@ -1805,3 +1805,113 @@ mod private_diagnostic_tests {
         );
     }
 }
+
+#[cfg(test)]
+pub(crate) mod proof_reuse_fixtures {
+    use super::*;
+    use sha2::Digest;
+    pub struct Fixture {
+        pub _temporary: tempfile::TempDir,
+        pub c: Value,
+        pub full: PathBuf,
+        pub files: Vec<Value>,
+        pub manifest: Value,
+        pub seal_path: PathBuf,
+        pub oids: BTreeMap<String, String>,
+    }
+    impl Fixture {
+        pub fn new(count: usize, aliases: bool) -> Self {
+            let temporary = tempfile::tempdir().unwrap();
+            let c = json!({"state_root":temporary.path().join("state"),"images_root":temporary.path().join("images"),"revision":"proof-reuse-fixture","publication":{"reference_releases":true,"object_workers":4},"repositories":[{"key":"images","enabled":true,"max_bytes":10485760}]});
+            let sha = "a".repeat(40);
+            let full = base(&c, "images").unwrap().join("releases").join(&sha);
+            fs::create_dir_all(full.join("images")).unwrap();
+            let mut files = Vec::new();
+            let mut oids = BTreeMap::new();
+            let mut etags = BTreeMap::new();
+            let mut objects = serde_json::Map::new();
+            for n in 0..count {
+                let name = format!("images/{n:04}.png");
+                let body =
+                    format!("proof fixture bytes {}", if aliases { 0 } else { n }).into_bytes();
+                if aliases && n > 0 {
+                    fs::hard_link(full.join("images/0000.png"), full.join(&name)).unwrap();
+                } else {
+                    fs::write(full.join(&name), &body).unwrap();
+                }
+                let item = json!({"path":name,"size":body.len(),"sha256":hex::encode(sha2::Sha256::digest(&body)),"content_type":"image/png"});
+                let git = std::process::Command::new("git")
+                    .args(["hash-object", "--"])
+                    .arg(full.join(&name))
+                    .output()
+                    .unwrap();
+                assert!(git.status.success());
+                oids.insert(
+                    name.clone(),
+                    String::from_utf8(git.stdout).unwrap().trim().to_string(),
+                );
+                etags.insert(
+                    name.clone(),
+                    json!({"etag":format!("\"{:x}\"",md5::compute(&body)),"modified":1700000000}),
+                );
+                objects.insert(name.clone(),json!({"key":format!("repositories/images/releases/{sha}/{name}"),"content_type":"image/png"}));
+                files.push(item);
+            }
+            let mut proofs = BTreeMap::new();
+            for item in &files {
+                let name = item["path"].as_str().unwrap();
+                proofs.insert(
+                    name.to_string(),
+                    snapshot::proof(&full.join(name), item, now() - 20.).unwrap(),
+                );
+            }
+            let manifest = json!({"key":"images","sha":sha,"files":files,"config":c["revision"],"object_layout":"references-v1","object_sources":objects,"image_layout":"snapshot-v1"});
+            atomic(&state(&c).unwrap().join("published/images"), &manifest).unwrap();
+            snapshot::switch(&base(&c, "images").unwrap(), &format!("{sha}/images")).unwrap();
+            snapshot::save(
+                &c,
+                "images",
+                &sha,
+                &files,
+                &oids,
+                &proofs,
+                &etags,
+                &manifest["object_sources"],
+            )
+            .unwrap();
+            let seal_path = state(&c).unwrap().join("incremental/images.json");
+            Self {
+                _temporary: temporary,
+                c,
+                full,
+                files,
+                manifest,
+                seal_path,
+                oids,
+            }
+        }
+        pub fn seal(&self) -> Value {
+            read_json(&self.seal_path, 8 << 20).unwrap()
+        }
+        pub fn age(&self, names: &[usize], seconds: f64) {
+            let mut seal = self.seal();
+            for n in names {
+                seal["records"][format!("images/{n:04}.png")]["immutable"]["verified_at"] =
+                    (now() - seconds).into();
+            }
+            atomic(&self.seal_path, &seal).unwrap();
+        }
+        pub fn repository(&self) -> &Value {
+            &self.c["repositories"][0]
+        }
+        pub fn corrupt(&self, index: usize) {
+            use std::os::unix::fs::PermissionsExt;
+            let name = format!("images/{index:04}.png");
+            let p = self.full.join(&name);
+            let size = fs::metadata(&p).unwrap().len();
+            fs::set_permissions(&p, fs::Permissions::from_mode(0o644)).unwrap();
+            fs::write(&p, vec![b'X'; size as usize]).unwrap();
+            fs::set_permissions(&p, fs::Permissions::from_mode(0o444)).unwrap();
+        }
+    }
+}
