@@ -1,0 +1,35 @@
+name: rust
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  rust-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo test --locked
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: node --check open_assets/static/app.js && node --test tests/test_storage_ui.js
+      - run: docker build -f Dockerfile.rust -t open-assets:rust .
+  rust-fresh-stack:
+    needs: rust-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build native CLI and Python-free acceptance harness
+        run: cargo build --locked --bin open-assets --example fresh_stack
+      - name: Prepare disposable deployment directory
+        run: |
+          test ! -e /app/open-assets
+          test ! -e /data/asset-stack
+          sudo mkdir -p /app/open-assets
+          sudo cp -a . /app/open-assets/
+      - name: Initialize and verify the Rust deployment on an empty Docker daemon
+        run: sudo env OPEN_ASSETS_FRESH_TEST=1 OPEN_ASSETS_BINARY=/app/open-assets/target/debug/open-assets /app/open-assets/target/debug/examples/fresh_stack
+      # private/ contains credentials and must never become a workflow artifact.
