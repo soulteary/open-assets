@@ -194,7 +194,9 @@ def save(config, key, sha, files, context, etags):
                 oid=context["oids"][name],
                 etag=value["etag"],
                 modified=modified,
-                fingerprint=fingerprint(full / name),
+                fingerprint=context["verified"][name]["fingerprint"][:5]
+                if context.get("reference_mode") and name in context["verified"]
+                else fingerprint(full / name),
                 immutable=context["verified"].get(name),
             )
     atomic(

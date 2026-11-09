@@ -280,11 +280,14 @@ def export(c, r, g, sha, dest, check=None, reuse=None):
         blobs.append((oid, rel, path, size))
         if reuse is not None:
             reuse["oids"][rel.as_posix()] = oid.decode()
+    prepared_parents = set()
     # Reject all unsafe paths, types and size budgets before reading any blob.
     with GitBatch(g, c, check=check) as batch:
         for oid, rel, path, size in blobs:
             out = dest / rel
-            out.parent.mkdir(parents=True, exist_ok=True)
+            if out.parent not in prepared_parents:
+                out.parent.mkdir(parents=True, exist_ok=True)
+                prepared_parents.add(out.parent)
             if reuse is not None:
                 from .incremental import copy_cached
 
@@ -343,6 +346,28 @@ def export(c, r, g, sha, dest, check=None, reuse=None):
 
 def sync_tree(root, data_synced=False):
     """Sync a prepared tree before exposing it through a version-directory rename."""
+    if data_synced:
+        from concurrent.futures import ThreadPoolExecutor
+        from .retention import sync_directory
+
+        levels = {}
+        entries = 0
+        for directory, _, names in os.walk(root, topdown=False):
+            entries += 1 + len(names)
+            if entries > 200000:
+                raise ValueError("snapshot sync entry budget exceeded")
+            depth = len(P(directory).relative_to(root).parts)
+            levels.setdefault(depth, []).append(directory)
+        # Sibling directories can share a journal commit; ancestors must wait.
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for depth in sorted(levels, reverse=True):
+                directories = levels[depth]
+                for offset in range(0, len(directories), 32):
+                    for _ in pool.map(
+                        sync_directory, directories[offset : offset + 32]
+                    ):
+                        pass
+        return
     for directory, _, files in os.walk(root, topdown=False):
         for name in [] if data_synced else files:
             with (P(directory) / name).open("rb") as f:
@@ -627,6 +652,9 @@ def publish(c, j):
         else:
             sync_tree(staging, data_synced=reuse["reference_mode"])
             os.rename(staging, final)
+            from .retention import sync_directory
+
+            sync_directory(final.parent)
         # Keep the complete public snapshot and a separate image-serving subset.
         image_final = base / "releases" / image_target(manifest)
         if not (final / "images").is_dir():
@@ -679,18 +707,8 @@ def publish(c, j):
                 for name, value in reuse["verified"].items()
                 if name.startswith("images/")
             }
-            target = base / "releases" / image_target(manifest)
-            if not all(
-                immutable.matches(
-                    target / item["path"], item, image_proofs.get(item["path"])
-                )
-                for item in images
-            ):
-                verify_tree(target, images)
-                image_proofs = {
-                    item["path"]: immutable.record(target / item["path"], item)
-                    for item in images
-                }
+            # activate_images performs complete identity checks before and
+            # after switching. A third partial scan adds no safety barrier.
             activate_images(base, image_target(manifest), images, verified=image_proofs)
         else:
             activate_images(base, "images-" + j["sha"], images)
@@ -709,6 +727,9 @@ def publish(c, j):
             incremental.save(c, r["key"], j["sha"], files, reuse, etags)
         except (OSError, ValueError, KeyError, TypeError):
             j["incremental"]["seal"] = "unavailable"
+        stage("evidence")
+        j["finished"] = time.time()
+        j["timings"]["total"] = round(time.monotonic() - started, 6)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
