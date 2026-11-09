@@ -40,6 +40,9 @@ def main():
         "object-reader",
     )
     routes_path = ROOT / "private/e2e/edge/dynamic/routes.yaml"
+    if os.environ.get("OPEN_ASSETS_COMMUNITY_TEST") == "1":
+        # community.py replaces the fixture edge with the shipped template.
+        routes_path = Path("/app/open-assets-traefik/dynamic/routes.yaml")
     routes = json.loads(routes_path.read_text())
     routes["http"]["services"]["release-objects"] = {
         "loadBalancer": {"servers": [{"url": "http://object-reader:8083"}]}
