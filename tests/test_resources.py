@@ -145,6 +145,38 @@ class Resources(unittest.TestCase):
             limits.fetch(self.c, dict(remote=str(source), branch=branch), path)
         self.assertEqual(core.git(path, "rev-parse", "refs/heads/source"), head)
 
+    def test_fetch_ref_transaction_rolls_back_on_wrong_temporary_identity(self):
+        path = self.root / "bare"
+        subprocess.run(["git", "init", "--bare", "-q", str(path)], check=True)
+        first = (
+            limits.run_git(path, ["hash-object", "-w", "--stdin"], input_data=b"first")
+            .decode()
+            .strip()
+        )
+        second = (
+            limits.run_git(path, ["hash-object", "-w", "--stdin"], input_data=b"second")
+            .decode()
+            .strip()
+        )
+        # Blob refs are suitable for testing the same atomic ref transaction.
+        limits.run_git(path, ["update-ref", "refs/test/source", first])
+        limits.run_git(path, ["update-ref", "refs/test/temp", second])
+        wrong = f"update refs/test/source {second}\ndelete refs/test/temp {first}\n".encode()
+        with self.assertRaises(subprocess.CalledProcessError):
+            limits.run_git(path, ["update-ref", "--stdin"], input_data=wrong)
+        self.assertEqual(
+            limits.run_git(path, ["rev-parse", "refs/test/source"]).decode().strip(),
+            first,
+        )
+        good = f"update refs/test/source {second}\ndelete refs/test/temp {second}\n".encode()
+        self.assertEqual(
+            limits.run_git(path, ["update-ref", "--stdin"], input_data=good), b""
+        )
+        self.assertEqual(
+            limits.run_git(path, ["rev-parse", "refs/test/source"]).decode().strip(),
+            second,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

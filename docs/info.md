@@ -160,3 +160,7 @@ sudo systemctl status open-assets-doctor.timer open-assets-doctor.service --no-p
 过滤缓存位于 `${DATA_ROOT}/info/`，包括 `repositories-cache.json`、`objects-cache.json`、`audit-cache.json`、`resource-cache.json`、`doctor-cache.json`。缓存可重建，原始恢复、清理收据、审计及 `publisher/resource-limit-events.json` 应纳入私有备份。HTTP 只读取过滤后的 `snapshot.json`。
 
 维护前按[维护窗口](operations.md#维护窗口)设置 `private/maintenance.flag`，停止相关 timer 和已经运行的 service，并暂停人工写操作。标记只被部分维护程序检查，不能暂停所有采集、在途任务或人工确认。`--force` 只绕过统计间隔，不绕过锁或扫描预算。数据过期先检查对应服务，不通过重跑初始化或取消删除保护解决。
+
+主机用量趋势显示 CPU 整机使用率（100% 为全部逻辑核）、内存使用率和 1/5/15 分钟系统负载，提供最近 1、6、24 小时视图及样本均值、最高值。负载虚线表示当前逻辑核数，不是故障阈值。浏览器切换范围只读已有样本，不触发主机采集。
+
+历史由现有约 30 秒主机采集器写入 DATA_ROOT/info/host-history.json，按 30 秒桶保存最近 24 小时，最多 2881 个数值样本，重启后保留；手动刷新在同一桶内更新最近样本。只记录时间、CPU、内存和负载，不记录环境变量、请求或凭据。尚无历史、指标缺失、采集间断和过期会明确显示，不补造零值、不跨两分钟以上的间断连接曲线。概要样本不是连续监测或瞬时峰值，部署前的数据不会补造。

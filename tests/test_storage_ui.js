@@ -20,7 +20,7 @@ class Element {
 }
 function setup() {
   const elements = new Map();
-  const document = {getElementById(id) { assert.ok(html.includes('id="' + id + '"'), 'Missing HTML element: ' + id); if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); }, createElement() { return new Element(); }};
+  const document = {getElementById(id) { assert.ok(html.includes('id="' + id + '"'), 'Missing HTML element: ' + id); if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); }, createElement() { return new Element(); }, createElementNS() { return new Element(); }};
   const context = vm.createContext({document, fetch: () => new Promise(() => {}), setInterval: () => {}});
   vm.runInContext(script, context);
   return {context, get: id => document.getElementById(id)};
@@ -338,4 +338,32 @@ test('manual refresh cooldown reads recent snapshot and title is a normal page r
   assert.match(ui.get('refresh-result').textContent,/刚刚已采集/);
   assert.match(html,/<a id="status-home" href="\/">运行状态<\/a>/);
   assert.equal(ui.get('refresh-data').disabled,false);
+});
+
+test('host history renders three charts and multiple load series without HTML',()=>{
+  const ui=setup(),data=fixture(),at=data.collected_at;
+  data.host_history={schema_version:1,points:[{at:at-60,cpu_percent:20,memory_used:1,memory_total:4,load:[.2,.3,.4]},{at:at-30,cpu_percent:30,memory_used:2,memory_total:4,load:[.5,.4,.3]}]};
+  ui.context.render(data);assert.equal(ui.get('history-charts').children.length,3);
+  assert.match(ui.get('history-charts').textContent,/CPU 使用率/);assert.match(ui.get('history-charts').textContent,/样本均值/);
+  assert.match(ui.get('history-notice').textContent,/2 个样本/);
+});
+test('history gaps and invalid values do not become continuous zero usage',()=>{
+  const ui=setup();
+  const paths=ui.context.historySeries([{at:10,n:10},{at:40,n:null},{at:80,n:20},{at:400,n:30}],p=>p.n,0,500,100);
+  assert.equal(paths.length,3);assert.ok(paths.every(p=>!p.includes('NaN')));
+});
+test('history range changes locally and old samples remain visibly stale',()=>{
+  const ui=setup(),data=fixture(),at=data.collected_at;
+  data.host_history={schema_version:1,points:[{at:at-7200,cpu_percent:10,load:[1,2,3]},{at:at-300,cpu_percent:20,load:[1,2,3]}]};
+  ui.context.render(data);assert.match(ui.get('history-notice').textContent,/1 个样本/);assert.match(ui.get('history-notice').textContent,/已过期/);
+  ui.get('history-range').fire('change',{target:{value:'21600'}});assert.match(ui.get('history-notice').textContent,/2 个样本/);
+});
+test('missing history shows collection state and cannot fabricate a past baseline',()=>{
+  const ui=setup();ui.context.render(fixture());assert.match(ui.get('history-notice').textContent,/尚无/);assert.equal(ui.get('history-charts').children.length,0);
+});
+
+test('changing history range after a fetch failure cannot mark old samples fresh',async()=>{
+  const ui=setup(),data=fixture();data.host_history={schema_version:1,points:[{at:data.collected_at,cpu_percent:20,load:[1,2,3]}]};
+  ui.context.render(data);ui.context.fetch=async()=>{throw new Error('offline');};await ui.context.update();
+  ui.get('history-range').fire('change',{target:{value:'86400'}});assert.match(ui.get('history-notice').textContent,/已过期/);
 });

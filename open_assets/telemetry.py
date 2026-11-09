@@ -452,6 +452,13 @@ def write_snapshot(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     os.chown(path.parent, 0, 20010)
     path.parent.chmod(0o750)
+    if isinstance(data.get("host"), dict):
+        from .host_history import update
+
+        history_path = path.parent / "host-history.json"
+        history = update(history_path, data["host"], data["collected_at"])
+        write_snapshot(history_path, history)
+        data["host_history"] = history
     fd, tmp = tempfile.mkstemp(dir=path.parent)
     try:
         with os.fdopen(fd, "w") as stream:

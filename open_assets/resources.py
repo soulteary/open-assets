@@ -130,7 +130,7 @@ def admit_queue(c):
         raise ResourceLimit("queue_reserved_bytes")
 
 
-def run_git(path, args, c=None, output=None, check=None, monitor=None):
+def run_git(path, args, c=None, output=None, check=None, monitor=None, input_data=None):
     """Stream stdout into a file; bound time, output, and each Git process.
 
     A separate exec helper applies rlimits safely when the caller has threads.
@@ -138,7 +138,17 @@ def run_git(path, args, c=None, output=None, check=None, monitor=None):
     """
     p = policy(c or {})
     started = time.monotonic()
-    with tempfile.TemporaryFile() as captured:
+    if input_data is not None and (
+        not isinstance(input_data, bytes) or len(input_data) > 65536
+    ):
+        raise ValueError("invalid Git control input")
+    with contextlib.ExitStack() as stack:
+        captured = stack.enter_context(tempfile.TemporaryFile())
+        incoming = None
+        if input_data is not None:
+            incoming = stack.enter_context(tempfile.TemporaryFile())
+            incoming.write(input_data)
+            incoming.seek(0)
         target = output if output is not None else captured
         command = [
             sys.executable,
@@ -151,7 +161,11 @@ def run_git(path, args, c=None, output=None, check=None, monitor=None):
             *args,
         ]
         process = subprocess.Popen(
-            command, stdout=target, stderr=subprocess.DEVNULL, start_new_session=True
+            command,
+            stdin=incoming,
+            stdout=target,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
         )
         try:
             while True:
@@ -217,6 +231,7 @@ def fetch(c, repository, path, check=None):
 
     temporary = "refs/open-assets/fetch-" + uuid.uuid4().hex
     monitor()
+    promoted = False
     try:
         run_git(
             path,
@@ -245,12 +260,34 @@ def fetch(c, repository, path, check=None):
             check=check,
             monitor=monitor,
         )
-        sha = run_git(path, ["rev-parse", temporary], c).decode().strip()
+        # A unique fetch ref is normally loose. Read only a bounded regular
+        # producer-written ref, falling back to Git for a concurrently packed ref.
+        import re
+
+        try:
+            fd = os.open(path / temporary, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except FileNotFoundError:
+            sha = run_git(path, ["rev-parse", temporary], c).decode().strip()
+        else:
+            with os.fdopen(fd, "rb") as stream:
+                if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                    raise ValueError("unsafe fetched Git ref")
+                raw = stream.read(42)
+            if not re.fullmatch(rb"[a-f0-9]{40}\n", raw):
+                raise ValueError("invalid fetched Git ref")
+            sha = raw[:40].decode()
+        if not re.fullmatch(r"[a-f0-9]{40}", sha):
+            raise ValueError("invalid fetched Git commit")
         monitor()
-        run_git(path, ["update-ref", "refs/heads/source", sha], c)
+        transaction = (
+            f"update refs/heads/source {sha}\ndelete {temporary} {sha}\n".encode()
+        )
+        run_git(path, ["update-ref", "--stdin"], c, input_data=transaction)
+        promoted = True
     finally:
-        with contextlib.suppress(Exception):
-            run_git(path, ["update-ref", "-d", temporary], c)
+        if not promoted:
+            with contextlib.suppress(Exception):
+                run_git(path, ["update-ref", "-d", temporary], c)
 
 
 def remote_head(c, repository, path):

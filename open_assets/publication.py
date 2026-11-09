@@ -110,7 +110,9 @@ def upload(config, client, prefix, staging, files, reuse=None, stats=None):
     from . import object_refs
 
     if object_refs.enabled(config) and reuse:
-        object_refs.verify_sources(config, client, list(reuse.values()))
+        checked = object_refs.verify_sources(config, client, list(reuse.values()))
+        if stats is not None:
+            stats.update(checked)
         transfers = [item for item in files if item["path"] not in reuse]
         result = upload(config, client, prefix, staging, transfers, stats=stats)
         for name, cached in reuse.items():
