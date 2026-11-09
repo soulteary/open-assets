@@ -83,6 +83,27 @@ services:
     cpus: 0.25
     pids_limit: 64
     networks: [edge]
+  object-reader:
+    image: open-assets:local
+    user: '20010:20010'
+    restart: unless-stopped
+    logging: *logging
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    entrypoint: [python, -m, open_assets.object_reader]
+    environment:
+      OBJECT_ENDPOINT: https://storage.internal:9000
+      OBJECT_BUCKET: attachments
+    healthcheck:
+      <<: *health
+      test: [CMD, python, -m, open_assets.health, object-reader]
+    volumes: ['${DATA_ROOT}/publisher/manifests:/manifests:ro','${DATA_ROOT}/publisher/object-retention:/receipts:ro','./private/publisher/ca.crt:/tls/ca.crt:ro']
+    tmpfs: ['/tmp:size=16m']
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 96
+    networks: [edge, publish]
   nginx:
     image: ${NGINX_IMAGE}
     user: '20010:20010'

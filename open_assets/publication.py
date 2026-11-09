@@ -13,8 +13,13 @@ from .resources import verify_body
 
 def policy(config):
     value = config.get("publication", {})
-    if not isinstance(value, dict) or set(value) - {"object_workers"}:
+    if not isinstance(value, dict) or set(value) - {
+        "object_workers",
+        "reference_releases",
+    }:
         raise ValueError("invalid publication settings")
+    if type(value.get("reference_releases", False)) is not bool:
+        raise ValueError("publication.reference_releases must be a boolean")
     workers = value.get("object_workers", 4)
     if type(workers) is not int or not 1 <= workers <= 8:
         raise ValueError("publication.object_workers must be between 1 and 8")
@@ -102,6 +107,17 @@ def transfer(client, bucket, prefix, staging, item, cached=None, existing_keys=N
 def upload(config, client, prefix, staging, files, reuse=None, stats=None):
     """At most N active futures; drain running work before exposing failure."""
     workers = policy(config)
+    from . import object_refs
+
+    if object_refs.enabled(config) and reuse:
+        object_refs.verify_sources(config, client, list(reuse.values()))
+        transfers = [item for item in files if item["path"] not in reuse]
+        result = upload(config, client, prefix, staging, transfers, stats=stats)
+        for name, cached in reuse.items():
+            result[name] = dict(etag=cached["etag"], modified=cached["modified"])
+        if stats is not None:
+            stats["referenced"] = len(reuse)
+        return result
     iterator = iter(files)
     pending = {}
     etags = {}

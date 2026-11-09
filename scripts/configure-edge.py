@@ -12,6 +12,7 @@ p = argparse.ArgumentParser()
 p.add_argument("--domains", required=True)
 p.add_argument("--ca", required=True)
 p.add_argument("--output", required=True)
+p.add_argument("--reference-releases", action="store_true")
 o = p.parse_args()
 if pathlib.Path(o.output).suffix not in [".yaml", ".yml"]:
     p.error("output must end in .yaml or .yml")
@@ -28,6 +29,10 @@ services = {
         ("info", "http://info:8082"),
     ]
 }
+if o.reference_releases:
+    services["release-objects"] = {
+        "loadBalancer": {"servers": [{"url": "http://object-reader:8083"}]}
+    }
 services["storage"]["loadBalancer"]["serversTransport"] = "console-tls"
 services["objects"]["loadBalancer"]["serversTransport"] = "storage-tls"
 routers = {}
@@ -46,7 +51,9 @@ for key, service in [
     routers[key] = {
         "rule": rule,
         "entryPoints": ["websecure"],
-        "service": service,
+        "service": "release-objects"
+        if key == "oss" and o.reference_releases
+        else service,
         "tls": {"certResolver": "le"},
     }
     if key == "oss":

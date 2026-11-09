@@ -10,8 +10,10 @@ from pathlib import Path
 import re
 import shutil
 import stat
+import time
 
-VERSION = 2
+VERSION = 3
+_audit_next = 0
 
 
 def fingerprint(path):
@@ -35,9 +37,9 @@ def valid_etag(value):
     return isinstance(value, str) and re.fullmatch(r'"[0-9a-f]{32}"', value) is not None
 
 
-def context(config, repository):
+def context(config, repository, audit=False):
     """Admit only the current release under exactly the same validation config."""
-    result = dict(oids={}, reused={}, sources={}, reused_files=0)
+    result = dict(oids={}, reused={}, sources={}, reused_files=0, verified={})
     key = repository["key"]
     state = Path(config["state_root"])
     base = Path(config["images_root"]) / "repos" / key
@@ -59,7 +61,13 @@ def context(config, repository):
             or seal.get("version") != VERSION
             or seal.get("sha") != sha
             or seal.get("config") != config["revision"]
-            or seal.get("manifest") != digest(manifest["files"])
+            or seal.get("manifest")
+            != digest(
+                dict(
+                    files=manifest["files"],
+                    object_sources=manifest.get("object_sources", {}),
+                )
+            )
             or (base / "current").readlink().as_posix() != "releases/images-" + sha
         ):
             return result
@@ -98,6 +106,14 @@ def context(config, repository):
                 or source.stat().st_size != item["size"]
             ):
                 continue
+            from . import object_refs, immutable
+
+            object_source = object_refs.source(manifest, item)
+            byte_proof = record.get("immutable")
+            if object_refs.enabled(config) and not immutable.matches(
+                source, item, byte_proof, allow_expired=audit
+            ):
+                continue
             result["sources"].setdefault(
                 oid,
                 dict(
@@ -106,7 +122,9 @@ def context(config, repository):
                     fingerprint=record["fingerprint"],
                     etag=record["etag"],
                     modified=record.get("modified"),
-                    key=f"repositories/{key}/releases/{sha}/{path}",
+                    key=object_source["key"],
+                    object_content_type=object_source["content_type"],
+                    verified=byte_proof,
                 ),
             )
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
@@ -120,11 +138,18 @@ def copy_cached(context, oid, size, relative, destination):
     if not record or record["item"]["size"] != size:
         return None
     source = record["source"]
-    if fingerprint(source) != record["fingerprint"]:
-        return None
-    shutil.copyfile(source, destination)
-    if fingerprint(source) != record["fingerprint"]:
-        raise ValueError("incremental source changed during copy")
+    if context.get("reference_mode"):
+        from . import immutable
+
+        context["verified"][relative.as_posix()] = immutable.link(
+            source, destination, record["verified"]
+        )
+    else:
+        if fingerprint(source) != record["fingerprint"]:
+            return None
+        shutil.copyfile(source, destination)
+        if fingerprint(source) != record["fingerprint"]:
+            raise ValueError("incremental source changed during copy")
     item = dict(record["item"], path=relative.as_posix())
     context["reused"][item["path"]] = record
     context["reused_files"] += 1
@@ -148,6 +173,7 @@ def save(config, key, sha, files, context, etags):
                 etag=value["etag"],
                 modified=modified,
                 fingerprint=fingerprint(full / name),
+                immutable=context["verified"].get(name),
             )
     atomic(
         Path(config["state_root"]) / "incremental" / (key + ".json"),
@@ -155,7 +181,75 @@ def save(config, key, sha, files, context, etags):
             version=VERSION,
             sha=sha,
             config=config["revision"],
-            manifest=digest(files),
+            manifest=digest(
+                dict(files=files, object_sources=context.get("object_sources", {}))
+            ),
             records=records,
         ),
     )
+
+
+def audit_idle(config):
+    """Renew full-byte proofs while idle, in bounded slices, yielding to pushes.
+
+    Reuse never extends a proof's byte-verification time. A restart or failed
+    audit can cause a safe full export rather than indefinitely trusted bytes.
+    """
+    global _audit_next
+    from . import immutable, object_refs
+    from .__main__ import atomic, read_job
+
+    if not object_refs.enabled(config) or time.monotonic() < _audit_next:
+        return
+    _audit_next = time.monotonic() + 15
+    deadline = time.monotonic() + 2
+    state = Path(config["state_root"])
+
+    def waiting():
+        return any(
+            read_job(p)["status"] in ("pending", "running", "images_prepared")
+            for p in (state / "jobs").glob("*.json")
+        )
+
+    for repository in config["repositories"]:
+        if time.monotonic() >= deadline or waiting():
+            return
+        try:
+            value = context(config, repository, audit=True)
+            path = state / "incremental" / (repository["key"] + ".json")
+            if not value["sources"]:
+                continue
+            seal = object_refs.read(path)
+            changed = False
+            for source in value["sources"].values():
+                proof = source["verified"]
+                if time.time() - proof["verified_at"] < immutable.MAX_PROOF_AGE / 2:
+                    continue
+                if time.monotonic() >= deadline or waiting():
+                    break
+                digest = hashlib.sha256()
+                complete = True
+                with source["source"].open("rb") as stream:
+                    for block in iter(lambda: stream.read(1048576), b""):
+                        if time.monotonic() >= deadline:
+                            complete = False
+                            break
+                        digest.update(block)
+                if not complete:
+                    break
+                valid = digest.hexdigest() == proof["sha256"] and immutable.matches(
+                    source["source"], source["item"], proof, allow_expired=True
+                )
+                for name, record in list(seal["records"].items()):
+                    current = record.get("immutable")
+                    if current and current["fingerprint"] == proof["fingerprint"]:
+                        if valid:
+                            current["verified_at"] = time.time()
+                        else:
+                            del seal["records"][name]
+                        changed = True
+            if changed:
+                atomic(path, seal)
+        except (OSError, ValueError, KeyError, TypeError):
+            # Publication independently refuses stale or invalid cache evidence.
+            continue

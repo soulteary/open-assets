@@ -3,6 +3,10 @@ state_root: /state
 images_root: /images
 bucket: attachments
 endpoint: http://otterio:9000
+# Enable reference_releases only after deploying the read-only URL resolver.
+publication:
+  object_workers: 4
+  reference_releases: false
 # Global admission budgets. All values are positive integers; bytes are logical.
 # Omitted keys use these defaults. Git virtual-memory limits apply on Linux.
 resource_limits:
