@@ -64,6 +64,36 @@ class StorageInfo(unittest.TestCase):
     def collect(self, force=False):
         return s.collect_storage(self.root, self.data, force)
 
+    def test_direct_snapshot_is_complete_and_not_a_second_physical_copy(self):
+        import shutil
+
+        image = self.base / "releases" / ("images-" + self.sha)
+        shutil.rmtree(image)
+        (self.base / "current").unlink()
+        (self.base / "current").symlink_to("releases/" + self.sha + "/images")
+        manifest = self.data / "publisher/manifests/assets" / (self.sha + ".json")
+        manifest.write_text(
+            json.dumps(dict(key="assets", sha=self.sha, image_layout="snapshot-v1"))
+        )
+        result = self.collect(True)
+        row = result["repositories"][0]
+        self.assertEqual(row["full_copies"], 1)
+        self.assertEqual(row["image_copies"], 0)
+        self.assertEqual(row["shared_image_views"], 1)
+        self.assertEqual(row["partial_versions"], 0)
+        self.assertEqual(result["status"], "ok")
+
+    def test_host_snapshot_reads_cache_without_repeating_large_scan(self):
+        self.collect(True)
+        cache = self.data / "info/repositories-cache.json"
+        before = cache.read_bytes()
+        with patch.object(
+            s, "measure", side_effect=AssertionError("host refresh must not scan")
+        ):
+            result = s.collect_storage(self.root, self.data, measure_now=False)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(cache.read_bytes(), before)
+
     def test_counts_allocated_bytes_policy_and_allowlist(self):
         result = self.collect(True)
         self.assertEqual(result["status"], "ok")

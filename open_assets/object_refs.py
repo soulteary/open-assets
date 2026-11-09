@@ -119,21 +119,62 @@ def verify_sources(config, client, records):
         groups.setdefault(f"repositories/{key}/releases/{sha}/", {})[record["key"]] = (
             record
         )
-    pages = 0
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    from .publication import policy
+
+    ranges = []
     for prefix, expected in groups.items():
-        found = set()
+        names = sorted(expected)
+        for offset in range(0, len(names), 1000):
+            selected = names[offset : offset + 1000]
+            ranges.append(
+                (
+                    prefix,
+                    names[offset - 1] if offset else None,
+                    selected[-1],
+                    {name: expected[name] for name in selected},
+                )
+            )
+    if len(ranges) > 128:
+        raise ValueError("reference listing budget exceeded")
+    pages = 0
+    guard = threading.Lock()
+
+    def verify_range(task):
+        nonlocal pages
+        prefix, lower, upper, expected = task
+        found, seen = set(), set()
         token = None
-        seen = set()
         while True:
-            pages += 1
-            if pages > 128:
-                raise ValueError("reference listing budget exceeded")
+            with guard:
+                pages += 1
+                if pages > 128:
+                    raise ValueError("reference listing budget exceeded")
             args = dict(Bucket=config["bucket"], Prefix=prefix, MaxKeys=1000)
             if token:
                 args["ContinuationToken"] = token
+            elif lower:
+                args["StartAfter"] = lower
             page = client.list_objects_v2(**args)
-            for obj in page.get("Contents", []):
+            contents = page.get("Contents", [])
+            if (
+                not isinstance(contents, list)
+                or len(contents) > 1000
+                or type(page.get("IsTruncated")) is not bool
+            ):
+                raise ValueError("invalid reference listing page")
+            next_token = page.get("NextContinuationToken")
+            if page["IsTruncated"] and (
+                not isinstance(next_token, str) or not next_token or next_token in seen
+            ):
+                raise ValueError("invalid reference pagination")
+            reached_upper = False
+            for obj in contents:
                 name = obj["Key"]
+                if not isinstance(name, str) or not name.startswith(prefix):
+                    raise ValueError("invalid reference listing key")
+                reached_upper |= name >= upper
                 if name not in expected:
                     continue
                 record = expected[name]
@@ -147,7 +188,7 @@ def verify_sources(config, client, records):
                 ):
                     raise ValueError("referenced source changed")
                 found.add(name)
-            if page.get("IsTruncated") is False:
+            if reached_upper or page.get("IsTruncated") is False:
                 break
             token = page.get("NextContinuationToken")
             if not isinstance(token, str) or not token or token in seen:
@@ -155,6 +196,11 @@ def verify_sources(config, client, records):
             seen.add(token)
         if found != set(expected):
             raise ValueError("referenced source missing")
+
+    with ThreadPoolExecutor(max_workers=policy(config)) as pool:
+        for _ in pool.map(verify_range, ranges):
+            pass
+    return dict(source_list_requests=pages, source_ranges=len(ranges))
 
 
 def reference_inventory(config, key, deadline):

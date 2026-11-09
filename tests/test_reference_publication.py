@@ -71,7 +71,8 @@ class ReferencePublication(unittest.TestCase):
         second, job = self.publish()
         self.assertEqual(job["status"], "published")
         self.assertEqual(
-            job["incremental"]["object_transfers"], dict(uploaded=1, referenced=2)
+            job["incremental"]["object_transfers"],
+            dict(uploaded=1, referenced=2, source_list_requests=1, source_ranges=1),
         )
         self.assertEqual(self.store.puts, 4)
         self.assertEqual(self.store.reads, 4)

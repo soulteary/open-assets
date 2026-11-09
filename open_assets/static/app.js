@@ -4,6 +4,63 @@ const el = (tag, text, cls) => { const n = document.createElement(tag); if (text
 const bytes = n => n == null ? '—' : n >= 1073741824 ? (n / 1073741824).toFixed(2) + ' GiB' : n >= 1048576 ? (n / 1048576).toFixed(1) + ' MiB' : n >= 1024 ? (n / 1024).toFixed(1) + ' KiB' : n + ' B';
 const pct = n => n == null ? '—' : Number(n).toFixed(1) + '%';
 const date = n => n ? new Date(n * 1000).toLocaleString() : '—';
+let historyRange = 3600;
+let historySnapshot = null;
+let historyUnavailable = false;
+const metricNumber = (n, max=Number.MAX_SAFE_INTEGER) => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= max;
+function historyPoints(data) {
+  const source=data.host_history;
+  if(source?.schema_version!==1 || !Array.isArray(source.points))return [];
+  const end=data.collected_at;
+  return source.points.slice(-2881).filter(p => p && metricNumber(p.at,end) && p.at>=end-historyRange).sort((a,b)=>a.at-b.at);
+}
+function historySeries(points, getter, start, end, maximum) {
+  const paths=[];let current='',previous=null;
+  for(const p of points){const value=getter(p);
+    if(!metricNumber(value,maximum)){if(current)paths.push(current);current='';previous=null;continue;}
+    const x=36+Math.max(0,Math.min(1,(p.at-start)/(end-start)))*308,y=120-value/maximum*96;
+    if(previous!==null && p.at-previous>120){if(current)paths.push(current);current='';}
+    current+=(current?' L':'M')+x.toFixed(2)+' '+y.toFixed(2);previous=p.at;
+  }
+  if(current)paths.push(current);return paths;
+}
+function svgElement(tag, attributes={}, text) {
+  const n=document.createElementNS('http://www.w3.org/2000/svg',tag);
+  for(const [k,v] of Object.entries(attributes))n.setAttribute(k,String(v));
+  if(text!==undefined)n.textContent=text;return n;
+}
+function renderHostHistory(data) {
+  historySnapshot=data;
+  const points=historyPoints(data), target=byId('history-charts'), notice=byId('history-notice');target.replaceChildren();
+  if(!points.length){notice.className='muted';notice.textContent='尚无这一时间范围的历史样本；采集后会自动显示。';return;}
+  const last=points[points.length-1], end=data.collected_at,start=Math.min(end-30,Math.max(end-historyRange,points[0].at));
+  const old=historyUnavailable || data.stale || end-last.at>120;
+  notice.className=old?'warning':'muted';notice.textContent=points.length+' 个样本 · 最近采样 '+date(last.at)+(old?' · 历史数据已过期，不能作为当前用量':' · 从部署后开始积累');
+  const cores=metricNumber(data.host.cpu_count,65536)&&data.host.cpu_count>0?data.host.cpu_count:1;
+  const loadMaximum=Math.max(1,cores,...points.flatMap(p=>Array.isArray(p.load)?p.load.filter(n=>metricNumber(n,1e6)):[]))*1.15;
+  const memoryValue=p=>metricNumber(p.memory_used) && metricNumber(p.memory_total) && p.memory_total>0 && p.memory_used<=p.memory_total?p.memory_used/p.memory_total*100:null;
+  for(const chart of [
+    {title:'CPU 使用率',maximum:100,unit:'%',series:[{name:'CPU',color:'cpu',get:p=>metricNumber(p.cpu_percent,100)?p.cpu_percent:null}],latest:pct(metricNumber(last.cpu_percent,100)?last.cpu_percent:null)},
+    {title:'内存使用率',maximum:100,unit:'%',series:[{name:'内存',color:'memory',get:memoryValue}],latest:metricNumber(last.memory_used)?bytes(last.memory_used)+' / '+bytes(last.memory_total):'—'},
+    {title:'系统负载',maximum:loadMaximum,unit:'',series:[0,1,2].map((i)=>({name:[1,5,15][i]+' 分钟',color:'load-'+i,get:p=>Array.isArray(p.load)?p.load[i]:null})),latest:Array.isArray(last.load)?last.load.map(n=>metricNumber(n,1e6)?n.toFixed(2):'—').join(' / '):'—'}
+  ]){
+    const card=el('article',undefined,'history-card');card.append(el('h3',chart.title),el('strong',chart.latest,'history-value'));
+    const svg=svgElement('svg',{viewBox:'0 0 360 160',role:'img','aria-label':chart.title+'历史，'+points.length+'个概要样本',preserveAspectRatio:'xMidYMid meet'});
+    for(const ratio of [0,.5,1]){const y=120-ratio*96;svg.append(svgElement('line',{x1:36,x2:344,y1:y,y2:y,class:'history-grid'}),svgElement('text',{x:30,y:y+4,'text-anchor':'end',class:'history-axis'},(chart.maximum*ratio).toFixed(chart.unit?0:1)+chart.unit));}
+    if(chart.title==='系统负载' && metricNumber(data.host.cpu_count,65536) && data.host.cpu_count>0){const y=120-data.host.cpu_count/chart.maximum*96;svg.append(svgElement('line',{x1:36,x2:344,y1:y,y2:y,class:'history-core'}));}
+    for(const line of chart.series){
+      for(const d of historySeries(points,line.get,start,end,chart.maximum))svg.append(svgElement('path',{d,fill:'none',class:'history-line '+line.color}));
+      const value=line.get(last);if(metricNumber(value,chart.maximum))svg.append(svgElement('circle',{cx:36+(last.at-start)/(end-start)*308,cy:120-value/chart.maximum*96,r:3,class:line.color}));
+    }
+    const clock=t=>new Date(t*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    svg.append(svgElement('text',{x:36,y:148,class:'history-axis'},clock(start)),svgElement('text',{x:344,y:148,'text-anchor':'end',class:'history-axis'},clock(end)));
+    card.append(svg);
+    const values=points.map(chart.series[0].get).filter(n=>metricNumber(n,chart.maximum));
+    card.append(el('p',values.length?'样本均值 '+(values.reduce((a,b)=>a+b,0)/values.length).toFixed(1)+chart.unit+' · 样本最高 '+Math.max(...values).toFixed(1)+chart.unit:'暂无有效指标样本','muted'));
+    if(chart.series.length>1){const legend=el('div',undefined,'history-legend');for(const line of chart.series)legend.append(el('span',line.name,line.color));legend.append(el('span','虚线：'+data.host.cpu_count+' 个逻辑核','muted'));card.append(legend);}
+    target.append(card);
+  }
+}
 function item(title, detail, value, warning) {
   const n = el('div', undefined, 'item');
   n.append(el('strong', title), el('span', detail, 'muted'), el('b', value, warning ? 'warning' : ''));
@@ -101,7 +158,7 @@ function renderStorage(data) {
     const old = data.stale || row.measurement_stale || row.measurement_status !== 'ok';
     if (old || row.policy_status === 'unavailable' || row.partial_versions || row.unusual_entries || (data.capacity?.alerts || []).some(alert => alert.key === row.key)) tr.className = 'warning';
     tr.append(storageCell(row.key, [row.measured_at ? '本地统计于 ' + date(row.measured_at) + (old ? '（旧数据 / 需复查）' : '') : '本地统计不可用']));
-    tr.append(storageCell(row.versions == null ? '—' : row.versions + ' 版', ['完整快照 ' + (row.full_copies ?? '—') + ' / 图片副本 ' + (row.image_copies ?? '—'), '未配对 ' + (row.partial_versions ?? '—') + ' · 异常条目 ' + (row.unusual_entries ?? '—')]));
+    tr.append(storageCell(row.versions == null ? '—' : row.versions + ' 版', ['完整快照 ' + (row.full_copies ?? '—') + ' / 兼容视图 ' + (row.image_copies ?? '—') + ' / 快照内共享 ' + (row.shared_image_views ?? 0), '未配对 ' + (row.partial_versions ?? '—') + ' · 异常条目 ' + (row.unusual_entries ?? '—')]));
     tr.append(storageCell(bytes(row.local_bytes), ['版本 ' + bytes(row.version_bytes) + ' · Git ' + bytes(row.git_bytes), '清理暂存 ' + bytes(row.trash_bytes) + ' · 发布暂存 ' + bytes(row.staging_bytes), '发布预留 ' + bytes(row.publication_required_bytes)]));
     const objects = (data.object_storage?.repositories || []).find(record => record.key === row.key) || {};
     const objectOld = data.stale || objects.stale || objects.status !== 'ok';
@@ -370,6 +427,7 @@ function render(data) {
   renderRestoreClosures(data);
   renderAuditStorage(data);
   renderDetailAttention(data);
+  renderHostHistory(data);
   const h = data.host, overview = byId('overview'); overview.replaceChildren();
   for (const [label, value, detail] of [
     ['CPU', pct(h.cpu_percent), h.cpu_count + ' 个逻辑核 · 采集窗口总利用率'],
@@ -414,8 +472,8 @@ let statusGeneration = 0;
 async function update(force = false) {
   if(manualRefreshing && !force)return;
   const generation = ++statusGeneration;
-  try { const r = await fetch('/api/status', {cache: 'no-store'}); if (!r.ok || r.redirected) throw new Error(); const data=await r.json(); if(generation!==statusGeneration)return; render(data); byId('error').hidden = true; }
-  catch { if(generation!==statusGeneration)return; byId('doctor-notice').textContent='诊断结果无法刷新，下方可能是旧数据，不能作为当前健康结论。';byId('doctor-notice').className='warning';byId('tab-diagnostics').textContent='部署诊断 · 提示';byId('tab-diagnostics').className='tab-attention'; byId('resource-notice').textContent='资源数据无法刷新，下方可能是旧数据。';byId('resource-notice').className='warning'; byId('audit-notice').textContent = '审计容量与归档结果无法刷新，下表可能是旧数据。'; byId('audit-notice').className = 'warning'; byId('restore-close-notice').textContent = '结案结果无法刷新，下表可能是旧数据。'; byId('restore-close-notice').className = 'warning'; byId('restore-check-notice').textContent = '核对结果无法刷新，下表可能是旧数据。'; byId('restore-check-notice').className = 'warning'; byId('restore-notice').textContent = '恢复报告无法刷新，下表可能是旧结果，请复核采样时间。'; byId('restore-notice').className = 'warning'; byId('object-retention-notice').textContent = '对象保留数据无法刷新，下表保留旧结果，请复核采样时间。'; byId('object-retention-notice').className = 'warning'; byId('error').hidden = false; byId('error').textContent = '无法读取最新状态，请检查登录会话与采集定时器。下方可能是上次成功读取的数据。'; const notice = byId('capacity-notice'); notice.className = 'capacity-notice capacity-unknown'; notice.replaceChildren(el('strong', '容量状态待确认'), el('p', '无法取得最新状态，下方保留上次采样，不能作为实时容量依据。')); }
+  try { const r = await fetch('/api/status', {cache: 'no-store'}); if (!r.ok || r.redirected) throw new Error(); const data=await r.json(); if(generation!==statusGeneration)return; historyUnavailable=false; render(data); byId('error').hidden = true; }
+  catch { if(generation!==statusGeneration)return;historyUnavailable=true;byId('history-notice').className='warning';byId('history-notice').textContent='历史用量无法刷新，下方保留旧样本。'; byId('doctor-notice').textContent='诊断结果无法刷新，下方可能是旧数据，不能作为当前健康结论。';byId('doctor-notice').className='warning';byId('tab-diagnostics').textContent='部署诊断 · 提示';byId('tab-diagnostics').className='tab-attention'; byId('resource-notice').textContent='资源数据无法刷新，下方可能是旧数据。';byId('resource-notice').className='warning'; byId('audit-notice').textContent = '审计容量与归档结果无法刷新，下表可能是旧数据。'; byId('audit-notice').className = 'warning'; byId('restore-close-notice').textContent = '结案结果无法刷新，下表可能是旧数据。'; byId('restore-close-notice').className = 'warning'; byId('restore-check-notice').textContent = '核对结果无法刷新，下表可能是旧数据。'; byId('restore-check-notice').className = 'warning'; byId('restore-notice').textContent = '恢复报告无法刷新，下表可能是旧结果，请复核采样时间。'; byId('restore-notice').className = 'warning'; byId('object-retention-notice').textContent = '对象保留数据无法刷新，下表保留旧结果，请复核采样时间。'; byId('object-retention-notice').className = 'warning'; byId('error').hidden = false; byId('error').textContent = '无法读取最新状态，请检查登录会话与采集定时器。下方可能是上次成功读取的数据。'; const notice = byId('capacity-notice'); notice.className = 'capacity-notice capacity-unknown'; notice.replaceChildren(el('strong', '容量状态待确认'), el('p', '无法取得最新状态，下方保留上次采样，不能作为实时容量依据。')); }
 }
 async function refreshData() {
   if(manualRefreshing)return;
@@ -437,6 +495,7 @@ async function refreshData() {
   } catch {notice.textContent='刷新未完成，请检查登录会话或采集服务；下方保留上次成功读取的数据。';}
   finally {manualRefreshing=false;button.disabled=false;button.textContent='刷新数据';}
 }
+byId('history-range').addEventListener('change',event=>{const value=Number(event.target.value);if([3600,21600,86400].includes(value)){historyRange=value;if(historySnapshot)renderHostHistory(historySnapshot);}});
 byId('refresh-data').addEventListener('click',refreshData);
 initializeDetailTabs();
 update(); setInterval(update, 30000);

@@ -13,6 +13,10 @@
   <p id="error" role="alert" hidden></p>
   <div id="capacity-notice" class="capacity-notice" role="status"></div>
   <section aria-label="主机概览" id="overview" class="overview"></section>
+  <section aria-labelledby="history-title" id="host-history">
+    <div class="section-head"><div><h2 id="history-title">主机用量趋势</h2><p class="muted">约 30 秒采样，保留最近 24 小时；采集间断会留空，概要采样不代表瞬时峰值。</p></div><label class="history-range">时间范围 <select id="history-range" aria-label="历史用量时间范围"><option value="3600">最近 1 小时</option><option value="21600">最近 6 小时</option><option value="86400">最近 24 小时</option></select></label></div>
+    <p id="history-notice" class="muted" role="status"></p><div id="history-charts" class="history-charts"></div>
+  </section>
   <section><div class="section-head"><h2>服务组件</h2><span>CPU 100% = 一个逻辑核；内存为 Docker 工作集</span></div><div class="table-wrap"><table><thead><tr><th>组件</th><th>版本</th><th>运行 / 健康 / 探测</th><th>CPU</th><th>内存</th><th>Docker 重启计数</th></tr></thead><tbody id="components"></tbody></table></div></section>
   <section><h2>磁盘与文件系统</h2><div id="disks"></div></section>
   <section><h2>证书有效期</h2><div class="certificate-columns"><div><h3>内网证书与 CA</h3><div id="internal-certificates"></div></div><div><h3>ACME 公网证书</h3><div id="public-certificates"></div></div></div></section>
