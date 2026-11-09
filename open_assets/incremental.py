@@ -33,7 +33,7 @@ def valid_etag(value):
     return isinstance(value, str) and re.fullmatch(r'"[0-9a-f]{32}"', value) is not None
 
 
-def context(config, repository, audit=False):
+def _context(config, repository, audit=False, prepared=None):
     """Admit only the current release under exactly the same validation config."""
     result = dict(oids={}, reused={}, sources={}, reused_files=0, verified={})
     from .__main__ import image_target
@@ -74,7 +74,40 @@ def context(config, repository, audit=False):
         for parent in (base, base / "releases", full):
             if not stat.S_ISDIR(parent.lstat().st_mode):
                 return result
+        source_full = full
         records = seal["records"]
+        if prepared is not None:
+            if (
+                prepared.get("sha") != sha
+                or prepared.get("config") != config["revision"]
+                or prepared.get("manifest") != seal["manifest"]
+                or prepared.get("files") != manifest["files"]
+                or set(prepared["proofs"]) != set(records)
+                or any(prepared["oids"].get(n) != v["oid"] for n, v in records.items())
+            ):
+                return result
+            full = prepared["_root"]
+            live_proofs = {
+                tuple(v["immutable"]["fingerprint"][:2]): v["immutable"]
+                for v in records.values()
+            }
+            for name, old_proof in prepared["proofs"].items():
+                fresh = live_proofs.get(tuple(old_proof["fingerprint"][:2]))
+                if (
+                    fresh
+                    and fresh["sha256"] == old_proof["sha256"]
+                    and fresh["size"] == old_proof["size"]
+                ):
+                    prepared["proofs"][name] = fresh
+            records = {
+                n: dict(
+                    v,
+                    fingerprint=prepared["proofs"][n]["fingerprint"][:5],
+                    immutable=prepared["proofs"][n],
+                )
+                for n, v in records.items()
+            }
+        eligible = 0
         tree = {}
         entries_seen = 0
         from .resources import policy
@@ -118,7 +151,7 @@ def context(config, repository, audit=False):
             modified = record.get("modified")
             if modified is not None and (type(modified) is not int or modified < 0):
                 continue
-            source = full / path
+            source = source_full / path
             info = tree[path]
             if [
                 info.st_dev,
@@ -136,6 +169,7 @@ def context(config, repository, audit=False):
                 info, item, byte_proof, allow_expired=audit
             ):
                 continue
+            eligible += 1
             result["sources"].setdefault(
                 oid,
                 dict(
@@ -149,10 +183,24 @@ def context(config, repository, audit=False):
                     verified=byte_proof,
                 ),
             )
+        if prepared is not None and eligible == len(manifest["files"]):
+            result["prepared"] = prepared
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         # An incomplete or damaged seal must never turn into trusted evidence.
         result["sources"] = {}
     return result
+
+
+def context(config, repository, audit=False, force_current=False):
+    from . import object_refs, prepared_snapshot
+
+    if not force_current and object_refs.enabled(config):
+        candidate = prepared_snapshot.candidate(config, repository)
+        if candidate is not None:
+            result = _context(config, repository, audit, prepared=candidate)
+            if result.get("prepared"):
+                return result
+    return _context(config, repository, audit)
 
 
 def copy_cached(context, oid, size, relative, destination):
@@ -164,7 +212,10 @@ def copy_cached(context, oid, size, relative, destination):
         from . import immutable
 
         context["verified"][relative.as_posix()] = immutable.link(
-            source, destination, record["verified"]
+            source,
+            destination,
+            record["verified"],
+            **({"require_link": True} if context.get("hardlink_only") else {}),
         )
     else:
         if fingerprint(source) != record["fingerprint"]:
@@ -264,6 +315,15 @@ def audit_idle(config):
                 valid = digest.hexdigest() == proof["sha256"] and immutable.matches(
                     source["source"], source["item"], proof, allow_expired=True
                 )
+                prepared = value.get("prepared")
+                if prepared:
+                    for current in prepared["proofs"].values():
+                        if current["fingerprint"] == proof["fingerprint"]:
+                            if valid:
+                                current["verified_at"] = time.time()
+                            else:
+                                prepared["status"] = "invalid"
+                            changed = True
                 for name, record in list(seal["records"].items()):
                     current = record.get("immutable")
                     if current and current["fingerprint"] == proof["fingerprint"]:
@@ -274,6 +334,10 @@ def audit_idle(config):
                         changed = True
             if changed:
                 atomic(path, seal)
+                if value.get("prepared"):
+                    from .prepared_snapshot import public
+
+                    atomic(value["prepared"]["_state"], public(value["prepared"]))
         except (OSError, ValueError, KeyError, TypeError):
             # Publication independently refuses stale or invalid cache evidence.
             continue

@@ -57,8 +57,9 @@ def record(path, item):
     )
 
 
-def link(source, destination, proof):
-    before = source.lstat()
+def link(source, destination, proof, require_link=False):
+    source = os.fspath(source)
+    before = os.lstat(source)
     if not matches_stat(before, proof, proof):
         raise ValueError("immutable source identity changed")
     try:
@@ -72,15 +73,19 @@ def link(source, destination, proof):
             errno.EMLINK,
         ):
             raise
+        if require_link:
+            raise
         shutil.copyfile(source, destination)
         digest = hashlib.sha256()
         with destination.open("rb") as stream:
             for chunk in iter(lambda: stream.read(1048576), b""):
                 digest.update(chunk)
-        if digest.hexdigest() != proof["sha256"] or not matches(source, proof, proof):
+        if digest.hexdigest() != proof["sha256"] or not matches_stat(
+            os.lstat(source), proof, proof
+        ):
             raise ValueError("immutable fallback copy differs")
         return record(destination, proof)
-    after = source.lstat()
+    after = os.lstat(source)
     current = identity(after)
     previous = proof["fingerprint"]
     if (
@@ -93,3 +98,21 @@ def link(source, destination, proof):
     # keep all views of this inode consistent, without accepting new bytes.
     proof["fingerprint"][:] = current
     return proof
+
+
+def unlink_view(path, source, proof):
+    before = os.lstat(path)
+    if not matches_stat(before, proof, proof) or identity(os.lstat(source)) != identity(
+        before
+    ):
+        raise ValueError("prepared source identity changed")
+    os.unlink(path)
+    after = os.lstat(source)
+    current, previous = identity(after), proof["fingerprint"]
+    if (
+        current[:4] != previous[:4]
+        or current[5:] != previous[5:]
+        or after.st_nlink != before.st_nlink - 1
+    ):
+        raise ValueError("prepared source changed while unlinking")
+    proof["fingerprint"][:] = current
