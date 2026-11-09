@@ -303,6 +303,13 @@ class Recovery(unittest.TestCase):
                 "published",
             )
             self.assertEqual((self.base / "current/pic.png").read_bytes(), data)
+            snapshot_file = self.base / "releases" / sha / "images/pic.png"
+            serving_file = self.base / "releases" / ("images-" + sha) / "pic.png"
+            self.assertEqual(snapshot_file.stat().st_ino, serving_file.stat().st_ino)
+        self.assertNotEqual(
+            (self.base / "releases" / versions[0] / "images/pic.png").stat().st_ino,
+            (self.base / "releases" / versions[1] / "images/pic.png").stat().st_ino,
+        )
         target = self.base / "releases" / ("images-" + versions[0]) / "pic.png"
         target.write_bytes(b"corrupted")
         with self.assertRaises(ValueError):
@@ -319,6 +326,31 @@ class Recovery(unittest.TestCase):
             ],
             b"attachment",
         )
+
+        # Concurrent readback failure cannot install or activate a new release.
+        (source / "public/images/pic.png").write_bytes(b"image-three")
+        git("add", ".")
+        git("commit", "-m", "rejected readback")
+        rejected = git("rev-parse", "HEAD").decode().strip()
+        jid = m.enqueue(self.c, "fixture", rejected, "corrupt-fixture")
+        read = store.get_object
+
+        def corrupt(**kwargs):
+            response = read(**kwargs)
+            response["Body"].close()
+            return dict(Body=io.BytesIO(b"corrupt"))
+
+        with (
+            patch.object(m, "s3client", return_value=store),
+            patch.object(store, "get_object", side_effect=corrupt),
+        ):
+            m.work_once(self.c)
+        self.assertEqual(
+            m.read_job(self.root / "state/jobs" / (jid + ".json"))["status"],
+            "failed",
+        )
+        self.assertFalse((self.base / "releases" / rejected).exists())
+        self.assertEqual((self.base / "current/pic.png").read_bytes(), b"image-two")
 
 
 if __name__ == "__main__":

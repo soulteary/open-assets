@@ -191,9 +191,17 @@ def collect(root, refresh_storage=False):
     ids = command(
         "docker", "compose", "--project-directory", str(root), "ps", "-aq"
     ).split()
-    external = command(
-        "docker", "ps", "-aq", "--filter", "label=com.docker.compose.service=traefik"
-    ).split()
+    external = []
+    if env.get("TRAEFIK_PROJECT"):
+        external = command(
+            "docker",
+            "ps",
+            "-aq",
+            "--filter",
+            "label=com.docker.compose.service=traefik",
+            "--filter",
+            "label=com.docker.compose.project=" + env["TRAEFIK_PROJECT"],
+        ).split()
     ids = list(dict.fromkeys(ids + external))
     inspections = json.loads(command("docker", "inspect", *ids)) if ids else []
     rows = {}

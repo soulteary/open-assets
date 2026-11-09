@@ -58,8 +58,10 @@ def load(path=None):
     raw = P(path or CONFIG).read_bytes()
     c = yaml.safe_load(raw)
     from .resources import policy
+    from .publication import policy as publication_policy
 
     policy(c)
+    publication_policy(c)
     if c.get("schema_version") != 1:
         raise ValueError("unsupported schema")
     keys = set()
@@ -211,18 +213,20 @@ def s3client(c, bounded=False):
     )
 
 
-def export(c, r, g, sha, dest, check=None):
+def export(c, r, g, sha, dest, check=None, reuse=None):
     """Read committed blobs directly; do not checkout or execute repository code.
 
     Image checks use extensions, not file signatures. Other public files are
     attachments and remain subject to the same path and size limits.
     """
     from .resources import run_git
+    from .git_batch import GitBatch
 
     entries = run_git(
-        g, ["ls-tree", "-rz", sha, "--", r["source_directory"]], c, check=check
+        g, ["ls-tree", "-rlz", sha, "--", r["source_directory"]], c, check=check
     ).split(b"\0")
     files = []
+    blobs = []
     total = 0
     reserved = {
         x["mount_path"].strip("/") for x in c["repositories"] if x["mount_path"] != "/"
@@ -233,7 +237,7 @@ def export(c, r, g, sha, dest, check=None):
         if not entry:
             continue
         meta, name = entry.split(b"\t", 1)
-        mode, typ, oid = meta.split()
+        mode, typ, oid, raw_size = meta.split()
         if mode not in (b"100644", b"100755") or typ != b"blob":
             raise ValueError("unsupported Git entry")
         path = name.decode("utf-8")
@@ -247,7 +251,9 @@ def export(c, r, g, sha, dest, check=None):
             and rel.parts[1] in reserved
         ):
             raise ValueError("reserved URL prefix")
-        size = int(run_git(g, ["cat-file", "-s", oid.decode()], c, check=check))
+        size = int(raw_size)
+        if size < 0:
+            raise ValueError("invalid Git blob size")
         if size > r.get("max_file_bytes", 104857600):
             raise ValueError("file limit exceeded")
         if rel.suffix.lower() == ".svg":
@@ -256,7 +262,7 @@ def export(c, r, g, sha, dest, check=None):
             if size > MAX_BYTES:
                 raise ValueError("SVG size limit exceeded")
         total += size
-        if total > r.get("max_bytes", 1073741824) or len(files) >= r.get(
+        if total > r.get("max_bytes", 1073741824) or len(blobs) >= r.get(
             "max_files", 10000
         ):
             raise ValueError("publication limit exceeded")
@@ -271,43 +277,61 @@ def export(c, r, g, sha, dest, check=None):
             ".svg",
         }:
             raise ValueError("image format not allowed")
-        out = dest / rel
-        out.parent.mkdir(parents=True, exist_ok=True)
-        with out.open("wb") as stream:
-            run_git(
-                g, ["cat-file", "blob", oid.decode()], c, output=stream, check=check
-            )
-            stream.flush()
-            os.fsync(stream.fileno())
-        if rel.suffix.lower() == ".svg":
-            from .svg import validate
+        blobs.append((oid, rel, path, size))
+        if reuse is not None:
+            reuse["oids"][rel.as_posix()] = oid.decode()
+    # Reject all unsafe paths, types and size budgets before reading any blob.
+    with GitBatch(g, c, check=check) as batch:
+        for oid, rel, path, size in blobs:
+            out = dest / rel
+            out.parent.mkdir(parents=True, exist_ok=True)
+            if reuse is not None:
+                from .incremental import copy_cached
 
-            validate(out)
-        digest = hashlib.sha256()
-        actual_size = 0
-        with out.open("rb") as stream:
-            first = True
-            while block := stream.read(1024 * 1024):
-                if check is not None:
-                    check()
-                if first and block.startswith(
-                    b"version https://git-lfs.github.com/spec/v1"
-                ):
-                    raise ValueError("LFS unsupported")
-                first = False
-                actual_size += len(block)
-                digest.update(block)
-        if actual_size != size:
-            raise ValueError("Git blob size mismatch")
-        files.append(
-            dict(
-                path=rel.as_posix(),
-                size=size,
-                sha256=digest.hexdigest(),
-                content_type=mimetypes.guess_type(path)[0]
-                or "application/octet-stream",
+                cached = copy_cached(reuse, oid, size, rel, out)
+                if cached is not None:
+                    if rel.suffix.lower() == ".svg":
+                        from .svg import validate
+
+                        validate(out)
+                    cached["content_type"] = (
+                        mimetypes.guess_type(path)[0] or "application/octet-stream"
+                    )
+                    files.append(cached)
+                    continue
+            with out.open("wb") as stream:
+                batch.write_blob(oid, size, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if rel.suffix.lower() == ".svg":
+                from .svg import validate
+
+                validate(out)
+            digest = hashlib.sha256()
+            actual_size = 0
+            with out.open("rb") as stream:
+                first = True
+                while block := stream.read(1024 * 1024):
+                    if check is not None:
+                        check()
+                    if first and block.startswith(
+                        b"version https://git-lfs.github.com/spec/v1"
+                    ):
+                        raise ValueError("LFS unsupported")
+                    first = False
+                    actual_size += len(block)
+                    digest.update(block)
+            if actual_size != size:
+                raise ValueError("Git blob size mismatch")
+            files.append(
+                dict(
+                    path=rel.as_posix(),
+                    size=size,
+                    sha256=digest.hexdigest(),
+                    content_type=mimetypes.guess_type(path)[0]
+                    or "application/octet-stream",
+                )
             )
-        )
     if not files:
         raise ValueError("empty publication")
     return files
@@ -491,7 +515,18 @@ def publish(c, j):
     A failure may leave uploaded objects or staging data. Never compensate by
     deleting them: a preceding attempt may already have made them readable.
     """
-    from .resources import fetch, verify_body
+    from .resources import fetch
+    from .publication import upload, link_or_copy, policy as publication_policy
+
+    publication_policy(c)
+    started = last_stage = time.monotonic()
+    j["timings"] = {}
+
+    def stage(name):
+        nonlocal last_stage
+        now = time.monotonic()
+        j["timings"][name] = round(now - last_stage, 6)
+        last_stage = now
 
     r = repo(c, j["key"])
     state = P(c["state_root"])
@@ -507,36 +542,31 @@ def publish(c, j):
         j["status"] = "superseded"
         return
     git(g, "merge-base", "--is-ancestor", j["sha"], head, c=c)
+    stage("fetch")
     if shutil.disk_usage(c["images_root"]).free < r.get("max_bytes", 1073741824) * 2:
         raise ValueError("insufficient staging capacity")
     base = P(c["images_root"]) / "repos" / r["key"]
     (base / "releases").mkdir(parents=True, exist_ok=True)
     staging = P(tempfile.mkdtemp(prefix=".staging-", dir=base))
     try:
-        files = export(c, r, g, j["sha"], staging)
+        from . import incremental
+
+        reuse = incremental.context(c, r)
+        files = export(c, r, g, j["sha"], staging, reuse=reuse)
         images = image_files(files)  # Validate before the first remote write.
+        stage("export")
         s = s3client(c, bounded=True)
         prefix = f"repositories/{r['key']}/releases/{j['sha']}/"
-        for item in files:
-            key = prefix + item["path"]
-            try:
-                existing = s.get_object(Bucket=c["bucket"], Key=key)
-            except s.exceptions.NoSuchKey:
-                existing = None
-            if existing is not None:
-                verify_body(existing["Body"], item)
-            else:
-                with (staging / item["path"]).open("rb") as stream:
-                    s.put_object(
-                        Bucket=c["bucket"],
-                        Key=key,
-                        Body=stream,
-                        ContentLength=item["size"],
-                        ContentType=item["content_type"],
-                        CacheControl="public, max-age=31536000, immutable",
-                        Metadata={"sha256": item["sha256"]},
-                    )
-                verify_body(s.get_object(Bucket=c["bucket"], Key=key)["Body"], item)
+        etags = upload(
+            c,
+            s,
+            prefix,
+            staging,
+            files,
+            reuse=reuse["reused"],
+            stats=reuse.setdefault("object_stats", {}),
+        )
+        stage("objects")
         manifest = dict(key=r["key"], sha=j["sha"], files=files, config=c["revision"])
         from .object_retention import restoration_record
 
@@ -554,13 +584,18 @@ def publish(c, j):
             raise ValueError("missing images directory")
         if not image_final.exists():
             image_tmp = P(tempfile.mkdtemp(prefix=".images-", dir=base))
-            shutil.copytree(final / "images", image_tmp, dirs_exist_ok=True)
-            for f in image_tmp.rglob("*"):
-                if f.is_file():
-                    with f.open("rb") as syncfile:
-                        os.fsync(syncfile.fileno())
-            sync_tree(image_tmp)
-            os.rename(image_tmp, image_final)
+            try:
+                shutil.copytree(
+                    final / "images",
+                    image_tmp,
+                    dirs_exist_ok=True,
+                    copy_function=link_or_copy,
+                )
+                sync_tree(image_tmp)
+                os.rename(image_tmp, image_final)
+            finally:
+                shutil.rmtree(image_tmp, ignore_errors=True)
+        stage("snapshot")
         # Recheck before activation. A Push can still race after this check;
         # Git head and the filesystem link do not share a commit boundary.
         fetch(c, r, g)
@@ -582,7 +617,19 @@ def publish(c, j):
         activate_images(base, "images-" + j["sha"], images)
         j["status"] = "published"
         j["finished"] = time.time()
+        stage("activation")
+        j["timings"]["total"] = round(time.monotonic() - started, 6)
         atomic(state / "published" / r["key"], manifest)
+        j["incremental"] = dict(
+            reused_files=reuse["reused_files"],
+            changed_files=len(files) - reuse["reused_files"],
+            object_transfers=reuse["object_stats"],
+        )
+        # A failed optimization receipt must not turn a completed activation into failure.
+        try:
+            incremental.save(c, r["key"], j["sha"], files, reuse, etags)
+        except (OSError, ValueError, KeyError, TypeError):
+            j["incremental"]["seal"] = "unavailable"
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 

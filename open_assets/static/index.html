@@ -9,7 +9,7 @@
 </head>
 <body>
 <main>
-  <header><div><p class="eyebrow">OPEN ASSETS / SYSTEM INFO</p><h1>运行状态</h1><p>先确认服务与磁盘，再按需查看仓库、恢复和审计记录。</p></div><div><div id="freshness" role="status">正在读取采集结果…</div><p><a href="/session">认证状态</a></p></div></header>
+  <header><div><p class="eyebrow">OPEN ASSETS / SYSTEM INFO</p><h1><a id="status-home" href="/">运行状态</a></h1><p>先确认服务与磁盘，再按需查看仓库、恢复和审计记录。</p></div><div><div id="freshness" role="status">正在读取采集结果…</div><p><button id="refresh-data" type="button">刷新数据</button> <a href="/session">认证状态</a></p><p id="refresh-result" role="status" aria-live="polite"></p></div></header>
   <p id="error" role="alert" hidden></p>
   <div id="capacity-notice" class="capacity-notice" role="status"></div>
   <section aria-label="主机概览" id="overview" class="overview"></section>
@@ -62,7 +62,7 @@
   <section id="repair-section" hidden><h2>最近的健康恢复操作</h2><p class="muted">仅记录受限重启尝试；是否恢复以组件当前健康状态为准。</p><div id="repairs"></div></section>
   <section id="performance-section" hidden><h2>最近一次限量压测</h2><p id="performance-details" class="muted">固定并发、固定时长的读取测试；不是服务器容量上限。</p><div class="table-wrap"><table><thead><tr><th>场景</th><th>并发</th><th>请求数 / 错误</th><th>吞吐 req/s</th><th>p50 / p95 / p99 ms</th></tr></thead><tbody id="performance"></tbody></table></div></section>
   </div>
-  <footer><span id="host-details"></span><p>只读快照，每 30 秒刷新。采集失败会保留旧数据并提示过期。看板不提供命令执行、文件浏览或配置修改。</p></footer>
+  <footer><span id="host-details"></span><p>每 30 秒自动读取快照；“刷新数据”会重新采集主机状态。采集失败会保留旧数据并提示过期。看板不提供命令执行、文件浏览或配置修改。</p></footer>
 </main>
 </body>
 </html>

@@ -8,12 +8,14 @@ Info 通过 Stargate 提供只读状态页面。先看组件、磁盘和证书�
 
 ```sh
 cd /app/open-assets
-sudo install -d -o root -g 20010 -m 0750 /data/asset-stack/info
+sudo install -d -o root -g 20010 -m 0750 /data/asset-stack/info /data/asset-stack/info-refresh
 sudo docker compose up -d --no-build info
 for name in info objects audits resources doctor retention object-retention repair logrotate; do
   sudo install -m 0644 "config/systemd/open-assets-$name.service" "config/systemd/open-assets-$name.timer" /etc/systemd/system/
 done
+sudo install -m 0644 config/systemd/open-assets-info-refresh.service /etc/systemd/system/
 sudo systemctl daemon-reload
+sudo systemctl enable --now open-assets-info-refresh.service
 sudo python3 -m open_assets.telemetry --root /app/open-assets
 sudo systemctl enable --now open-assets-info.timer open-assets-objects.timer open-assets-audits.timer open-assets-resources.timer open-assets-doctor.timer
 ```
@@ -21,6 +23,10 @@ sudo systemctl enable --now open-assets-info.timer open-assets-objects.timer ope
 上述命令安装所有单元，只启用采集。对象清理账号和删除权限按对象保留文档另行准备。保留清理、健康恢复和日志轮转分别按[本地保留](retention.md)、[对象保留](object-retention.md)、[健康检查](health.md)和[日志](logging.md)启用。`doctor` 将采集与日志轮转列为必需项，自动修复和两个保留任务列为可选项。未启用可选项不报故障；已执行失败和缓存过期仍提示，见[部署诊断](doctor.md)。
 
 首次安装后，各采集器按自己的启动延迟和间隔运行，页面可能暂时显示“尚未采集”。确认日志轮转已按其文档安装，再用 doctor 检查缺项；不要为了消除提示启用自动修复或实际清理。需要立即取样时可手动启动对应的采集 service，完成后再启动 `open-assets-info.service` 生成页面快照。
+
+点击标题“运行状态”会重新加载页面；“刷新数据”会请求重新采集主机、容器、证书及有界本地容量信息，并在完成后重新获取快照。采集中按钮禁用；全局 10 秒冷却、采集锁和失败提示避免重复采集及将旧数据误报为新结果。对象数量、审计和诊断仍显示独立采集器的时间，不因按钮点击执行 S3 扫描、清理或修复。
+
+Info 仍只读挂载快照，通过仅供 UID 20010 使用的 Unix socket 请求固定的采集动作；不挂载 Docker socket、不接受命令或路径参数。手动刷新 POST 需要同源和专用请求头，整个入口继续由 Stargate 认证保护。已有部署需安装上述独立采集服务、创建 socket 目录并更新 Info 挂载；未安装时按钮会明确报错，自动读取快照仍可用。
 
 主机快照每轮结束后约 30 秒更新，页面每 30 秒读取一次。超过 120 秒会标记过期。查看采集故障：
 

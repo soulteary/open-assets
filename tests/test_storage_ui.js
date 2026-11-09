@@ -308,3 +308,34 @@ test('manual confirmation greys only the specific refusal and shows no private r
 test('changed evidence or new attempts invalidate manual confirmation and explain how to review again',()=>{
  const ui=setup(),data=fixture();data.restoration_closures={status:'ok',repositories:[{key:'assets',result_status:'ok',attempt:{status:'refused',reason:'source-unavailable',started_at:1,finished_at:2},acknowledgment:{status:'invalid',reason:'new-attempt'},reminder:{state:'active',reason:'close-review'}}]};ui.context.render(data);assert.match(ui.get('tab-audit').textContent,/提示/);assert.match(ui.get('restore-close-repositories').textContent,/旧人工确认不覆盖新的结案尝试/);assert.match(ui.get('restore-close-repositories').textContent,/acknowledge-closure assets AUDIT_ID --reason/);data.restoration_closures.repositories[0].acknowledgment.reason='evidence-changed';ui.context.render(data);assert.match(ui.get('restore-close-repositories').textContent,/不要直接复用旧令牌/);
 });
+
+test('manual refresh requests collection, then reads latest data and reenables control', async () => {
+  const ui=setup(), calls=[];
+  ui.context.fetch=async (url,options)=>{calls.push({url,options});return {ok:true,status:200,json:async()=>url==='/api/refresh'?{status:'collected',collected_at:Date.now()/1000}:fixture()};};
+  await ui.context.refreshData();
+  assert.deepEqual(calls.map(x=>x.url),['/api/refresh','/api/status']);
+  assert.equal(calls[0].options.method,'POST');
+  assert.equal(calls[0].options.headers['X-Open-Assets-Refresh'],'1');
+  assert.equal(ui.get('refresh-data').disabled,false);
+  assert.match(ui.get('refresh-result').textContent,/已刷新/);
+  assert.equal(ui.get('error').hidden,true);
+});
+
+test('manual refresh failures preserve previous display and never claim collection success', async () => {
+  const ui=setup();ui.context.render(fixture());
+  ui.context.fetch=async()=>({ok:false,status:503,json:async()=>({status:'unavailable'})});
+  await ui.context.refreshData();
+  assert.match(ui.get('refresh-result').textContent,/刷新未完成/);
+  assert.doesNotMatch(ui.get('refresh-result').textContent,/采集完成/);
+  assert.equal(ui.get('refresh-data').disabled,false);
+  assert.match(ui.get('repositories').textContent,/3 版/);
+});
+
+test('manual refresh cooldown reads recent snapshot and title is a normal page reload link', async () => {
+  const ui=setup();
+  ui.context.fetch=async url=>({ok:url!=='/api/refresh',status:url==='/api/refresh'?429:200,json:async()=>url==='/api/refresh'?{status:'cooldown'}:fixture()});
+  await ui.context.refreshData();
+  assert.match(ui.get('refresh-result').textContent,/刚刚已采集/);
+  assert.match(html,/<a id="status-home" href="\/">运行状态<\/a>/);
+  assert.equal(ui.get('refresh-data').disabled,false);
+});

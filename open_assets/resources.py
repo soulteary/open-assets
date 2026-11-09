@@ -256,6 +256,7 @@ def fetch(c, repository, path, check=None):
 def verify_body(body, item):
     """Read at most the expected length plus one byte; always close the body."""
     digest = hashlib.sha256()
+    md5 = hashlib.md5(usedforsecurity=False)
     size = 0
     try:
         while True:
@@ -266,7 +267,9 @@ def verify_body(body, item):
             if size > item["size"]:
                 raise ValueError("object size mismatch")
             digest.update(block)
+            md5.update(block)
         if size != item["size"] or digest.hexdigest() != item["sha256"]:
             raise ValueError("object verification failed")
+        return '"' + md5.hexdigest() + '"'
     finally:
         body.close()

@@ -77,7 +77,7 @@ services:
     entrypoint: [python, -m, open_assets.info]
     environment:
       INFO_AUTH_URL: https://auth-${NODE_NAME}.console.${PUBLIC_BASE}
-    volumes: ['${DATA_ROOT}/info:/info:ro']
+    volumes: ['${DATA_ROOT}/info:/info:ro','${DATA_ROOT}/info-refresh:/run/info-refresh:ro']
     tmpfs: ['/tmp:size=16m']
     mem_limit: 128m
     cpus: 0.25
