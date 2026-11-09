@@ -518,24 +518,37 @@ fn run() -> Result<()> {
         "object-reader",
         "info",
     ])?;
-    wait(
+    let mut readiness = json!({});
+    let ready = wait(
         || {
-            Ok(client
+            let webhook = client
                 .get("http://127.0.0.1:19080/healthz")
-                .send()?
-                .status()
-                == 200
-                && client
-                    .get("http://127.0.0.1:18082/healthz")
-                    .send()?
-                    .status()
-                    == 200
-                && read("/data/asset-stack/publisher/worker-heartbeat.json")?["updated_at"]
-                    .as_f64()
-                    .is_some_and(|t| open_assets::common::now() - t < 30.0))
+                .send()
+                .is_ok_and(|r| r.status() == 200);
+            let info = client
+                .get("http://127.0.0.1:18082/healthz")
+                .send()
+                .is_ok_and(|r| r.status() == 200);
+            let heartbeat = read("/data/asset-stack/publisher/worker-heartbeat.json")
+                .ok()
+                .and_then(|v| v["updated_at"].as_f64())
+                .is_some_and(|t| open_assets::common::now() - t < 30.0);
+            readiness =
+                json!({"webhook_host":webhook,"info_host":info,"publisher_heartbeat":heartbeat});
+            Ok(webhook && info && heartbeat)
         },
         60,
-    )?;
+    );
+    if ready.is_err() {
+        // Only boolean health results may enter public CI logs. Container logs,
+        // configuration and private fixture records are intentionally omitted.
+        for role in ["webhook", "publisher", "info"] {
+            readiness[format!("{role}_internal")] =
+                json!(compose(&["exec", "-T", role, "open-assets", "health", role]).is_ok());
+        }
+        eprintln!("Native runtime readiness: {readiness}");
+    }
+    ready.context("native runtime readiness")?;
     fs::create_dir_all("private/e2e/client/public/images/2026/10/10")?;
     let fixture = Path::new(ROOT).join("private/e2e");
     fs::set_permissions(&fixture, fs::Permissions::from_mode(0o700))?;
