@@ -448,3 +448,104 @@ fn missing_reference_map_still_defaults_but_present_non_object_maps_are_rejected
         assert!(source(&missing, item).is_err());
     }
 }
+
+#[test]
+fn retention_tree_stats_preserves_logical_size_and_subsecond_file_directory_and_root_mtimes() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("tree");
+    let nested = root.join("nested/deep");
+    fs::create_dir_all(&nested).unwrap();
+    let first = root.join("first.bin");
+    let second = nested.join("second.bin");
+    let alias = root.join("first-alias.bin");
+    fs::write(&first, b"abc").unwrap();
+    fs::write(&second, b"12345").unwrap();
+    fs::hard_link(&first, &alias).unwrap();
+    let set_time = |path: &Path, nanos: u64| {
+        let stamp = SystemTime::UNIX_EPOCH
+            + Duration::from_secs(1_700_000_000)
+            + Duration::from_nanos(nanos);
+        File::open(path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(stamp))
+            .unwrap();
+    };
+    set_time(&root, 100_000_000);
+    set_time(&root.join("nested"), 2_222_222_222);
+    set_time(&first, 4_444_444_444);
+    set_time(&second, 3_333_333_333);
+    set_time(&nested, 5_555_555_555);
+    let expected = |path: &Path| {
+        fs::symlink_metadata(path)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64()
+    };
+    let measured =
+        maintenance::tree_stats(&root, std::time::Instant::now() + Duration::from_secs(5)).unwrap();
+    assert_eq!(measured, (11, expected(&nested)));
+    assert_eq!(
+        fs::metadata(&first).unwrap().ino(),
+        fs::metadata(&alias).unwrap().ino()
+    );
+    set_time(&second, 6_666_666_666);
+    assert_eq!(
+        maintenance::tree_stats(&root, std::time::Instant::now() + Duration::from_secs(5)).unwrap(),
+        (11, expected(&second))
+    );
+    set_time(&root, 7_777_777_777);
+    assert_eq!(
+        maintenance::tree_stats(&root, std::time::Instant::now() + Duration::from_secs(5)).unwrap(),
+        (11, expected(&root))
+    );
+    let empty = temp.path().join("empty");
+    fs::create_dir(&empty).unwrap();
+    set_time(&empty, 8_888_888_888);
+    assert_eq!(
+        maintenance::tree_stats(&empty, std::time::Instant::now() + Duration::from_secs(5))
+            .unwrap(),
+        (0, expected(&empty))
+    );
+}
+#[test]
+fn retention_tree_stats_rejects_linked_roots_files_and_directories_and_expired_deadline() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("tree");
+    let outside = temp.path().join("outside");
+    fs::create_dir(&root).unwrap();
+    fs::create_dir(&outside).unwrap();
+    let sentinel = outside.join("sentinel");
+    fs::write(&sentinel, b"outside contents stay intact").unwrap();
+    let linked_root = temp.path().join("linked-root");
+    std::os::unix::fs::symlink(&root, &linked_root).unwrap();
+    assert!(maintenance::tree_stats(
+        &linked_root,
+        std::time::Instant::now() + Duration::from_secs(5)
+    )
+    .is_err());
+    let link = root.join("linked-file");
+    std::os::unix::fs::symlink(&sentinel, &link).unwrap();
+    let error = maintenance::tree_stats(&root, std::time::Instant::now() + Duration::from_secs(5))
+        .unwrap_err();
+    assert!(error.to_string().contains("unsafe maintenance tree entry"));
+    fs::remove_file(link).unwrap();
+    let link = root.join("linked-directory");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    let error = maintenance::tree_stats(&root, std::time::Instant::now() + Duration::from_secs(5))
+        .unwrap_err();
+    assert!(error.to_string().contains("unsafe maintenance tree entry"));
+    fs::remove_file(link).unwrap();
+    assert_eq!(
+        fs::read(&sentinel).unwrap(),
+        b"outside contents stay intact"
+    );
+    assert!(
+        maintenance::tree_stats(&root, std::time::Instant::now() - Duration::from_secs(1))
+            .unwrap_err()
+            .to_string()
+            .contains("maintenance timeout")
+    );
+}
