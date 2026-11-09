@@ -638,12 +638,12 @@ def publish(c, j):
         subprocess.run(
             ["git", "init", "--bare", str(g)], check=True, stdout=subprocess.DEVNULL
         )
-    fetch(c, r, g)
-    head = git(g, "rev-parse", "refs/heads/source", c=c).decode().strip()
+    head = fetch(c, r, g)
     if j["kind"] == "auto" and head != j["sha"]:
         j["status"] = "superseded"
         return
-    git(g, "merge-base", "--is-ancestor", j["sha"], head, c=c)
+    if j["sha"] != head:
+        git(g, "merge-base", "--is-ancestor", j["sha"], head, c=c)
     stage("fetch")
     if shutil.disk_usage(c["images_root"]).free < r.get("max_bytes", 1073741824) * 2:
         raise ValueError("insufficient staging capacity")
@@ -780,8 +780,7 @@ def publish(c, j):
 
             head = remote_head(c, r, g)
         else:
-            fetch(c, r, g)
-            head = git(g, "rev-parse", "refs/heads/source", c=c).decode().strip()
+            head = fetch(c, r, g)
         if j["kind"] == "auto" and head != j["sha"]:
             j["status"] = "superseded"
             return
