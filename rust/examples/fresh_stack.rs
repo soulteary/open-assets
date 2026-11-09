@@ -106,9 +106,12 @@ fn app(args: &[&str]) -> Result<Vec<u8>> {
 fn worker(args: &[&str]) -> Result<Vec<u8>> {
     let mut a = vec!["exec", "-T", "publisher", "open-assets"];
     a.extend_from_slice(args);
+    compose_when_idle(&a)
+}
+fn compose_when_idle(args: &[&str]) -> Result<Vec<u8>> {
     let started = Instant::now();
     loop {
-        match compose(&a) {
+        match compose(args) {
             Ok(v) => return Ok(v),
             Err(e) => {
                 let busy = e.downcast_ref::<FixtureExit>().is_some_and(|e| {
@@ -460,7 +463,7 @@ fn run() -> Result<()> {
     fs::write(
         "private/e2e-ports.yaml",
         serde_json::to_vec(
-            &json!({"services":{"nginx":{"ports":["127.0.0.1:18081:8080"]},"info":{"ports":["127.0.0.1:18082:8082"]},"object-reader":{"ports":["127.0.0.1:18083:8083"]},"webhook":{"ports":["127.0.0.1:19080:9000"]}}}),
+            &json!({"services":{"nginx":{"ports":["127.0.0.1:18081:8080"]},"info":{"ports":["127.0.0.1:18082:8082"]},"object-reader":{"ports":["127.0.0.1:18083:8083"]}}}),
         )?,
     )?;
     compose(&["config", "--quiet"])?;
@@ -521,10 +524,11 @@ fn run() -> Result<()> {
     let mut readiness = json!({});
     let ready = wait(
         || {
-            let webhook = client
-                .get("http://127.0.0.1:19080/healthz")
-                .send()
-                .is_ok_and(|r| r.status() == 200);
+            // Webhook deliberately belongs only to the internal hooks network.
+            // Probe its native local endpoint; the signed SSH push below then
+            // verifies the real Gitea-to-Webhook route, without a host port.
+            let webhook =
+                compose(&["exec", "-T", "webhook", "open-assets", "health", "webhook"]).is_ok();
             let info = client
                 .get("http://127.0.0.1:18082/healthz")
                 .send()
@@ -533,8 +537,7 @@ fn run() -> Result<()> {
                 .ok()
                 .and_then(|v| v["updated_at"].as_f64())
                 .is_some_and(|t| open_assets::common::now() - t < 30.0);
-            readiness =
-                json!({"webhook_host":webhook,"info_host":info,"publisher_heartbeat":heartbeat});
+            readiness = json!({"webhook_internal":webhook,"info_host":info,"publisher_heartbeat":heartbeat});
             Ok(webhook && info && heartbeat)
         },
         60,
@@ -742,8 +745,12 @@ fn run() -> Result<()> {
         checked["diagnosis"] == "verified",
         "restoration verification failed"
     );
-    let preview: Value =
-        serde_json::from_slice(&compose(&["run", "--rm", "--no-deps", "object-cleaner"])?)?;
+    let preview: Value = serde_json::from_slice(&compose_when_idle(&[
+        "run",
+        "--rm",
+        "--no-deps",
+        "object-cleaner",
+    ])?)?;
     ensure!(
         preview["status"] == "complete" || preview["status"] == "disabled",
         "cleanup preview unavailable"
