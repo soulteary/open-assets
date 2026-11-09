@@ -201,3 +201,56 @@ def link_or_copy(source, destination):
             raise
         shutil.copy2(source, destination)
     return destination
+
+
+class PublisherConnection:
+    """Reuse transport only; every object is rechecked and every request signed."""
+
+    def __init__(self):
+        self.client = None
+        self.identity = None
+        self.created = 0
+
+    def get(self, config, factory):
+        import os
+        import time
+        from pathlib import Path
+
+        def fingerprint(name):
+            path = os.environ.get(name)
+            if path is None:
+                return None
+            info = Path(path).stat()
+            return (
+                path,
+                info.st_dev,
+                info.st_ino,
+                info.st_size,
+                info.st_mtime_ns,
+                info.st_ctime_ns,
+            )
+
+        identity = (
+            config["endpoint"],
+            config["bucket"],
+            *(
+                fingerprint(name)
+                for name in ("S3_ACCESS_KEY_FILE", "S3_SECRET_KEY_FILE", "S3_CA_FILE")
+            ),
+        )
+        if (
+            self.client is None
+            or identity != self.identity
+            or time.monotonic() - self.created >= 30
+        ):
+            self.close()
+            self.client = factory()
+            self.identity = identity
+            self.created = time.monotonic()
+        return self.client
+
+    def close(self):
+        if self.client is not None:
+            self.client.close()
+            self.client = None
+            self.identity = None

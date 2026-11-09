@@ -158,7 +158,7 @@ function renderStorage(data) {
     const old = data.stale || row.measurement_stale || row.measurement_status !== 'ok';
     if (old || row.policy_status === 'unavailable' || row.partial_versions || row.unusual_entries || (data.capacity?.alerts || []).some(alert => alert.key === row.key)) tr.className = 'warning';
     tr.append(storageCell(row.key, [row.measured_at ? '本地统计于 ' + date(row.measured_at) + (old ? '（旧数据 / 需复查）' : '') : '本地统计不可用']));
-    tr.append(storageCell(row.versions == null ? '—' : row.versions + ' 版', ['完整快照 ' + (row.full_copies ?? '—') + ' / 图片副本 ' + (row.image_copies ?? '—'), '未配对 ' + (row.partial_versions ?? '—') + ' · 异常条目 ' + (row.unusual_entries ?? '—')]));
+    tr.append(storageCell(row.versions == null ? '—' : row.versions + ' 版', ['完整快照 ' + (row.full_copies ?? '—') + ' / 兼容视图 ' + (row.image_copies ?? '—') + ' / 快照内共享 ' + (row.shared_image_views ?? 0), '未配对 ' + (row.partial_versions ?? '—') + ' · 异常条目 ' + (row.unusual_entries ?? '—')]));
     tr.append(storageCell(bytes(row.local_bytes), ['版本 ' + bytes(row.version_bytes) + ' · Git ' + bytes(row.git_bytes), '清理暂存 ' + bytes(row.trash_bytes) + ' · 发布暂存 ' + bytes(row.staging_bytes), '发布预留 ' + bytes(row.publication_required_bytes)]));
     const objects = (data.object_storage?.repositories || []).find(record => record.key === row.key) || {};
     const objectOld = data.stale || objects.stale || objects.status !== 'ok';

@@ -213,6 +213,7 @@ def fetch(c, repository, path, check=None):
     import shutil
     import uuid
 
+    path = Path(path)
     p = policy(c)
     root = Path(c["state_root"]) / "git"
     initial, _ = usage(path, p["scan_entries"])

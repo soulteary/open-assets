@@ -114,6 +114,29 @@ class Sources(unittest.TestCase):
             object_refs.verify_sources(dict(bucket="test"), client, records)
         self.assertEqual(client.maximum, 0)
 
+    def test_transport_reuse_invalidates_on_identity_or_trust_change(self):
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch, Mock
+        from open_assets.publication import PublisherConnection
+
+        with tempfile.TemporaryDirectory() as directory:
+            ca = Path(directory) / "ca"
+            ca.write_text("first")
+            with patch.dict(os.environ, {"S3_CA_FILE": str(ca)}):
+                connection = PublisherConnection()
+                a, b = Mock(), Mock()
+                factory = Mock(side_effect=[a, b])
+                c = dict(endpoint="https://store.invalid", bucket="test")
+                self.assertIs(connection.get(c, factory), a)
+                self.assertIs(connection.get(c, factory), a)
+                ca.write_text("changed trust")
+                self.assertIs(connection.get(c, factory), b)
+                a.close.assert_called_once()
+                connection.close()
+                b.close.assert_called_once()
+
     def test_git_transaction_is_bounded(self):
         with self.assertRaises(ValueError):
             resources.run_git(".", [], input_data=b"x" * 65537)

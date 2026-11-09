@@ -613,7 +613,12 @@ def publish(c, j):
         files = export(c, r, g, j["sha"], staging, reuse=reuse)
         images = image_files(files)  # Validate before the first remote write.
         stage("export")
-        s = s3client(c, bounded=True)
+        connection = c.get("_s3_connection")
+        s = (
+            connection.get(c, lambda: s3client(c, bounded=True))
+            if connection is not None
+            else s3client(c, bounded=True)
+        )
         prefix = f"repositories/{r['key']}/releases/{j['sha']}/"
         etags = upload(
             c,
@@ -1075,13 +1080,18 @@ def execute(a, o):
         directory = P(c["state_root"]) / "jobs"
         directory.mkdir(parents=True, exist_ok=True)
         wakeup = QueueWakeup(directory)
+        from .publication import PublisherConnection
+
+        connection = PublisherConnection()
         try:
             delay = 2
             while True:
                 wakeup.drain()
                 heartbeat["progress_at"] = time.time()
                 try:
-                    work_once(load(), heartbeat)
+                    config = load()
+                    config["_s3_connection"] = connection
+                    work_once(config, heartbeat)
                     delay = 2
                 except OSError as error:
                     queue_notice("queue-io-failed", error)
@@ -1090,6 +1100,7 @@ def execute(a, o):
                     continue
                 wakeup.wait(delay)
         finally:
+            connection.close()
             wakeup.close()
             stop.set()
     elif o.command == "compact-objects":

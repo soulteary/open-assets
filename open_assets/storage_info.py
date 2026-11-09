@@ -4,7 +4,6 @@ import hashlib
 import json
 import math
 import os
-from pathlib import Path
 import re
 import stat
 import subprocess
@@ -16,13 +15,14 @@ import yaml
 from . import retention
 
 MAX_REPOSITORIES = 100
-MAX_ENTRIES = 50000
+MAX_ENTRIES = 500000
 SCAN_SECONDS = 2
 CACHE_SECONDS = 300
 METRICS = (
     "versions",
     "full_copies",
     "image_copies",
+    "shared_image_views",
     "partial_versions",
     "local_bytes",
     "logical_bytes",
@@ -86,6 +86,8 @@ def write_cache(path, value):
 def cached_metrics(value):
     if not isinstance(value, dict) or not finite_time(value.get("measured_at")):
         return None
+    value = dict(value)
+    value.setdefault("shared_image_views", 0)
     if not all(type(value.get(k)) is int and value[k] >= 0 for k in METRICS):
         return None
     return {k: value[k] for k in (*METRICS, "measured_at")}
@@ -95,6 +97,7 @@ def measure(data_root, key, deadline, counter):
     metrics = dict.fromkeys(METRICS, 0)
     seen = set()
     copies = {}
+    embedded, direct = set(), set()
     base = data_root / "images/repos" / key
     roots = (
         (base, None),
@@ -108,13 +111,13 @@ def measure(data_root, key, deadline, counter):
                 retention.real_directory(parent)
         if not root.exists() and not root.is_symlink():
             continue
-        stack = [(root, ())]
+        stack = [(str(root), (), None)]
         while stack:
             if time.monotonic() > deadline or counter[0] >= MAX_ENTRIES:
                 raise TimeoutError("storage measurement budget exhausted")
-            path, parts = stack.pop()
+            path, parts, entry = stack.pop()
             counter[0] += 1
-            entry = path.lstat()
+            entry = entry if entry is not None else os.lstat(path)
             if not parts and not stat.S_ISDIR(entry.st_mode):
                 raise ValueError("linked storage root")
             category = fixed_category or (
@@ -147,6 +150,14 @@ def measure(data_root, key, deadline, counter):
                         copies.setdefault(match[2], set()).add(
                             "images" if match[1] else "full"
                         )
+                if (
+                    fixed_category is None
+                    and len(parts) == 3
+                    and parts[0] == "releases"
+                    and re.fullmatch(r"[a-f0-9]{40}", parts[1])
+                    and parts[2] == "images"
+                ):
+                    embedded.add(parts[1])
                 with os.scandir(path) as entries:
                     for child in entries:
                         if (
@@ -154,8 +165,28 @@ def measure(data_root, key, deadline, counter):
                             or counter[0] + len(stack) >= MAX_ENTRIES
                         ):
                             raise TimeoutError("storage measurement budget exhausted")
-                        stack.append((Path(child.path), parts + (child.name,)))
-            elif not stat.S_ISREG(entry.st_mode):
+                        stack.append(
+                            (
+                                child.path,
+                                parts + (child.name,),
+                                child.stat(follow_symlinks=False),
+                            )
+                        )
+            elif stat.S_ISREG(entry.st_mode):
+                if (
+                    fixed_category == "manifest_bytes"
+                    and len(parts) == 1
+                    and re.fullmatch(r"[a-f0-9]{40}\.json", parts[0])
+                ):
+                    manifest = retention.read_json(path)
+                    if manifest.get("image_layout") == "snapshot-v1":
+                        if (
+                            manifest.get("key") != key
+                            or manifest.get("sha") != parts[0][:-5]
+                        ):
+                            raise ValueError("invalid shared snapshot manifest")
+                        direct.add(manifest["sha"])
+            else:
                 if not (
                     fixed_category is None
                     and parts == ("current",)
@@ -167,7 +198,17 @@ def measure(data_root, key, deadline, counter):
         versions=len(copies),
         full_copies=sum("full" in value for value in copies.values()),
         image_copies=sum("images" in value for value in copies.values()),
-        partial_versions=sum(len(value) != 2 for value in copies.values()),
+        shared_image_views=sum(
+            sha in embedded and sha in direct and "full" in value
+            for sha, value in copies.items()
+        ),
+        partial_versions=sum(
+            not (
+                "full" in value
+                and ("images" in value or (sha in embedded and sha in direct))
+            )
+            for sha, value in copies.items()
+        ),
     )
     return metrics
 
@@ -355,7 +396,11 @@ def collect_storage(root, data_root, force=False, now=None):
     if not isinstance(cached, dict):
         cached = {}
     digest = hashlib.sha256(raw).hexdigest()
-    refresh = force or cache.get("config_digest") != digest
+    refresh = (
+        force
+        or cache.get("config_digest") != digest
+        or cache.get("measurement_version") != 2
+    )
     deadline, counter = time.monotonic() + SCAN_SECONDS, [0]
     completed = cleanup_results(data_root, keys)
     rows, measurements, markers, failures = [], {}, {}, []
@@ -411,6 +456,7 @@ def collect_storage(root, data_root, force=False, now=None):
             cache_path,
             dict(
                 schema_version=1,
+                measurement_version=2,
                 config_digest=digest,
                 repositories=measurements,
                 markers=markers,
