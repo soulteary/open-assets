@@ -8,6 +8,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::Read,
     path::{Component, Path, PathBuf},
+    time::Instant,
 };
 pub const CSP:&str="sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 pub fn relative(name: &str) -> Result<()> {
@@ -92,10 +93,40 @@ pub fn matches(p: &Path, item: &Value, proof: &Value, expired: bool) -> bool {
             .unwrap_or(false)
 }
 pub fn proof(p: &Path, item: &Value, verified_at: f64) -> Result<Value> {
-    fs::set_permissions(p, fs::Permissions::from_mode(0o444))?;
-    File::open(p)?.sync_all()?;
+    // Caller has just fully hashed producer-owned bytes. Avoid an unnecessary
+    // chmod on an already read-only inode: it would invalidate every alias.
+    let file = open_readonly_file(p)?;
+    let before = file.metadata()?;
+    ensure!(
+        before.is_file() && Some(before.len()) == item["size"].as_u64(),
+        "unsafe immutable file"
+    );
+    let changed = before.mode() & 0o222 != 0;
+    if changed {
+        file.set_permissions(fs::Permissions::from_mode(0o444))?;
+    }
+    let after = file.metadata()?;
+    ensure!(
+        before.dev() == after.dev()
+            && before.ino() == after.ino()
+            && before.len() == after.len()
+            && before.mtime() == after.mtime()
+            && before.mtime_nsec() == after.mtime_nsec()
+            && before.nlink() == after.nlink()
+            && after.mode() & 0o222 == 0
+            && (!changed || after.mode() & 0o7777 == 0o444)
+            && (changed || identity(&before)? == identity(&after)?),
+        "immutable source changed while sealing"
+    );
+    file.sync_all()?;
+    let fingerprint = identity(&after)?;
+    ensure!(
+        identity(&file.metadata()?)? == fingerprint
+            && identity(&open_readonly_file(p)?.metadata()?)? == fingerprint,
+        "immutable source changed while sealing"
+    );
     Ok(
-        json!({"size":item["size"],"sha256":item["sha256"],"fingerprint":fingerprint(p)?,"verified_at":verified_at}),
+        json!({"size":item["size"],"sha256":item["sha256"],"fingerprint":fingerprint,"verified_at":verified_at}),
     )
 }
 pub fn safe_link(source: &Path, dest: &Path, item: &Value, old: &Value) -> Result<Value> {
@@ -168,11 +199,10 @@ pub fn safe_link_required(
     out["fingerprint"] = fingerprint(source)?;
     Ok(out)
 }
-pub fn verify(
-    root: &Path,
-    files: &[Value],
-    proofs: Option<&BTreeMap<String, Value>>,
-) -> Result<()> {
+/// Inspect the complete logical tree without trusting any byte proof. Missing,
+/// unlisted, linked, nonregular or noncanonical entries invalidate the context.
+/// Size/byte eligibility is decided per file by the caller.
+pub(crate) fn inspect_tree(root: &Path, files: &[Value]) -> Result<BTreeMap<String, fs::Metadata>> {
     ensure!(
         fs::symlink_metadata(root)?.is_dir(),
         "version root is not a directory"
@@ -188,44 +218,183 @@ pub fn verify(
             "invalid manifest entry"
         );
     }
-    let mut actual = BTreeSet::new();
+    let mut actual = BTreeMap::new();
     let mut dirs = vec![root.to_path_buf()];
     let mut count = 0;
     while let Some(dir) = dirs.pop() {
-        for e in fs::read_dir(dir)? {
-            let p = e?.path();
+        ensure!(
+            fs::symlink_metadata(&dir)?.is_dir(),
+            "unsafe version directory"
+        );
+        for entry in fs::read_dir(dir)? {
+            let path = entry?.path();
             count += 1;
             ensure!(count <= 200000, "snapshot scan budget exceeded");
-            let m = fs::symlink_metadata(&p)?;
-            if m.is_dir() {
-                dirs.push(p);
+            let info = fs::symlink_metadata(&path)?;
+            if info.is_dir() {
+                dirs.push(path);
                 continue;
             }
-            let name = p
+            let name = path
                 .strip_prefix(root)?
                 .to_str()
                 .context("invalid path encoding")?;
-            let item = expected.get(name).context("unexpected version entry")?;
             ensure!(
-                m.is_file() && m.len() == item["size"].as_u64().context("manifest size")?,
-                "version size mismatch"
+                expected.contains_key(name) && info.is_file(),
+                "unexpected version entry"
             );
-            if let Some(proofs) = proofs {
-                ensure!(
-                    matches(&p, item, proofs.get(name).unwrap_or(&Value::Null), false),
-                    "verified version identity changed"
-                )
-            } else {
-                ensure!(
-                    hash_file(&p, m.len())? == item["sha256"].as_str().unwrap_or(""),
-                    "version bytes mismatch"
-                )
-            };
-            actual.insert(name.to_string());
+            actual.insert(name.to_string(), info);
         }
     }
     ensure!(actual.len() == expected.len(), "missing version file");
+    Ok(actual)
+}
+pub fn verify(
+    root: &Path,
+    files: &[Value],
+    proofs: Option<&BTreeMap<String, Value>>,
+) -> Result<()> {
+    let actual = inspect_tree(root, files)?;
+    for item in files {
+        let name = item["path"].as_str().context("manifest path")?;
+        let info = &actual[name];
+        ensure!(
+            info.len() == item["size"].as_u64().context("manifest size")?,
+            "version size mismatch"
+        );
+        let path = root.join(name);
+        if let Some(proofs) = proofs {
+            ensure!(
+                matches(&path, item, proofs.get(name).unwrap_or(&Value::Null), false),
+                "verified version identity changed"
+            )
+        } else {
+            ensure!(
+                hash_file(&path, info.len())? == item["sha256"].as_str().unwrap_or(""),
+                "version bytes mismatch"
+            )
+        }
+    }
     Ok(())
+}
+/// Open through descriptor-relative, no-follow directory components. A recovered
+/// proof must never authenticate a file reached through a substituted parent link.
+fn open_readonly_file(path: &Path) -> Result<File> {
+    use std::{
+        ffi::CString,
+        os::{
+            fd::{AsRawFd, FromRawFd},
+            unix::ffi::OsStrExt,
+        },
+    };
+    #[cfg(target_os = "macos")]
+    let normalized = if let Ok(rest) = path.strip_prefix("/var") {
+        Path::new("/private/var").join(rest)
+    } else if let Ok(rest) = path.strip_prefix("/tmp") {
+        Path::new("/private/tmp").join(rest)
+    } else {
+        path.to_path_buf()
+    };
+    #[cfg(target_os = "macos")]
+    let path = normalized.as_path();
+    let parent = path.parent().context("proof parent")?;
+    let mut directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(if parent.is_absolute() {
+            Path::new("/")
+        } else {
+            Path::new(".")
+        })?;
+    for part in parent.components() {
+        let part = match part {
+            Component::RootDir | Component::CurDir => continue,
+            Component::Normal(p) => p,
+            _ => bail!("unsafe proof parent"),
+        };
+        let name = CString::new(part.as_bytes())?;
+        let fd = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        directory = unsafe { File::from_raw_fd(fd) };
+    }
+    let name = CString::new(path.file_name().context("proof filename")?.as_bytes())?;
+    let fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(unsafe { File::from_raw_fd(fd) })
+}
+/// A fresh proof is created only after the entire expected body is hashed. This
+/// does not chmod, copy, link, rewrite or otherwise change the serving inode.
+pub(crate) fn revalidate_proof(
+    path: &Path,
+    item: &Value,
+    record: &Value,
+    deadline: Option<Instant>,
+) -> Result<Value> {
+    let size = item["size"].as_u64().context("proof size")?;
+    let expected = item["sha256"].as_str().context("proof SHA256")?;
+    ensure!(super::hex_string(expected, 64), "invalid proof digest");
+    ensure!(source_record_valid(record), "invalid source receipt");
+    let mut file = open_readonly_file(path)?;
+    let before = file.metadata()?;
+    ensure!(
+        before.is_file() && before.len() == size && before.mode() & 0o222 == 0,
+        "unqualified immutable source"
+    );
+    let fingerprint = identity(&before)?;
+    let mut hash = Sha256::new();
+    let mut git_hash = sha1::Sha1::new();
+    git_hash.update(format!("blob {size}\0").as_bytes());
+    let mut etag_hash = md5::Context::new();
+    let mut bytes = 0u64;
+    let mut buffer = vec![0u8; 1024 * 1024];
+    loop {
+        ensure!(
+            deadline.is_none_or(|at| Instant::now() < at),
+            "proof verification deadline exceeded"
+        );
+        let maximum = (size.saturating_sub(bytes) + 1).min(buffer.len() as u64) as usize;
+        let count = file.read(&mut buffer[..maximum])?;
+        if count == 0 {
+            break;
+        }
+        bytes += count as u64;
+        ensure!(bytes <= size, "proof size mismatch");
+        hash.update(&buffer[..count]);
+        git_hash.update(&buffer[..count]);
+        etag_hash.consume(&buffer[..count]);
+    }
+    ensure!(
+        hex::encode(git_hash.finalize()) == record["oid"].as_str().unwrap_or("")
+            && format!("\"{:x}\"", etag_hash.finalize()) == record["etag"].as_str().unwrap_or(""),
+        "proof Git/object receipt mismatch"
+    );
+    ensure!(
+        bytes == size && hex::encode(hash.finalize()) == expected,
+        "proof bytes mismatch"
+    );
+    file.sync_all()?;
+    ensure!(
+        identity(&file.metadata()?)? == fingerprint
+            && identity(&open_readonly_file(path)?.metadata()?)? == fingerprint,
+        "proof source changed during verification"
+    );
+    Ok(json!({"size":size,"sha256":expected,"fingerprint":fingerprint,"verified_at":now()}))
 }
 pub fn sync_tree(root: &Path) -> Result<()> {
     let mut stack = vec![root.to_path_buf()];
@@ -452,27 +621,41 @@ fn valid_etag(value: &str) -> bool {
         && value.ends_with('"')
         && super::hex_string(&value[1..33], 32)
 }
+pub(crate) fn source_record_valid(record: &Value) -> bool {
+    super::valid_sha(record["oid"].as_str().unwrap_or(""))
+        && valid_etag(record["etag"].as_str().unwrap_or(""))
+        && record["modified"].as_u64().is_some()
+}
 pub fn sources(c: &Value, r: &Value) -> Result<BTreeMap<String, Source>> {
-    let mut result = BTreeMap::new();
+    source_context(c, r, false)
+}
+pub(crate) fn sources_reverified(c: &Value, r: &Value) -> Result<BTreeMap<String, Source>> {
+    source_context(c, r, true)
+}
+fn source_context(c: &Value, r: &Value, force_bytes: bool) -> Result<BTreeMap<String, Source>> {
+    let mut result: BTreeMap<String, Source> = BTreeMap::new();
     let key = r["key"].as_str().context("repository key")?;
     let state = Path::new(c["state_root"].as_str().context("state_root")?);
-    let manifest = read_json(&state.join("published").join(key), 8 << 20)?;
-    let seal = read_json(
-        &state.join("incremental").join(format!("{key}.json")),
-        8 << 20,
-    )?;
+    let manifest_path = state.join("published").join(key);
+    let seal_path = state.join("incremental").join(format!("{key}.json"));
+    let manifest = read_json(&manifest_path, 8 << 20)?;
+    let original_seal = read_json(&seal_path, 8 << 20)?;
+    let mut seal = original_seal.clone();
     let sha = manifest["sha"].as_str().context("manifest SHA")?;
     ensure!(
         super::valid_sha(sha)
             && manifest["key"] == key
             && seal["sha"] == sha
             && seal["version"] == 3
-            && seal["config"] == c["revision"],
+            && seal["config"] == c["revision"]
+            && seal["records"].is_object(),
         "cache identity mismatch"
     );
-    let digest = json!({"files":manifest["files"],"object_sources":manifest.get("object_sources").cloned().unwrap_or(json!({}))});
-    let digest = hex::encode(Sha256::digest(crate::common::python_json(&digest, true)?));
+    let digest = crate::common::digest(
+        &json!({"files":manifest["files"],"object_sources":manifest.get("object_sources").cloned().unwrap_or(json!({}))}),
+    )?;
     ensure!(seal["manifest"] == digest, "cache manifest mismatch");
+    let objects = crate::storage::validate_manifest(&manifest)?;
     let base = Path::new(c["images_root"].as_str().context("images_root")?)
         .join("repos")
         .join(key);
@@ -483,37 +666,128 @@ pub fn sources(c: &Value, r: &Value) -> Result<BTreeMap<String, Source>> {
     );
     let full = base.join("releases").join(sha);
     let files = manifest["files"].as_array().context("manifest files")?;
-    let mut proofs = BTreeMap::new();
+    ensure!(
+        files.len() <= r["max_files"].as_u64().unwrap_or(10000) as usize,
+        "cache file budget"
+    );
+    let mut total = 0u64;
     for item in files {
-        let name = item["path"].as_str().context("manifest path")?;
-        relative(name)?;
-        let rec = &seal["records"][name];
-        proofs.insert(name.to_string(), rec["immutable"].clone());
+        let size = item["size"].as_u64().context("cache size")?;
+        ensure!(
+            size <= r["max_file_bytes"].as_u64().unwrap_or(104857600),
+            "cache file budget"
+        );
+        total = total.checked_add(size).context("cache byte overflow")?;
     }
-    verify(&full, files, Some(&proofs))?;
+    ensure!(
+        total <= r["max_bytes"].as_u64().unwrap_or(1073741824),
+        "cache byte budget"
+    );
+    let tree = inspect_tree(&full, files)?;
+    let mut verified = BTreeMap::<(u64, u64, String, String), Value>::new();
+    if !force_bytes {
+        for item in files {
+            let name = item["path"].as_str().context("manifest path")?;
+            let record = &seal["records"][name];
+            let proof = &record["immutable"];
+            if source_record_valid(record) && matches(&full.join(name), item, proof, false) {
+                let info = &tree[name];
+                verified.insert(
+                    (
+                        info.dev(),
+                        info.ino(),
+                        record["oid"].as_str().unwrap().into(),
+                        record["etag"].as_str().unwrap().into(),
+                    ),
+                    proof.clone(),
+                );
+            }
+        }
+    }
+    let mut changed = false;
+    let mut admitted = 0usize;
     for item in files {
         let name = item["path"].as_str().context("manifest path")?;
-        let rec = &seal["records"][name];
+        let rec = seal["records"][name].clone();
         let oid = rec["oid"].as_str().unwrap_or("");
-        let etag = rec["etag"].as_str().unwrap_or("");
-        if !super::valid_sha(oid) || !valid_etag(etag) || rec["modified"].as_u64().is_none() {
+        if !source_record_valid(&rec) {
             continue;
         }
-        let object=manifest["object_sources"].get(name).cloned().unwrap_or(json!({"key":format!("repositories/{key}/releases/{sha}/{name}"),"content_type":item["content_type"]}));
-        let objectkey = object["key"].as_str().context("object key")?;
-        ensure!(
-            objectkey.starts_with(&format!("repositories/{key}/releases/")),
-            "cross-repository object reference"
+        let path = full.join(name);
+        let info = &tree[name];
+        if info.len() != item["size"].as_u64().context("manifest size")? || info.mode() & 0o222 != 0
+        {
+            continue;
+        }
+        let id = (
+            info.dev(),
+            info.ino(),
+            oid.to_owned(),
+            rec["etag"].as_str().unwrap().to_owned(),
         );
-        result.entry(oid.to_string()).or_insert(Source {
+        let proof =
+            if let Some(proof) = verified.get(&id).filter(|p| matches(&path, item, p, false)) {
+                proof.clone()
+            } else {
+                match revalidate_proof(&path, item, &rec, None) {
+                    Ok(proof) => {
+                        verified.insert(id, proof.clone());
+                        proof
+                    }
+                    Err(_) => continue,
+                }
+            };
+        admitted += 1;
+        let short = Value::Array(
+            proof["fingerprint"]
+                .as_array()
+                .context("proof fingerprint")?[..5]
+                .to_vec(),
+        );
+        if rec["immutable"] != proof || rec["fingerprint"] != short {
+            let row = seal["records"]
+                .get_mut(name)
+                .context("cache record disappeared")?;
+            row["immutable"] = proof.clone();
+            row["fingerprint"] = Value::Array(
+                proof["fingerprint"]
+                    .as_array()
+                    .context("proof fingerprint")?[..5]
+                    .to_vec(),
+            );
+            changed = true;
+        }
+        let source = Source {
             item: item.clone(),
-            path: full.join(name),
+            path,
             oid: oid.into(),
-            object,
+            object: objects[name].clone(),
             etag: rec["etag"].clone(),
             modified: rec["modified"].clone(),
-            proof: rec["immutable"].clone(),
-        });
+            proof,
+        };
+        if let Some(existing) = result.get(oid) {
+            ensure!(
+                existing.item["size"] == item["size"] && existing.item["sha256"] == item["sha256"],
+                "conflicting Git source provenance"
+            );
+        } else {
+            result.insert(oid.into(), source);
+        }
+    }
+    ensure!(
+        !force_bytes || admitted == files.len(),
+        "incomplete source receipt revalidation"
+    );
+    if changed {
+        ensure!(
+            read_json(&manifest_path, 8 << 20)? == manifest
+                && read_json(&seal_path, 8 << 20)? == original_seal
+                && fs::read_link(base.join("current"))?
+                    == Path::new(&format!("releases/{}", image_target(&manifest)?)),
+            "cache baseline changed during verification"
+        );
+        atomic(&seal_path, &seal)?;
     }
     Ok(result)
 }
@@ -714,5 +988,187 @@ mod svg_regression {
         );
         assert!(check(many.as_bytes()).is_err());
         assert!(check(&vec![b' '; (2 << 20) + 1]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod proof_reuse_regression {
+    use super::*;
+    use crate::publisher::proof_reuse_fixtures::Fixture;
+    #[test]
+    fn mixed_fresh_and_expired_sources_rehash_only_when_needed_without_copying() {
+        let f = Fixture::new(3, false);
+        f.age(&[1], 3700.);
+        let before = f.seal();
+        let data = f
+            .files
+            .iter()
+            .map(|i| {
+                let path = f.full.join(i["path"].as_str().unwrap());
+                (
+                    fingerprint(&path).unwrap(),
+                    fs::metadata(path).unwrap().nlink(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let started = now();
+        let sources = sources(&f.c, f.repository()).unwrap();
+        assert_eq!(sources.len(), 3);
+        let after = f.seal();
+        assert_eq!(
+            after["records"]["images/0000.png"]["immutable"],
+            before["records"]["images/0000.png"]["immutable"]
+        );
+        assert!(
+            after["records"]["images/0001.png"]["immutable"]["verified_at"]
+                .as_f64()
+                .unwrap()
+                >= started
+        );
+        for (i, item) in f.files.iter().enumerate() {
+            let path = f.full.join(item["path"].as_str().unwrap());
+            assert_eq!(fingerprint(&path).unwrap(), data[i].0);
+            assert_eq!(fs::metadata(&path).unwrap().nlink(), data[i].1);
+            let source = &sources[&f.oids[item["path"].as_str().unwrap()]];
+            assert_eq!(
+                source.object,
+                f.manifest["object_sources"][item["path"].as_str().unwrap()]
+            );
+        }
+        assert_eq!(
+            read_json(
+                &crate::publisher::state(&f.c)
+                    .unwrap()
+                    .join("published/images"),
+                8 << 20
+            )
+            .unwrap(),
+            f.manifest
+        );
+    }
+    #[test]
+    fn one_bad_hash_does_not_admit_bad_source_or_discard_unrelated_sources() {
+        let f = Fixture::new(3, false);
+        f.corrupt(1);
+        let sources = sources(&f.c, f.repository()).unwrap();
+        assert_eq!(sources.len(), 2);
+        assert!(!sources.contains_key(&f.oids["images/0001.png"]));
+        assert!(sources.contains_key(&f.oids["images/0000.png"]));
+        assert!(sources.contains_key(&f.oids["images/0002.png"]));
+        assert_ne!(
+            hash_file(
+                &f.full.join("images/0001.png"),
+                f.files[1]["size"].as_u64().unwrap()
+            )
+            .unwrap(),
+            f.files[1]["sha256"].as_str().unwrap()
+        );
+    }
+    #[test]
+    fn expired_receipts_must_match_git_oid_and_object_md5_for_identical_size() {
+        for field in ["oid", "etag"] {
+            let f = Fixture::new(3, false);
+            f.age(&[1], 3700.);
+            let mut seal = f.seal();
+            seal["records"]["images/0001.png"][field] = if field == "oid" {
+                json!("b".repeat(40))
+            } else {
+                json!(format!("\"{}\"", "0".repeat(32)))
+            };
+            atomic(&f.seal_path, &seal).unwrap();
+            let path = f.full.join("images/0001.png");
+            let before = fingerprint(&path).unwrap();
+            let admitted = sources(&f.c, f.repository()).unwrap();
+            assert_eq!(admitted.len(), 2);
+            assert_eq!(
+                f.seal()["records"]["images/0001.png"],
+                seal["records"]["images/0001.png"]
+            );
+            assert_eq!(fingerprint(&path).unwrap(), before);
+            assert!(sources_reverified(&f.c, f.repository()).is_err());
+        }
+    }
+    #[test]
+    fn expired_wrong_alias_receipt_cannot_borrow_fresh_inode_proof() {
+        for field in ["oid", "etag"] {
+            let f = Fixture::new(2, true);
+            f.age(&[1], 3700.);
+            let mut seal = f.seal();
+            seal["records"]["images/0001.png"][field] = if field == "oid" {
+                json!("b".repeat(40))
+            } else {
+                json!(format!("\"{}\"", "0".repeat(32)))
+            };
+            atomic(&f.seal_path, &seal).unwrap();
+            let admitted = sources(&f.c, f.repository()).unwrap();
+            assert_eq!(admitted.len(), 1);
+            assert!(admitted.contains_key(&f.oids["images/0000.png"]));
+            assert_eq!(
+                f.seal()["records"]["images/0001.png"],
+                seal["records"]["images/0001.png"]
+            );
+        }
+    }
+    #[test]
+    fn own_ctime_change_requires_full_bytes_but_does_not_recopy_data() {
+        let f = Fixture::new(2, false);
+        let file = f.full.join("images/0000.png");
+        let before = f.seal();
+        let at = now();
+        let extra = f._temporary.path().join("interrupted-link");
+        fs::hard_link(&file, &extra).unwrap();
+        assert!(!matches(
+            &file,
+            &f.files[0],
+            &before["records"]["images/0000.png"]["immutable"],
+            false
+        ));
+        let id = fingerprint(&file).unwrap();
+        let sources = sources(&f.c, f.repository()).unwrap();
+        assert_eq!(sources.len(), 2);
+        let seal = f.seal();
+        assert!(
+            seal["records"]["images/0000.png"]["immutable"]["verified_at"]
+                .as_f64()
+                .unwrap()
+                >= at
+        );
+        assert_eq!(fingerprint(&file).unwrap(), id);
+        assert!(extra.exists());
+    }
+    #[test]
+    fn repeated_readonly_sealing_does_not_change_ctime_or_break_alias_proof() {
+        let f = Fixture::new(2, true);
+        let p = f.full.join("images/0000.png");
+        let before = fingerprint(&p).unwrap();
+        let first = proof(&p, &f.files[0], now()).unwrap();
+        let second = proof(&f.full.join("images/0001.png"), &f.files[1], now()).unwrap();
+        assert_eq!(fingerprint(&p).unwrap(), before);
+        assert!(matches(&p, &f.files[0], &first, false));
+        assert!(matches(&p, &f.files[0], &second, false));
+    }
+    #[test]
+    fn writable_or_escaped_source_is_never_requalified() {
+        let f = Fixture::new(2, false);
+        let p = f.full.join("images/0001.png");
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o644)).unwrap();
+        let admitted = sources(&f.c, f.repository()).unwrap();
+        assert_eq!(admitted.len(), 1);
+        assert!(revalidate_proof(
+            &p,
+            &f.files[1],
+            &f.seal()["records"]["images/0001.png"],
+            None
+        )
+        .is_err());
+        let alias = f._temporary.path().join("linked-parent");
+        std::os::unix::fs::symlink(&f.full, &alias).unwrap();
+        assert!(revalidate_proof(
+            &alias.join("images/0000.png"),
+            &f.files[0],
+            &f.seal()["records"]["images/0000.png"],
+            None
+        )
+        .is_err());
     }
 }
