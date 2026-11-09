@@ -4,8 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const {test} = require('node:test');
-const html = fs.readFileSync(path.join(__dirname, '../open_assets/static/index.html'), 'utf8');
-const script = fs.readFileSync(path.join(__dirname, '../open_assets/static/app.js'), 'utf8');
+const html = fs.readFileSync(path.join(__dirname, '../web/static/index.html'), 'utf8');
+const script = fs.readFileSync(path.join(__dirname, '../web/static/app.js'), 'utf8');
 class Element {
   constructor() { this.children = []; this.text = ''; }
   set textContent(value) { this.text = String(value); this.children = []; }

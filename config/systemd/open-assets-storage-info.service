@@ -6,7 +6,7 @@ ConditionPathExists=!/app/open-assets/private/maintenance.flag
 [Service]
 Type=oneshot
 WorkingDirectory=/app/open-assets
-ExecStart=/usr/bin/python3 -m open_assets.storage_scan --root /app/open-assets
+ExecStart=/app/open-assets/bin/open-assets storage-scan --root /app/open-assets
 UMask=0077
 Nice=19
 CPUQuota=25%

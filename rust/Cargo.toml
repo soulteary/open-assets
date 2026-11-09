@@ -16,8 +16,6 @@ hmac = "0.12"
 httpdate = "1"
 libc = "0.2"
 md5 = "0.8"
-mime_guess = "2"
-nix = { version = "0.30", features = ["fs", "signal", "process", "socket", "inotify"] }
 percent-encoding = "2"
 quick-xml = { version = "0.38", features = ["serialize"] }
 rand = "0.8"
@@ -26,7 +24,6 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 serde_yaml = "0.9"
-sha1 = "0.10"
 sha2 = "0.10"
 tar = "0.4"
 tempfile = "3"

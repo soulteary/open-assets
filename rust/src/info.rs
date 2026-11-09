@@ -233,15 +233,15 @@ pub fn route(
         }
         "/" => {
             reply.mime = "text/html";
-            reply.body = include_bytes!("../../open_assets/static/index.html").to_vec();
+            reply.body = include_bytes!("../../web/static/index.html").to_vec();
         }
         "/app.js" => {
             reply.mime = "application/javascript";
-            reply.body = include_bytes!("../../open_assets/static/app.js").to_vec();
+            reply.body = include_bytes!("../../web/static/app.js").to_vec();
         }
         "/style.css" => {
             reply.mime = "text/css";
-            reply.body = include_bytes!("../../open_assets/static/style.css").to_vec();
+            reply.body = include_bytes!("../../web/static/style.css").to_vec();
         }
         _ => {
             reply.status = 404;

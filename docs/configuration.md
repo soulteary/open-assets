@@ -29,7 +29,7 @@ cd /app/open-assets
 下面仅用于尚未准备的新部署，不是给现有部署改名的命令。先将示例基域替换为自己控制的域名，再传入两个环境变量：
 
 ```sh
-NODE_NAME=beijing-1 PUBLIC_BASE=example.org python3 scripts/prepare-private.py
+NODE_NAME=beijing-1 PUBLIC_BASE=example.org bin/open-assets prepare-private
 ```
 
 `NODE_NAME` 默认 `node-name`，接受 1–48 位小写字母、数字和连字符，首尾必须是字母或数字。`PUBLIC_BASE` 必须显式传入，使用自己控制的小写 DNS 域名，不带协议、端口、路径或末尾的点。国际化域名请先转换为 ASCII/Punycode。
@@ -41,7 +41,7 @@ NODE_NAME=beijing-1 PUBLIC_BASE=example.org python3 scripts/prepare-private.py
 已有部署若尚未记录 `NODE_NAME` 和 `PUBLIC_BASE`，先备份 `.env`，根据 `private/domains.json` 中的现有地址补入对应值，保留原有 `STORAGE_DOMAIN`、`GIT_DOMAIN` 和其他字段。随后只读检查：
 
 ```sh
-python3 scripts/deployment_config.py \
+bin/open-assets deployment-config \
   --env .env \
   --domains private/domains.json
 docker compose config --quiet

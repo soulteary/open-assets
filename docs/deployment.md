@@ -10,19 +10,16 @@
 
 ## 1. 检查环境
 
-先安装并启动 Docker Engine 和 Docker Compose 插件，再准备 Git、curl、Python 3、PyYAML、bcrypt、OpenSSL 和 OpenSSH 客户端。下面的 apt 命令只安装宿主机脚本依赖，不安装 Docker。应用容器使用的 Python 依赖由 Dockerfile 安装，宿主机脚本另外使用系统 Python。
-
-Ubuntu 可安装宿主机依赖：
+先安装并启动 Docker Engine 和 Docker Compose 插件，再准备 Git、curl、jq、OpenSSL 和 OpenSSH 客户端。应用与管理命令使用镜像构建出的 Rust 原生二进制，不需要宿主 Python、pip 或 Rust 编译器。
 
 ```sh
 sudo apt update
-sudo apt install git curl python3 python3-yaml python3-bcrypt openssl openssh-client
+sudo apt install git curl jq openssl openssh-client
 sudo docker version
 sudo docker compose version
-python3 -c 'import yaml, bcrypt'
 ```
 
-上面的 Docker 命令应正常返回版本，Python 导入应无报错。服务器需要能下载模板固定的容器镜像、Python 依赖和 Certs Maker 发行包；无法下载时先排查网络，镜像来源选择见[升级说明](upgrade.md)。
+Docker 命令应正常返回版本。服务器需能下载固定镜像、Rust 构建依赖和 Certs Maker 发行包；无法下载时先排查网络，镜像来源见[升级说明](upgrade.md)。
 
 使用数据盘时先完成 /data 挂载；只有系统盘时，先创建专用 /data 目录。初始化脚本创建子目录，但不挂载磁盘。随后查看磁盘、内存和现有网络，确认 172.29.19.0/24 与 172.29.20.0/24 没有冲突：
 
@@ -56,10 +53,19 @@ git rev-parse HEAD
 
 后续示例均在这个管理员 shell 中执行。正式部署应记录所用提交；升级时先查看差异，不在运行目录直接覆盖私有文件。
 
+先构建 Rust 镜像并安装同一镜像中的宿主机二进制。安装器不启动容器、不初始化服务、不改已有配置；升级时保留旧二进制副本。
+
+```sh
+docker build -t open-assets:local .
+sh scripts/install-runtime.sh
+bin/open-assets --version
+```
+
+
 先决定公共 DNS 基域和节点名。下面的 `lab.dev` 必须替换为自己控制的域名，`node-name` 替换为自己的节点名，再执行：
 
 ```sh
-NODE_NAME=node-name PUBLIC_BASE=lab.dev python3 scripts/prepare-private.py
+NODE_NAME=node-name PUBLIC_BASE=lab.dev bin/open-assets prepare-private
 ```
 
 节点名可以使用 `beijing-1` 这样的标识。节点名使用 1–48 位小写字母、数字或连字符，首尾不能是连字符；不传 `NODE_NAME` 时使用 `node-name`。脚本生成七个主机名并保存到 `private/domains.json`：
@@ -98,10 +104,10 @@ docker compose logs --tail=50 otterio gitea oc
 ```sh
 curl --fail http://127.0.0.1:13000/api/healthz
 curl --fail http://127.0.0.1:18080/healthz
-python3 scripts/initialize-services.py
+bin/open-assets initialize-services
 ```
 
-`initialize-services.py` 创建 Gitea 的 `content` 管理账号、空私有仓库 `content/images`、只读 Deploy Key 和 Push Hook，记录实际仓库 ID，并初始化 `attachments` 桶、匿名读取策略和发布/OC 用户。空仓库此时没有内容提交，稍后由你完成第一次 Push。它也从实际 Gitea 数据目录读取 SSH 公钥，写入 Publisher 的 known_hosts。
+`open-assets initialize-services` 创建 Gitea 的 `content` 管理账号、空私有仓库 `content/images`、只读 Deploy Key 和 Push Hook，记录实际仓库 ID，并初始化 `attachments` 桶、匿名读取策略和发布/OC 用户。空仓库此时没有内容提交，稍后由你完成第一次 Push。它也从实际 Gitea 数据目录读取 SSH 公钥，写入 Publisher 的 known_hosts。
 
 初始化必须来自成功完成的首次准备。程序在修改账号、策略和仓库前写入 `private/.initialization.json`；已有初始化记录、旧版部署或中断状态会被拒绝，没有覆盖开关。失败时保留现场并检查私有日志与备份，按实际阶段修复；可丢弃测试环境可销毁后重建。后续新增仓库用 `repo ensure`。
 
@@ -142,7 +148,7 @@ networks:
 
 确认原 Traefik 满足以下条件：
 
-- HTTPS entrypoint 名为 websecure，ACME resolver 名为 le；其他名称需先调整 configure-edge.py。
+- HTTPS entrypoint 名为 websecure，ACME resolver 名为 le；其他名称需先调整 open-assets configure-edge。
 - file provider 监视一个挂载的动态配置目录，容器能读该目录。
 - 已启用 Dashboard/API，未启用 api.insecure；公网管理请求只通过后面的认证路由访问。
 - DNS provider 凭据、ACME 账户和状态文件继续使用原路径。不要清空状态，也不要让两个实例并发写同一文件。
@@ -153,7 +159,7 @@ networks:
 
 ```sh
 export TRAEFIK_DYNAMIC_DIR=/path/to/existing/traefik/dynamic
-python3 scripts/configure-edge.py \
+bin/open-assets configure-edge \
   --domains private/domains.json \
   --ca private/tls/ca.crt \
   --output "$TRAEFIK_DYNAMIC_DIR/open-assets.yaml"
@@ -183,7 +189,7 @@ Traefik 到 OC 和 OtterIO 使用内部 HTTPS，校验私有 CA 和主机名。S
 
 ## 证书和后续维护
 
-公网证书由现有 Traefik 续期。prepare-private.py 使用 Certs Maker 生成内部叶证书和独立 CA，两者有效期均为 3650 天，项目没有内部证书自动续期任务；到期前需重新签发、核对权限并重启相应服务。
+公网证书由现有 Traefik 续期。`open-assets prepare-private` 使用 Certs Maker 生成内部叶证书和独立 CA，两者有效期均为 3650 天，项目没有内部证书自动续期任务；到期前需重新签发、核对权限并重启相应服务。
 
 首次发布通过后，再完成日常维护配置：
 

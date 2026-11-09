@@ -445,10 +445,7 @@ fn run() -> Result<()> {
         "refusing nonempty Docker daemon"
     );
     std::env::set_current_dir(ROOT)?;
-    std::env::set_var(
-        "COMPOSE_FILE",
-        "compose.yaml:compose.rust.yaml:private/e2e-ports.yaml",
-    );
+    std::env::set_var("COMPOSE_FILE", "compose.yaml:private/e2e-ports.yaml");
     std::env::set_var("NODE_NAME", "acceptance-node");
     std::env::set_var("PUBLIC_BASE", "acceptance.invalid");
     println!("Rust fresh stack: protected preparation");

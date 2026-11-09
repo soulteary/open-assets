@@ -2,7 +2,7 @@
 
 Rust 实现覆盖 Publisher、Webhook、对象读取、恢复清理、Info、宿主机采集和运维命令。浏览器继续使用现有 HTML、CSS 和 JavaScript；Git/SSH、Nginx、Gitea 和对象存储继续使用已有组件。
 
-迁移验收期间，默认 Python 部署保持不变。`Dockerfile.rust` 与 `compose.rust.yaml` 是显式选择的候选运行环境，不会自行升级现网。通过全部兼容和独立全栈验收后，才能替换默认入口。CI 成功也不代表生产已经升级。
+默认应用镜像、健康检查、宿主机入口和 systemd 单元使用 Rust。旧 Python 实现可从 Git 历史的已部署版本恢复，不再作为运行时依赖。源码入口切换不代表生产服务器已部署；生产升级和回退必须单独验收。
 
 ## 构建和验证
 
@@ -12,7 +12,7 @@ cargo test --locked
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets
 node --test tests/test_storage_ui.js
-docker build -f Dockerfile.rust -t open-assets:rust .
+docker build -t open-assets:local .
 ```
 
 运行时镜像只包含 Rust 二进制和 Git、SSH、CA、OpenSSL 系统工具，不包含 Python。服务示例：
@@ -20,7 +20,7 @@ docker build -f Dockerfile.rust -t open-assets:rust .
 ```sh
 target/release/open-assets --config private/repositories.yaml validate
 target/release/open-assets --help
-docker compose -f compose.yaml -f compose.rust.yaml config --quiet
+docker compose config --quiet
 ```
 
 容器使用现有容器路径配置；宿主机管理使用 `open-assets operator --root /app/open-assets …`，不得直接把宿主机配置用于容器发布路径。

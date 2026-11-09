@@ -7,7 +7,7 @@ ConditionPathExists=!/app/open-assets/private/maintenance.flag
 [Service]
 Type=oneshot
 WorkingDirectory=/app/open-assets
-ExecStart=/usr/bin/python3 -m open_assets.audit_info --root /app/open-assets
+ExecStart=/app/open-assets/bin/open-assets audit-info --root /app/open-assets
 UMask=0077
 Environment=DOCKER_CONFIG=/tmp/open-assets-docker
 TimeoutStartSec=140

@@ -52,32 +52,20 @@ oc_admin policy set-json /config/uploads-public.json store/uploads
 
 ## 3. 为这个前缀增加公开路由
 
-设置现有 Traefik file provider 实际监视的宿主目录。新服务器路线使用 `/app/open-assets-traefik/dynamic`；复用入口时替换为自己的目录。原有 `open-assets.yaml` 必须已由 `configure-edge.py` 生成，其中提供内部 TLS 校验的 `objects` 服务。
+设置现有 Traefik file provider 实际监视的宿主目录。新服务器路线使用 `/app/open-assets-traefik/dynamic`；复用入口时替换为自己的目录。原有 `open-assets.yaml` 必须已由 `open-assets configure-edge` 生成，其中提供内部 TLS 校验的 `objects` 服务。
 
 ```sh
 export TRAEFIK_DYNAMIC_DIR=/app/open-assets-traefik/dynamic
-python3 - <<'PY'
-import json, os
-from pathlib import Path
-root = Path('/app/open-assets')
-directory = Path(os.environ['TRAEFIK_DYNAMIC_DIR'])
-if not directory.is_dir():
-    raise SystemExit('动态目录不存在，停止操作')
-target = directory / 'open-assets-uploads.yaml'
-domains = json.loads((root / 'private/domains.json').read_text())
-route = {'http': {'routers': {'uploads-public': {
-    'rule': f"Host(`{domains['oss']}`) && PathPrefix(`/uploads/public/`) && (Method(`GET`) || Method(`HEAD`))",
-    'entryPoints': ['websecure'],
-    'service': 'objects@file',
-    'middlewares': ['public-assets@file'],
-    'tls': {'certResolver': 'le'},
-}}}}
-# Exclusive creation avoids replacing an existing routing file.
-with target.open('x') as stream:
-    json.dump(route, stream, indent=2)
-# Routing contains no credentials; let the non-root gateway read it.
-target.chmod(0o644)
-PY
+test -d "$TRAEFIK_DYNAMIC_DIR" || exit 1
+OSS_HOST=$(jq -er '.oss' private/domains.json)
+(
+  umask 022
+  set -C
+  jq -n --arg host "$OSS_HOST" '{http:{routers:{"uploads-public":{
+    rule:("Host(`"+$host+"`) && PathPrefix(`/uploads/public/`) && (Method(`GET`) || Method(`HEAD`))"),
+    entryPoints:["websecure"],service:"objects@file",middlewares:["public-assets@file"],tls:{certResolver:"le"}
+  }}}}' > "$TRAEFIK_DYNAMIC_DIR/open-assets-uploads.yaml"
+)
 ```
 
 这是 JSON 语法的 YAML，file provider 可加载；后缀保持 `.yaml`。没有去掉路径前缀，也没有开放 S3 根路径、管理 API 或写入方法。它不经过 Stargate；后端仍使用已有 `storage-tls` CA 校验。生成器不检查其他动态文件是否已使用 `uploads-public` 名称，有冲突先协调命名。

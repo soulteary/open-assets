@@ -58,7 +58,7 @@ sudo ./scripts/open-assets repo ensure content/project-b \
 
 这是初始化之后的运维命令。需要 Linux 宿主机 Python 3、PyYAML、Docker Compose，以及完整的 private 配置：Gitea content 管理凭据、Publisher 公钥、Webhook Secret、已配置的 OC 管理 alias 与 CA、现有 assets-publish 策略和发布账号。
 
-脚本只通过宿主机回环地址调用 Gitea API。密码从私有文件读取，不要求放在命令参数中。它不创建 root 存储账号，不重置现有密码，也不重新运行 initialize-services.py。
+脚本只通过宿主机回环地址调用 Gitea API。密码从私有文件读取，不要求放在命令参数中。它不创建 root 存储账号，不重置现有密码，也不重新运行 `open-assets initialize-services`。
 
 新增仓库或恢复中断执行时会短暂停止/重建 webhook 与 publisher；图片和附件服务继续运行。请安排发布维护窗口，看到 ready 后再 Push。窗口内旧仓库的失败 Hook 需重投或按 SHA 补发。
 

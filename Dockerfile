@@ -1,11 +1,24 @@
-FROM public.ecr.aws/docker/library/python:3.13-slim@sha256:09a17cad02668ae61ece136b4fd36ac3849e14f670ebedb637ea3e15580525bc
-RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client ca-certificates && rm -rf /var/lib/apt/lists/*
-RUN useradd --uid 20010 --create-home --shell /bin/sh publisher
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY open_assets ./open_assets
+FROM public.ecr.aws/docker/library/rust:1.99.1-slim-bookworm AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config ca-certificates && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY rust/Cargo.toml ./rust/Cargo.toml
+RUN mkdir -p rust/src && printf 'pub fn dependency_cache() {}\n' > rust/src/lib.rs \
+    && printf 'fn main() {}\n' > rust/src/main.rs \
+    && cargo build --locked --release --bin open-assets
+COPY rust ./rust
+COPY web/static ./web/static
+COPY config/repositories.example.yaml ./config/repositories.example.yaml
+RUN cargo clean --release --package open-assets \
+    && find rust -type f -name '*.rs' -exec touch {} + \
+    && cargo build --locked --release --bin open-assets \
+    && /src/target/release/open-assets --version | grep '^open-assets [0-9]'
+
+FROM public.ecr.aws/docker/library/debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client ca-certificates openssl && rm -rf /var/lib/apt/lists/* \
+    && useradd --uid 20010 --create-home --shell /bin/sh publisher
+COPY --from=builder /src/target/release/open-assets /usr/local/bin/open-assets
 USER 20010:20010
-ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
-ENTRYPOINT ["python", "-m", "open_assets"]
+WORKDIR /app
+ENTRYPOINT ["/usr/local/bin/open-assets"]
 CMD ["worker"]

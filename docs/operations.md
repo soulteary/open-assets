@@ -78,7 +78,7 @@ sh scripts/snapshot.sh
 
 ## 更新代码或镜像
 
-先记录现有提交和镜像摘要，备份私有配置并查看待更新差异。不要通过重复 prepare-private.py 或 initialize-services.py 更新已有部署，也不要用 docker compose down -v 作为常规更新步骤。
+先记录现有提交和镜像摘要，备份私有配置并查看待更新差异。不要通过重复 `open-assets prepare-private` 或 `open-assets initialize-services` 更新已有部署，也不要用 docker compose down -v 作为常规更新步骤。
 
 publisher、webhook 和 info 共用应用镜像。源码改动后构建候选镜像，并重新创建实际受影响的消费者；Info 页面或其服务代码更新也需要重建 info。只修改宿主机管理 CLI 时无需重建运行容器。使用已审阅的固定版本，分别验证发布、读取及管理登录。
 
@@ -125,7 +125,7 @@ Worker 对每份任务最多读取 64 KiB，拒绝符号链接、非普通文件
 在独立存储保存加密副本后，可先在有足够磁盘的测试机检查校验和及安全解包：
 
 ```sh
-python3 scripts/verify-backup.py /backup/snapshot.tar.gz /restore-drill/new-tree
+bin/open-assets verify-backup /backup/snapshot.tar.gz /restore-drill/new-tree
 ```
 
 旁边必须有 `snapshot.tar.gz.sha256`；目标目录必须不存在。命令只解到目标目录，不覆盖原路径、不启动服务。校验和用于发现传输损坏，不代替备份来源认证。备份包含凭据，测试机和解包目录都须受保护。

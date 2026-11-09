@@ -21,7 +21,7 @@ Git 发布对所有 `.svg`（包括附件及大写扩展名）执行验证，不
 ## 升级
 
 1. 更新并重建 Publisher/Webhook；重新生成 Nginx 图片配置、执行 nginx 配置检查后 reload。
-2. 重新运行 configure-edge.py 生成入口路由并由 file provider 加载，使公开 OSS 路由使用 public-assets 策略；保持既有域名、私有 CA 和定制配置。
+2. 重新运行 open-assets configure-edge 生成入口路由并由 file provider 加载，使公开 OSS 路由使用 public-assets 策略；保持既有域名、私有 CA 和定制配置。
 3. 已配置网页公开分享的部署，在独立 uploads 路由中增加 `middlewares: [public-assets@file]`；先更新提供该中间件的主路由文件。
 4. 上传后核对字节、Content-Type、nosniff 与 CSP，再检查正文 `<img>` 展示。
 

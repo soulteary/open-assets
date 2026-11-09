@@ -16,7 +16,7 @@ done
 sudo install -m 0644 config/systemd/open-assets-info-refresh.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now open-assets-info-refresh.service
-sudo python3 -m open_assets.telemetry --root /app/open-assets
+sudo bin/open-assets telemetry --root /app/open-assets
 sudo systemctl enable --now open-assets-info.timer open-assets-objects.timer open-assets-audits.timer open-assets-resources.timer open-assets-doctor.timer
 ```
 
@@ -111,7 +111,7 @@ sudo ./scripts/open-assets check-restore KEY FULL_SHA
 `open-assets-audits.timer` 默认每 15 分钟采集；普通主机快照只读取缓存和有界的操作摘要。归档后需要立即更新时：
 
 ```sh
-sudo python3 -m open_assets.audit_info --root /app/open-assets --force
+sudo bin/open-assets audit-info --root /app/open-assets --force
 sudo systemctl start open-assets-info.service
 ```
 
@@ -128,7 +128,7 @@ sudo systemctl start open-assets-info.service
 `.env` 可配置 `INFO_RESOURCE_INTERVAL_SECONDS`（60–86400 秒）和 `INFO_RESOURCE_WARN_PERCENT`（1–99，默认 80）。达到提示比例时显示接近预算，达到 100% 显示达到或超过。预算变更后旧缓存失效。提示不修改准入额度、清理数据或发送通知。
 
 ```sh
-sudo python3 -m open_assets.resource_info --root /app/open-assets --force
+sudo bin/open-assets resource-info --root /app/open-assets --force
 sudo systemctl start open-assets-info.service
 sudo systemctl status open-assets-resources.timer --no-pager
 ```
@@ -148,7 +148,7 @@ sudo systemctl status open-assets-resources.timer --no-pager
 需要更新时，在服务器执行：
 
 ```sh
-sudo python3 -m open_assets.doctor_info --root /app/open-assets --force
+sudo bin/open-assets doctor-info --root /app/open-assets --force
 sudo systemctl start open-assets-info.service
 sudo systemctl status open-assets-doctor.timer open-assets-doctor.service --no-pager
 ```
