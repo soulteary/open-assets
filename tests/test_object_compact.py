@@ -78,6 +78,25 @@ class Compact(unittest.TestCase):
         self.assert_versions()
         self.assertEqual(object_compact.run(f.config, f.store)["redundant_bytes"], 0)
 
+    def test_empty_status_is_unversioned_but_enabled_is_refused(self):
+        with patch.object(
+            self.f.store, "get_bucket_versioning", return_value={"Status": ""}
+        ):
+            self.assertEqual(
+                object_compact.run(self.f.config, self.f.store)["objects_after"], 3
+            )
+        for status in ("Enabled", "Suspended"):
+            with (
+                patch.object(
+                    self.f.store,
+                    "get_bucket_versioning",
+                    return_value={"Status": status},
+                ),
+                self.assertRaises(ValueError),
+            ):
+                object_compact.run(self.f.config, self.f.store, apply=True)
+        self.assertFalse(self.f.store.deleted)
+
     def test_bad_old_source_stops_before_metadata_or_delete(self):
         f = self.f
         name = next(iter(f.store.objects))

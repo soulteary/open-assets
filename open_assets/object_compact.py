@@ -29,7 +29,10 @@ def run(config, client, apply=False):
     report = dict(
         apply=apply, objects_before=0, objects_after=0, redundant_bytes=0, deleted=0
     )
-    if client.get_bucket_versioning(Bucket=config["bucket"]).get("Status") is not None:
+    if client.get_bucket_versioning(Bucket=config["bucket"]).get("Status") not in (
+        None,
+        "",
+    ):
         raise ValueError("compaction requires an unversioned bucket")
     with core.lock(config):
         if any(

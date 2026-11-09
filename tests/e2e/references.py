@@ -180,6 +180,21 @@ def main():
             "compact-objects",
             "--apply",
         )
+    except RuntimeError:
+        # Worker CLI emits only allowlisted diagnostics. Never print captured
+        # raw Docker output, private files or credentials.
+        for line in (ROOT / "private/e2e/last-error.txt").read_text().splitlines():
+            try:
+                diagnostic = json.loads(line)
+            except ValueError:
+                continue
+            if diagnostic.get("status") == "failed":
+                print(
+                    "COMPACTION_FAILURE",
+                    {k: diagnostic.get(k) for k in ("error", "command")},
+                    flush=True,
+                )
+        raise
     finally:
         command("python3", "-m", "open_assets.admin", "objects", "setup")
     # Previously complete physical versions now resolve through canonical objects.
