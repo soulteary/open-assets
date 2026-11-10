@@ -1208,6 +1208,7 @@ pub fn render(c: &Value, directory: &Path) -> Result<()> {
         "default_type application/octet-stream;".into(),
         "resolver 127.0.0.11 valid=10s ipv6=off;".into(),
         "map $request_method $oa_allow { default \"GET, HEAD\"; GET \"\"; HEAD \"\"; }".into(),
+        "limit_conn_zone $hostname zone=oa_public_reader:1m;".into(),
     ];
     if policy.hotlink_enabled {
         lines.push("map $http_referer $oa_referer_allowed { default 0;".into());
@@ -1227,7 +1228,7 @@ pub fn render(c: &Value, directory: &Path) -> Result<()> {
         lines.push("}".into());
     }
     let proxy = |port| {
-        format!("set $oa_reader http://object-reader:{port}; proxy_pass $oa_reader$request_uri; proxy_http_version 1.1; proxy_pass_request_body off; proxy_pass_request_headers off; proxy_set_header Host object-reader; proxy_set_header Content-Length \"\"; proxy_set_header Transfer-Encoding \"\"; proxy_set_header Connection \"\"; proxy_set_header Cookie \"\"; proxy_set_header Authorization \"\"; proxy_set_header Accept-Encoding $http_accept_encoding; proxy_set_header Range $http_range; proxy_set_header If-Range $http_if_range; proxy_set_header If-Match $http_if_match; proxy_set_header If-Unmodified-Since $http_if_unmodified_since; proxy_set_header If-None-Match $http_if_none_match; proxy_set_header If-Modified-Since $http_if_modified_since; proxy_set_header Referer $http_referer; proxy_request_buffering off; proxy_buffering off;")
+        format!("limit_conn oa_public_reader 16; set $oa_reader http://object-reader:{port}; proxy_pass $oa_reader$request_uri; proxy_http_version 1.1; proxy_pass_request_body off; proxy_pass_request_headers off; proxy_set_header Host object-reader; proxy_set_header Content-Length \"\"; proxy_set_header Transfer-Encoding \"\"; proxy_set_header Connection \"\"; proxy_set_header Cookie \"\"; proxy_set_header Authorization \"\"; proxy_set_header Accept-Encoding $http_accept_encoding; proxy_set_header Range $http_range; proxy_set_header If-Range $http_if_range; proxy_set_header If-Match $http_if_match; proxy_set_header If-Unmodified-Since $http_if_unmodified_since; proxy_set_header If-None-Match $http_if_none_match; proxy_set_header If-Modified-Since $http_if_modified_since; proxy_set_header Referer $http_referer; proxy_request_buffering off; proxy_buffering off;")
     };
     for port in [8080, 8084, 8086] {
         lines.push(format!(
