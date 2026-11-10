@@ -143,7 +143,7 @@ fn caches(root: &Path, data: &Path, c: &Value) -> Vec<Value> {
             common::digest(&json!(["audit-cache-v1", sorted])).unwrap_or_default(),
             900.0,
         ),
-        ("resources", "resources-cache.json", resources_scope, 900.0),
+        ("resources", "resource-cache.json", resources_scope, 900.0),
     ];
     for (name, file, scope, interval) in scopes {
         let summary = (|| -> Result<Vec<Value>> {
@@ -287,6 +287,36 @@ pub fn doctor(root: &Path) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn resource_diagnostics_reads_collector_cache_and_checks_scope() {
+        let root = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        std::fs::create_dir(data.path().join("info")).unwrap();
+        let config = json!({"repositories": []});
+        let scope = common::digest(&json!([
+            Vec::<String>::new(),
+            common::limits(&config).unwrap()
+        ]))
+        .unwrap();
+        let path = data.path().join("info/resource-cache.json");
+        let mut cache = json!({"schema_version":1,"scope":scope,"status":"ok","sample":{"measured_at":common::now()}});
+        std::fs::write(&path, cache.to_string()).unwrap();
+        let resource = |rows: Vec<Value>| {
+            rows.into_iter()
+                .find(|r| r["cache"] == "resources")
+                .unwrap()
+        };
+        assert_eq!(
+            resource(caches(root.path(), data.path(), &config))["reason"],
+            "fresh"
+        );
+        cache["scope"] = json!("changed");
+        std::fs::write(&path, cache.to_string()).unwrap();
+        assert_eq!(
+            resource(caches(root.path(), data.path(), &config))["status"],
+            "attention"
+        );
+    }
     #[test]
     fn disabled_optional_timer_does_not_hide_failure() {
         let text="Id=open-assets-repair.timer\nLoadState=loaded\nActiveState=inactive\nUnitFileState=disabled\n\nId=open-assets-repair.service\nLoadState=loaded\nActiveState=failed\nResult=exit-code\nExecMainCode=1\nExecMainStatus=1\nExecMainStartTimestampMonotonic=1000000\nExecMainExitTimestampMonotonic=2000000\nConditionResult=yes\nConditionTimestampMonotonic=0\n";
