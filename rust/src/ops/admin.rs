@@ -439,16 +439,10 @@ pub fn ensure_repository(root: &Path, args: &[String]) -> Result<()> {
         manager.compose(&["run", "--rm", "--no-deps", "publisher", "validate"])?;
         let generated = manager.private.join("generated");
         let bind = format!("{}:/generated", generated.display());
-        manager.compose(&[
-            "run",
-            "--rm",
-            "--no-deps",
-            "-v",
-            &bind,
-            "publisher",
-            "render",
-            "/generated/.onboarding",
-        ])?;
+        let render_args = onboarding_render_args(&generated, &bind)?;
+        manager.compose(&render_args.iter().map(String::as_str).collect::<Vec<_>>())?;
+        preserve_onboarding_policy(&generated)?;
+
         let live = generated.join("images.conf");
         let old = fs::read(&live)?;
         let new = fs::read(generated.join(".onboarding/images.conf"))?;
@@ -522,6 +516,74 @@ pub fn ensure_repository(root: &Path, args: &[String]) -> Result<()> {
     println!("{public}");
     Ok(())
 }
+// Public access is independently configured: repository onboarding must never
+// replace its policy with renderer defaults or add it to repositories.yaml.
+fn onboarding_render_args(generated: &Path, bind: &str) -> Result<Vec<String>> {
+    let mut args = [
+        "run",
+        "--rm",
+        "--no-deps",
+        "-v",
+        bind,
+        "publisher",
+        "render",
+        "/generated/.onboarding",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect::<Vec<_>>();
+    let policy = generated.join("public-access.json");
+    match fs::symlink_metadata(&policy) {
+        Ok(_) => {
+            crate::public_access::Policy::load(&policy)?;
+            args.extend([
+                "--public-access-config".into(),
+                "/generated/public-access.json".into(),
+            ]);
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
+    Ok(args)
+}
+fn preserve_onboarding_policy(generated: &Path) -> Result<()> {
+    let live = generated.join("public-access.json");
+    let candidate = generated.join(".onboarding/public-access.json");
+    let candidate_policy = crate::public_access::Policy::load(&candidate)?;
+    // Require an actual generated file; optional loading alone would mistake a
+    // missing candidate for a successful default-policy render.
+    let candidate_bytes = common::read_regular(&candidate, 65536)?;
+    match fs::symlink_metadata(&live) {
+        Ok(_) => {
+            ensure!(
+                crate::public_access::Policy::load(&live)? == candidate_policy,
+                "onboarding changed public access policy"
+            );
+            // Preserve the exact existing JSON and its live inode (Reader uses a
+            // file bind mount); only the private candidate needs synchronization.
+            let bytes = common::read_regular(&live, 65536)?;
+            private_write(&candidate, &bytes, None)?;
+            fs::set_permissions(&candidate, fs::Permissions::from_mode(0o644))?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Legacy deployments have no independent policy. Publish the new
+            // renderer's defaults without replacing any existing file.
+            let mut f = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o644)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(&live)?;
+            f.set_permissions(fs::Permissions::from_mode(0o644))?;
+            f.write_all(&candidate_bytes)?;
+            f.sync_all()?;
+            fs::File::open(generated)?.sync_all()?;
+        }
+        Err(e) => return Err(e.into()),
+    }
+    Ok(())
+}
+
 fn iam_policy(c: &Value, compaction: bool) -> Result<Value> {
     let bucket = c["bucket"].as_str().context("bucket")?;
     let mut scopes = Vec::new();
@@ -861,6 +923,65 @@ pub fn acknowledge_closure(root: &Path, args: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn onboarding_retains_independent_hotlink_policy_and_live_inode() {
+        let temp = tempfile::tempdir().unwrap();
+        let generated = temp.path();
+        fs::create_dir(generated.join(".onboarding")).unwrap();
+        let raw = br#"{"hotlink_enabled":true,"allowed_referers":["example.com"],"qps":25}"#;
+        fs::write(generated.join("public-access.json"), raw).unwrap();
+        let inode = fs::metadata(generated.join("public-access.json"))
+            .unwrap()
+            .ino();
+        let args = onboarding_render_args(generated, "/private/generated:/generated").unwrap();
+        assert_eq!(
+            &args[args.len() - 2..],
+            ["--public-access-config", "/generated/public-access.json"]
+        );
+        let policy =
+            crate::public_access::Policy::load(&generated.join("public-access.json")).unwrap();
+        fs::write(
+            generated.join(".onboarding/public-access.json"),
+            serde_json::to_vec(&policy).unwrap(),
+        )
+        .unwrap();
+        preserve_onboarding_policy(generated).unwrap();
+        assert_eq!(fs::read(generated.join("public-access.json")).unwrap(), raw);
+        assert_eq!(
+            fs::metadata(generated.join("public-access.json"))
+                .unwrap()
+                .ino(),
+            inode
+        );
+        assert_eq!(
+            fs::read(generated.join(".onboarding/public-access.json")).unwrap(),
+            raw
+        );
+        fs::write(generated.join(".onboarding/public-access.json"), b"{}").unwrap();
+        assert!(preserve_onboarding_policy(generated).is_err());
+        assert_eq!(fs::read(generated.join("public-access.json")).unwrap(), raw);
+    }
+    #[test]
+    fn onboarding_legacy_policy_defaults_are_optional_but_candidate_is_required() {
+        let temp = tempfile::tempdir().unwrap();
+        let generated = temp.path();
+        fs::create_dir(generated.join(".onboarding")).unwrap();
+        assert!(!onboarding_render_args(generated, "x:/generated")
+            .unwrap()
+            .iter()
+            .any(|s| s == "--public-access-config"));
+        assert!(preserve_onboarding_policy(generated).is_err());
+        fs::write(
+            generated.join(".onboarding/public-access.json"),
+            serde_json::to_vec(&crate::public_access::Policy::default()).unwrap(),
+        )
+        .unwrap();
+        preserve_onboarding_policy(generated).unwrap();
+        assert_eq!(
+            crate::public_access::Policy::load(&generated.join("public-access.json")).unwrap(),
+            crate::public_access::Policy::default()
+        );
+    }
     #[test]
     fn policy_extends_only_one_write_statement() {
         let p = json!({"Statement":[{"Effect":"Allow","Action":["s3:PutObject"],"Resource":["arn:existing"]}]});

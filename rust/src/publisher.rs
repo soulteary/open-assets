@@ -5,8 +5,9 @@ use serde_json::{json, Value};
 use sha2::Sha256;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File},
+    fs,
     io::Write,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread,
@@ -1175,19 +1176,8 @@ fn worker(c: &Value) -> Result<()> {
     }
 }
 pub fn render(c: &Value, directory: &Path) -> Result<()> {
-    fs::create_dir_all(directory)?;
-    let mut lines = vec![
-        "include /etc/nginx/mime.types;".to_string(),
-        "default_type application/octet-stream;".into(),
-        "server { listen 8080; server_tokens off; autoindex off; open_file_cache off;".into(),
-        "add_header X-Content-Type-Options nosniff always;".into(),
-        format!(
-            "add_header Content-Security-Policy \"{}\" always;",
-            snapshot::CSP
-        ),
-        "add_header Cache-Control \"public, max-age=300, must-revalidate\";".into(),
-        "location ~ (^|/)\\. { deny all; }".into(),
-    ];
+    let policy = crate::public_access::Policy::from_config(c)?;
+    let mut locations = Vec::new();
     let mut root = false;
     let mount_pattern = regex::Regex::new(r"^/(?:[a-z0-9][a-z0-9-]*/)?$")?;
     for r in c["repositories"].as_array().context("repositories")? {
@@ -1203,22 +1193,90 @@ pub fn render(c: &Value, directory: &Path) -> Result<()> {
         let path = format!("/srv/images/repos/{key}/current/");
         if mount == "/" {
             root = true;
-            lines.push(format!("location / {{ root {path}; limit_except GET HEAD {{ deny all; }} try_files $uri =404; }}"))
-        } else {
-            lines.push(format!(
-                "location {mount} {{ alias {path}; limit_except GET HEAD {{ deny all; }} }}"
+            locations.push(format!(
+                "location / {{ root {path}; try_files $uri =404; }}"
             ));
+        } else {
+            locations.push(format!("location {mount} {{ alias {path}; }}"));
         }
     }
     if !root {
-        lines.push("location / { return 404; }".into());
+        locations.push("location / { return 404; }".into());
     }
-    lines.push("}".into());
-    let mut f = File::create(directory.join("images.conf"))?;
-    f.write_all((lines.join("\n") + "\n").as_bytes())?;
-    f.sync_all()?;
+    let mut lines = vec![
+        "include /etc/nginx/mime.types;".into(),
+        "default_type application/octet-stream;".into(),
+        "resolver 127.0.0.11 valid=10s ipv6=off;".into(),
+        "map $request_method $oa_allow { default \"GET, HEAD\"; GET \"\"; HEAD \"\"; }".into(),
+    ];
+    if policy.hotlink_enabled {
+        lines.push("map $http_referer $oa_referer_allowed { default 0;".into());
+        if policy.allow_empty_referer {
+            lines.push("\"\" 1;".into());
+        }
+        for domain in &policy.allowed_referers {
+            let pattern = if let Some(suffix) = domain.strip_prefix("*.") {
+                format!(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*\.{}", regex::escape(suffix))
+            } else {
+                regex::escape(domain)
+            };
+            lines.push(format!(
+                r#""~*^https?://{pattern}(?::0*(?:[0-9]{{1,4}}|[0-5][0-9]{{4}}|6[0-4][0-9]{{3}}|65[0-4][0-9]{{2}}|655[0-2][0-9]|6553[0-5]))?(?:[/?#][^[:space:][:cntrl:]\x5c]*)?$" 1;"#
+            ));
+        }
+        lines.push("}".into());
+    }
+    let proxy = |port| {
+        format!("set $oa_reader http://object-reader:{port}; proxy_pass $oa_reader$request_uri; proxy_http_version 1.1; proxy_pass_request_body off; proxy_pass_request_headers off; proxy_set_header Host object-reader; proxy_set_header Content-Length \"\"; proxy_set_header Transfer-Encoding \"\"; proxy_set_header Connection \"\"; proxy_set_header Cookie \"\"; proxy_set_header Authorization \"\"; proxy_set_header Accept-Encoding $http_accept_encoding; proxy_set_header Range $http_range; proxy_set_header If-Range $http_if_range; proxy_set_header If-Match $http_if_match; proxy_set_header If-Unmodified-Since $http_if_unmodified_since; proxy_set_header If-None-Match $http_if_none_match; proxy_set_header If-Modified-Since $http_if_modified_since; proxy_set_header Referer $http_referer; proxy_request_buffering off; proxy_buffering off;")
+    };
+    for port in [8080, 8084, 8086] {
+        lines.push(format!(
+            "server {{ listen {port}; server_tokens off; autoindex off; open_file_cache off; gzip off;"
+        ));
+        lines.push("if ($request_method !~ ^(GET|HEAD)$) { return 405; }".into());
+        lines.push("lingering_close off; error_page 405 = @oa_method_not_allowed; location @oa_method_not_allowed { keepalive_timeout 0; lingering_close off; return 405; }".into());
+        lines.push("add_header X-Content-Type-Options nosniff always;".into());
+        lines.push("add_header Allow $oa_allow always;".into());
+        lines.push(format!(
+            "add_header Content-Security-Policy \"{}\" always;",
+            snapshot::CSP
+        ));
+        lines.push("add_header Cache-Control \"public, max-age=300, must-revalidate\";".into());
+        if port != 8086 && policy.hotlink_enabled {
+            lines.push("if ($oa_referer_allowed = 0) { return 403; }".into());
+        }
+        lines.push(r"location ~ (^|/)\. { deny all; }".into());
+        if port == 8084 {
+            lines.push(format!("location / {{ {} }}", proxy(8083)));
+        } else {
+            if port == 8080 {
+                lines.push(format!(
+                    r"location ~* \.(?:js|html|css|xml|json|shtml|htm)$ {{ {} }}",
+                    proxy(8085)
+                ));
+            }
+            lines.extend(locations.clone());
+        }
+        lines.push("}".into());
+    }
+    lines.push("server { listen 8087; server_tokens off; keepalive_timeout 0; lingering_close off; return 302 https://$host$request_uri; }".into());
+    fs::create_dir_all(directory)?;
+    let outputs = [
+        ("images.conf", (lines.join("\n") + "\n").into_bytes()),
+        ("public-access.json", serde_json::to_vec_pretty(&policy)?),
+    ];
+    for (name, bytes) in outputs {
+        let mut staged = tempfile::NamedTempFile::new_in(directory)?;
+        staged
+            .as_file()
+            .set_permissions(fs::Permissions::from_mode(0o644))?;
+        staged.write_all(&bytes)?;
+        staged.as_file().sync_all()?;
+        staged.persist(directory.join(name))?;
+    }
     snapshot::sync_dir(directory)
 }
+
 fn parse_status(args: &[String]) -> Result<(String, Option<String>, Option<String>)> {
     let (mut scope, mut key, mut sha) = (None, None, None);
     let mut i = 0;
@@ -1913,5 +1971,60 @@ pub(crate) mod proof_reuse_fixtures {
             fs::write(&p, vec![b'X'; size as usize]).unwrap();
             fs::set_permissions(&p, fs::Permissions::from_mode(0o444)).unwrap();
         }
+    }
+}
+
+#[cfg(test)]
+mod public_render_tests {
+    use super::*;
+    use std::os::unix::fs::MetadataExt;
+    #[test]
+    fn public_servers_keep_policy_and_internal_static_origin_separate() {
+        let temp = tempfile::tempdir().unwrap();
+        let c = json!({"repositories":[{"key":"images","mount_path":"/"},{"key":"other","mount_path":"/other/"}],"public_access":{"hotlink_enabled":true,"allowed_referers":["example.com","*.example.org"]}});
+        render(&c, temp.path()).unwrap();
+        let text = fs::read_to_string(temp.path().join("images.conf")).unwrap();
+        assert_eq!(text.matches("return 405;").count(), 6);
+        assert!(text.contains("proxy_set_header Transfer-Encoding \"\";"));
+        let redirect = text.split("server { listen 8087;").nth(1).unwrap();
+        assert!(redirect.contains("return 302 https://$host$request_uri;"));
+        assert!(redirect.contains("keepalive_timeout 0; lingering_close off;"));
+        assert!(!redirect.contains("request_method"));
+        assert!(!redirect.contains("nosniff"));
+        assert!(text.contains("if ($request_method !~ ^(GET|HEAD)$)"));
+        assert!(text.contains("proxy_set_header If-Match $http_if_match;"));
+        assert!(text.contains("proxy_set_header If-Unmodified-Since $http_if_unmodified_since;"));
+        assert_eq!(text.matches("if ($oa_referer_allowed = 0)").count(), 2);
+        assert!(text.contains("resolver 127.0.0.11"));
+        assert!(text.contains("(?:js|html|css|xml|json|shtml|htm)$"));
+        assert!(text.contains("proxy_pass_request_body off"));
+        assert!(text.contains("proxy_pass_request_headers off"));
+        assert!(text.contains("alias /srv/images/repos/other/current/"));
+        let internal = text.split("server { listen 8086;").nth(1).unwrap();
+        assert!(!internal.contains("proxy_pass"));
+        assert!(!internal.contains("invalid_referer"));
+        assert!(!text.contains("Strict-Transport-Security"));
+        for name in ["images.conf", "public-access.json"] {
+            assert_eq!(
+                fs::metadata(temp.path().join(name)).unwrap().mode() & 0o777,
+                0o644
+            );
+        }
+        assert_eq!(
+            crate::public_access::Policy::load(&temp.path().join("public-access.json"))
+                .unwrap()
+                .qps,
+            100
+        );
+    }
+    #[test]
+    fn bad_render_input_cannot_replace_valid_generated_configuration() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut c = json!({"repositories":[{"key":"images","mount_path":"/"}]});
+        render(&c, temp.path()).unwrap();
+        let original = fs::read(temp.path().join("images.conf")).unwrap();
+        c["public_access"] = json!({"allowed_referers":["evil;include /secret;"]});
+        assert!(render(&c, temp.path()).is_err());
+        assert_eq!(fs::read(temp.path().join("images.conf")).unwrap(), original);
     }
 }

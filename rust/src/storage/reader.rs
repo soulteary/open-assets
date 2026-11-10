@@ -41,7 +41,7 @@ impl ReaderConfig {
         })
     }
 }
-fn decode_path(path: &str) -> Result<String> {
+pub(crate) fn decode_path(path: &str) -> Result<String> {
     let path = path.split('?').next().unwrap_or(path);
     let mut bytes = Vec::new();
     let mut chars = path.as_bytes().iter();
@@ -225,22 +225,26 @@ fn error(request: tiny_http::Request, status: u16) {
     }
     let _ = request.respond(response);
 }
-type ForwardResponse = (Response, Vec<Header>, Option<usize>, Option<File>);
 fn handle(
     request: tiny_http::Request,
     config: &ReaderConfig,
     http: &HttpClient,
     cache: &Mutex<Cache>,
+    policy: &crate::public_access::Policy,
 ) {
-    if request.url() == "/healthz" {
-        error(request, 200);
-        return;
-    }
     if !matches!(request.method(), HttpMethod::Get | HttpMethod::Head) {
         error(request, 405);
         return;
     }
-    let result = (|| -> Result<ForwardResponse> {
+    if request.url() == "/healthz" {
+        error(request, 200);
+        return;
+    }
+    if !super::public_proxy::allowed(&request, policy) {
+        error(request, 403);
+        return;
+    }
+    let result = (|| -> Result<(Response, Option<String>, Option<File>)> {
         let lock = read_guard(&config.receipts.join("compaction.lock"), false, false)?;
         let (key, mime) = resolve_cached(config, request.url(), cache)?;
         let mut endpoint = config.endpoint.clone();
@@ -254,64 +258,14 @@ fn handle(
         } else {
             Method::GET
         };
-        let mut upstream = http.request(method, endpoint);
-        for name in [
-            "Range",
-            "If-Range",
-            "If-Match",
-            "If-None-Match",
-            "If-Modified-Since",
-            "If-Unmodified-Since",
-        ] {
-            if let Some(h) = request.headers().iter().find(|h| h.field.equiv(name)) {
-                upstream = upstream.header(name, h.value.as_str());
-            }
-        }
-        let response = upstream.send().context("upstream request unavailable")?;
-        let mut headers = Vec::new();
-        for name in [
-            "Content-Length",
-            "Content-Range",
-            "Content-Encoding",
-            "ETag",
-            "Last-Modified",
-            "Accept-Ranges",
-            "Cache-Control",
-        ] {
-            if let Some(value) = response.headers().get(name) {
-                headers.push(header(name, value.to_str()?)?);
-            }
-        }
-        let content_type = if matches!(response.status().as_u16(), 200 | 206 | 304) {
-            mime.as_deref().unwrap_or(
-                response
-                    .headers()
-                    .get("content-type")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("application/octet-stream"),
-            )
-        } else {
-            response
-                .headers()
-                .get("content-type")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("application/octet-stream")
-        };
-        headers.push(header("Content-Type", content_type)?);
-        headers.push(header("X-Content-Type-Options", "nosniff")?);
-        headers.push(header("Content-Security-Policy", CSP)?);
-        let length = response
-            .headers()
-            .get("content-length")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<usize>().ok());
-        Ok((response, headers, length, lock))
+        let response = super::public_proxy::conditional(http.request(method, endpoint), &request)
+            .send()
+            .context("upstream request unavailable")?;
+        Ok((response, mime, lock))
     })();
     match result {
-        Ok((response, headers, length, _guard)) => {
-            let status = StatusCode(response.status().as_u16());
-            let out = ServerResponse::new(status, headers, response, length, None);
-            let _ = request.respond(out);
+        Ok((response, mime, _guard)) => {
+            let _ = super::public_proxy::respond(request, response, mime.as_deref(), policy);
         }
         Err(e) => {
             let code = if e
@@ -331,6 +285,12 @@ fn handle(
     }
 }
 pub fn serve() -> Result<()> {
+    let policy = Arc::new(crate::public_access::Policy::load(
+        &env::var_os("PUBLIC_ACCESS_CONFIG")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| "/config/public-access.json".into()),
+    )?);
+    let _images = super::public_proxy::start(Arc::clone(&policy))?;
     let config = Arc::new(ReaderConfig::from_env()?);
     let http = Arc::new(http_client(config.ca.as_deref(), 20)?);
     let cache = Arc::new(Mutex::new(Cache::default()));
@@ -342,6 +302,7 @@ pub fn serve() -> Result<()> {
             error(request, 503);
             continue;
         }
+        let policy = Arc::clone(&policy);
         let c = Arc::clone(&config);
         let http = Arc::clone(&http);
         let cache = Arc::clone(&cache);
@@ -354,7 +315,7 @@ pub fn serve() -> Result<()> {
                 }
             }
             let _guard = Active(active);
-            handle(request, &c, &http, &cache);
+            handle(request, &c, &http, &cache, &policy);
         });
     }
     Ok(())
@@ -489,7 +450,13 @@ mod tests {
                     .recv_timeout(Duration::from_secs(5))
                     .unwrap()
                     .unwrap();
-                handle(request, &config, &http, &cache);
+                handle(
+                    request,
+                    &config,
+                    &http,
+                    &cache,
+                    &crate::public_access::Policy::from_config(&json!({})).unwrap(),
+                );
             }
         });
         let http = http_client(None, 5).unwrap();

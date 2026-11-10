@@ -343,7 +343,12 @@ fn edge_fixture(client: &Client) -> Result<(Client, Value)> {
         .context("routers")?
         .values_mut()
     {
-        router["tls"] = json!({});
+        if router["entryPoints"]
+            .as_array()
+            .is_some_and(|points| points.iter().any(|point| point == "websecure"))
+        {
+            router["tls"] = json!({});
+        }
     }
     fs::write(p.join("dynamic/routes.yaml"), serde_json::to_vec(&routes)?)?;
     fs::write(
@@ -355,7 +360,7 @@ fn edge_fixture(client: &Client) -> Result<(Client, Value)> {
     fs::write(
         p.join("static.yaml"),
         serde_json::to_vec(
-            &json!({"entryPoints":{"websecure":{"address":":8443"}},"providers":{"file":{"directory":"/etc/traefik/dynamic"}},"api":{"dashboard":true},"global":{"checkNewVersion":false,"sendAnonymousUsage":false},"log":{"level":"ERROR"}}),
+            &json!({"entryPoints":{"web":{"address":":8080"},"websecure":{"address":":8443"}},"providers":{"file":{"directory":"/etc/traefik/dynamic"}},"api":{"dashboard":true},"global":{"checkNewVersion":false,"sendAnonymousUsage":false},"log":{"level":"ERROR"}}),
         )?,
     )?;
     for file in [
