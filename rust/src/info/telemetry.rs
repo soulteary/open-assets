@@ -230,12 +230,26 @@ fn probe(
     if hostname.is_some() {
         builder = builder.resolve(host, format!("{address}:{port}").parse()?);
     }
-    let response = builder
-        .build()?
-        .get(format!("{scheme}://{host}:{port}{path}"))
-        .send()?;
+    let client = builder.build()?;
+    let response = probe_request(&client, scheme, host, port, path, hostname)?.send()?;
     ensure!(response.status() == 200, "probe failed");
     Ok(started.elapsed().as_secs_f64() * 1000.0)
+}
+fn probe_request(
+    client: &reqwest::blocking::Client,
+    scheme: &str,
+    host: &str,
+    port: u16,
+    path: &str,
+    hostname: Option<&str>,
+) -> Result<reqwest::blocking::RequestBuilder> {
+    let mut request = client.get(format!("{scheme}://{host}:{port}{path}"));
+    if let Some(hostname) = hostname {
+        // Match the service's virtual-host policy while retaining the URL host
+        // for TLS SNI and certificate validation.
+        request = request.header(reqwest::header::HOST, hostname);
+    }
+    Ok(request)
 }
 pub fn cleanup_service(service: &str) -> Value {
     if !service.starts_with("open-assets-") || !service.ends_with(".service") {
@@ -1222,6 +1236,27 @@ fn certificate_summary(root: &Path, domains: &Value) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tls_probe_uses_service_host_without_internal_port() {
+        let client = reqwest::blocking::Client::new();
+        let request = probe_request(
+            &client,
+            "https",
+            "console.example.test",
+            9090,
+            "/",
+            Some("console.example.test"),
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+        assert_eq!(request.url().port(), Some(9090));
+        assert_eq!(request.url().host_str(), Some("console.example.test"));
+        assert_eq!(
+            request.headers()[reqwest::header::HOST],
+            "console.example.test"
+        );
+    }
     #[test]
     fn stats_units() {
         assert_eq!(stats_size("1.5MiB").unwrap(), 1572864);
