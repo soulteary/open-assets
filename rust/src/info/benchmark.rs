@@ -46,6 +46,7 @@ fn resources() -> Result<Value> {
             "webhook",
             "info",
             "object-reader",
+            "public-limiter",
             "traefik",
         ]
         .iter()

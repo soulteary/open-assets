@@ -1,7 +1,7 @@
 use super::telemetry::command;
 use super::*;
 fn eligible(inspections: &[Value], external: &str) -> Vec<Value> {
-    inspections.iter().filter_map(|raw|{let labels=&raw["Config"]["Labels"];let project=labels["com.docker.compose.project"].as_str()?;let service=labels["com.docker.compose.service"].as_str()?;let own=project=="asset-stack"&&["webhook","publisher","info","object-reader","nginx","stargate","gitea","oc","otterio"].contains(&service);if !own&&!(project==external&&!external.is_empty()&&service=="traefik"){return None;}Some(json!({"id":raw["Id"],"service":service,"scope":format!("{project}/{service}"),"running":raw["State"]["Running"]==true,"paused":raw["State"]["Paused"]==true,"health":raw["State"]["Health"]["Status"]}))}).collect()
+    inspections.iter().filter_map(|raw|{let labels=&raw["Config"]["Labels"];let project=labels["com.docker.compose.project"].as_str()?;let service=labels["com.docker.compose.service"].as_str()?;let own=project=="asset-stack"&&["webhook","publisher","info","object-reader","public-limiter","nginx","stargate","gitea","oc","otterio"].contains(&service);if !own&&!(project==external&&!external.is_empty()&&service=="traefik"){return None;}Some(json!({"id":raw["Id"],"service":service,"scope":format!("{project}/{service}"),"running":raw["State"]["Running"]==true,"paused":raw["State"]["Paused"]==true,"health":raw["State"]["Health"]["Status"]}))}).collect()
 }
 pub fn plan(rows: &[Value], state: &Value, at: f64) -> Result<(Value, Vec<Value>)> {
     let mut state = state.clone();

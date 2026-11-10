@@ -302,7 +302,7 @@ pub fn configure_edge(args: &[String]) -> Result<()> {
             "invalid configured hostname"
         );
     }
-    let public_policy = if let Some(path) = flag(args, "--public-access-config") {
+    let _public_policy = if let Some(path) = flag(args, "--public-access-config") {
         crate::public_access::Policy::from_config(
             &json!({"public_access":common::read_json(Path::new(path),65_536)?}),
         )?
@@ -344,14 +344,23 @@ pub fn configure_edge(args: &[String]) -> Result<()> {
         }
         let mut r = json!({"rule":rule,"entryPoints":["websecure"],"service":if key=="oss"{"release-objects"}else{service},"tls":{"certResolver":"le"}});
         if matches!(key, "img" | "oss") {
-            r["middlewares"] = json!(["public-assets", "public-qps"]);
+            r["middlewares"] = json!([
+                "public-assets",
+                if key == "img" {
+                    "public-limit-images"
+                } else {
+                    "public-limit-oss"
+                }
+            ]);
         }
         if ["git", "storage", "traefik", "info"].contains(&key) {
             r["middlewares"] = json!(["console-auth", "console-gzip"]);
         }
         routers[key] = r;
     }
-    routers["public-http"] = json!({"rule":format!("Host(`{}`) || Host(`{}`)",domains["img"].as_str().unwrap(),domains["oss"].as_str().unwrap()),"entryPoints":["web"],"service":"public-redirect","priority":100,"middlewares":["public-http-headers","public-qps"]});
+    for role in ["img", "oss"] {
+        routers[format!("public-http-{role}")] = json!({"rule":format!("Host(`{}`)",domains[role].as_str().unwrap()),"entryPoints":["web"],"service":"public-redirect","priority":100,"middlewares":["public-http-headers",if role=="img" {"public-limit-images"} else {"public-limit-oss"}]});
+    }
     let management = ["git", "storage", "traefik", "info"]
         .map(|k| format!("Host(`{}`)", domains[k].as_str().unwrap_or("")))
         .join(" || ");
@@ -378,9 +387,11 @@ pub fn configure_edge(args: &[String]) -> Result<()> {
         ["Set-Cookie"] = json!("");
     config["http"]["middlewares"]["public-assets"]["headers"]["stsSeconds"] = json!(0);
     config["http"]["middlewares"]["public-http-headers"] = json!({"headers":{"customResponseHeaders":{"Strict-Transport-Security":"","Set-Cookie":""},"customRequestHeaders":{"Authorization":"","Cookie":""}}});
-    // Default source criterion is the authenticated socket peer, not client XFF.
-    config["http"]["middlewares"]["public-qps"] =
-        json!({"rateLimit":{"average":public_policy.qps,"period":"1s","burst":public_policy.qps}});
+    // One internal admission process shares atomic budgets across all routers.
+    // Traefik replaces XFF with the socket peer; never forward bodies or secrets.
+    for class in ["images", "oss"] {
+        config["http"]["middlewares"][format!("public-limit-{class}")] = json!({"forwardAuth":{"address":format!("http://public-limiter:8088/{class}"),"trustForwardHeader":false,"forwardBody":false,"authRequestHeaders":["X-Forwarded-For"],"maxResponseBodySize":1024}});
+    }
     let old = fs::symlink_metadata(output).ok();
     if let Some(m) = &old {
         ensure!(m.is_file(), "route output must be a regular file");
@@ -851,10 +862,13 @@ mod tests {
         let v: Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
         let http = &v["http"];
         assert_eq!(
-            http["routers"]["public-http"]["entryPoints"],
+            http["routers"]["public-http-img"]["entryPoints"],
             json!(["web"])
         );
-        assert_eq!(http["routers"]["public-http"]["service"], "public-redirect");
+        assert_eq!(
+            http["routers"]["public-http-img"]["service"],
+            "public-redirect"
+        );
         assert_eq!(
             http["services"]["public-redirect"]["loadBalancer"]["servers"][0]["url"],
             "http://nginx:8087"
@@ -863,14 +877,34 @@ mod tests {
             http["services"]["release-objects"]["loadBalancer"]["servers"][0]["url"],
             "http://nginx:8084"
         );
+        assert!(http["middlewares"].get("public-qps").is_none());
         assert_eq!(
-            http["middlewares"]["public-qps"]["rateLimit"],
-            json!({"average":7,"period":"1s","burst":7})
+            http["middlewares"]["public-limit-images"]["forwardAuth"]["trustForwardHeader"],
+            false
+        );
+        assert_eq!(
+            http["middlewares"]["public-limit-images"]["forwardAuth"]["forwardBody"],
+            false
+        );
+        assert_eq!(
+            http["middlewares"]["public-limit-oss"]["forwardAuth"]["address"],
+            "http://public-limiter:8088/oss"
+        );
+        assert_eq!(
+            http["routers"]["public-http-oss"]["middlewares"],
+            json!(["public-http-headers", "public-limit-oss"])
         );
         for role in ["img", "oss"] {
             assert_eq!(
                 http["routers"][role]["middlewares"],
-                json!(["public-assets", "public-qps"])
+                json!([
+                    "public-assets",
+                    if role == "img" {
+                        "public-limit-images"
+                    } else {
+                        "public-limit-oss"
+                    }
+                ])
             );
         }
         assert_eq!(

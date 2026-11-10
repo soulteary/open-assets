@@ -566,6 +566,7 @@ fn run() -> Result<()> {
         "webhook",
         "publisher",
         "object-reader",
+        "public-limiter",
         "info",
     ])?;
     let mut readiness = json!({});
@@ -847,7 +848,13 @@ fn run() -> Result<()> {
             mime,
         )?;
     }
-    for role in ["publisher", "webhook", "info", "object-reader"] {
+    for role in [
+        "publisher",
+        "webhook",
+        "info",
+        "object-reader",
+        "public-limiter",
+    ] {
         compose(&["exec", "-T", role, "open-assets", "health", role])?;
         ensure!(
             compose(&[

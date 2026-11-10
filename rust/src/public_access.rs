@@ -3,13 +3,68 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BucketLimit {
+    pub average: u32,
+    pub burst: u32,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct RateLimits {
+    pub images_per_ip: BucketLimit,
+    pub oss_per_ip: BucketLimit,
+    pub global: BucketLimit,
+    pub oss_global: BucketLimit,
+}
+impl Default for RateLimits {
+    fn default() -> Self {
+        Self {
+            images_per_ip: BucketLimit {
+                average: 50,
+                burst: 100,
+            },
+            oss_per_ip: BucketLimit {
+                average: 20,
+                burst: 8,
+            },
+            global: BucketLimit {
+                average: 100,
+                burst: 100,
+            },
+            oss_global: BucketLimit {
+                average: 40,
+                burst: 12,
+            },
+        }
+    }
+}
+impl RateLimits {
+    pub fn validate(&self) -> Result<()> {
+        for b in [
+            self.images_per_ip,
+            self.oss_per_ip,
+            self.global,
+            self.oss_global,
+        ] {
+            ensure!(
+                (1..=100_000).contains(&b.average) && b.burst > 0 && b.burst <= b.average * 10,
+                "invalid rate limit"
+            );
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Policy {
     pub gzip_enabled: bool,
     pub gzip_min_bytes: u64,
     pub gzip_max_bytes: u64,
-    pub qps: u32,
+    /// Legacy per-IP ceiling; new deployments configure rate_limits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qps: Option<u32>,
+    pub rate_limits: RateLimits,
     pub hotlink_enabled: bool,
     pub allow_empty_referer: bool,
     pub allowed_referers: Vec<String>,
@@ -20,7 +75,8 @@ impl Default for Policy {
             gzip_enabled: true,
             gzip_min_bytes: 256,
             gzip_max_bytes: 2_097_152,
-            qps: 100,
+            qps: None,
+            rate_limits: RateLimits::default(),
             hotlink_enabled: false,
             allow_empty_referer: true,
             allowed_referers: vec![],
@@ -52,8 +108,22 @@ impl Policy {
             Err(e) => Err(e),
         }
     }
+    pub fn effective_limits(&self) -> RateLimits {
+        let mut r = self.rate_limits.clone();
+        if let Some(qps) = self.qps {
+            for b in [&mut r.images_per_ip, &mut r.oss_per_ip] {
+                b.average = b.average.min(qps);
+                b.burst = b.burst.min(qps);
+            }
+        }
+        r
+    }
     fn validate(&self) -> Result<()> {
-        ensure!((1..=100_000).contains(&self.qps), "public QPS out of range");
+        self.rate_limits.validate()?;
+        ensure!(
+            self.qps.is_none_or(|qps| (1..=100_000).contains(&qps)),
+            "public QPS out of range"
+        );
         ensure!(
             self.gzip_min_bytes >= 256
                 && self.gzip_min_bytes <= self.gzip_max_bytes
@@ -134,6 +204,45 @@ mod tests {
     use super::*;
     use serde_json::json;
     #[test]
+    fn legacy_qps_only_clamps_per_ip_without_disabling_aggregate_budgets() {
+        let p = Policy::from_config(&json!({"public_access":{"qps":7}})).unwrap();
+        let r = p.effective_limits();
+        assert_eq!(
+            r.images_per_ip,
+            BucketLimit {
+                average: 7,
+                burst: 7
+            }
+        );
+        assert_eq!(
+            r.oss_per_ip,
+            BucketLimit {
+                average: 7,
+                burst: 7
+            }
+        );
+        assert_eq!(r.global, RateLimits::default().global);
+        assert_eq!(r.oss_global, RateLimits::default().oss_global);
+    }
+    #[test]
+    fn absent_legacy_qps_cannot_cap_explicit_new_limits_after_render_roundtrip() {
+        let p = Policy::from_config(
+            &json!({"public_access":{"rate_limits":{"images_per_ip":{"average":500,"burst":500}}}}),
+        )
+        .unwrap();
+        assert_eq!(p.effective_limits().images_per_ip.average, 500);
+        let encoded = serde_json::to_value(&p).unwrap();
+        assert!(encoded.get("qps").is_none());
+        assert_eq!(
+            Policy::from_config(&json!({"public_access":encoded}))
+                .unwrap()
+                .effective_limits()
+                .images_per_ip
+                .average,
+            500
+        );
+    }
+    #[test]
     fn strict_configuration_and_optional_file() {
         assert_eq!(
             Policy::load(&tempfile::tempdir().unwrap().path().join("absent")).unwrap(),
@@ -141,6 +250,10 @@ mod tests {
         );
         for p in [
             json!({"qps":0}),
+            json!({"rate_limits":{"global":{"average":0,"burst":1}}}),
+            json!({"rate_limits":{"oss_per_ip":{"average":20,"burst":0}}}),
+            json!({"rate_limits":{"global":{"average":1,"burst":11}}}),
+            json!({"rate_limits":{"typo":1}}),
             json!({"gzip_min_bytes":255}),
             json!({"gzip_max_bytes":2097153}),
             json!({"gzip_min_bytes":999,"gzip_max_bytes":1}),

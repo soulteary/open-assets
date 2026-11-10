@@ -2,8 +2,30 @@
   "gzip_enabled": true,
   "gzip_min_bytes": 256,
   "gzip_max_bytes": 2097152,
-  "qps": 100,
   "hotlink_enabled": true,
   "allow_empty_referer": true,
-  "allowed_referers": ["example.com", "*.example.com", "*.example.org", "localhost"]
+  "allowed_referers": [
+    "example.com",
+    "*.example.com",
+    "*.example.org",
+    "localhost"
+  ],
+  "rate_limits": {
+    "images_per_ip": {
+      "average": 50,
+      "burst": 100
+    },
+    "oss_per_ip": {
+      "average": 20,
+      "burst": 8
+    },
+    "global": {
+      "average": 100,
+      "burst": 100
+    },
+    "oss_global": {
+      "average": 40,
+      "burst": 12
+    }
+  }
 }

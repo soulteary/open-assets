@@ -1,8 +1,9 @@
 use super::*;
-const SERVICES: [&str; 8] = [
+const SERVICES: [&str; 9] = [
     "webhook",
     "publisher",
     "info",
+    "public-limiter",
     "nginx",
     "otterio",
     "oc",
