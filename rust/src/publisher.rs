@@ -2014,8 +2014,10 @@ mod public_render_tests {
         assert_eq!(
             crate::public_access::Policy::load(&temp.path().join("public-access.json"))
                 .unwrap()
-                .qps,
-            100
+                .effective_limits()
+                .images_per_ip
+                .average,
+            50
         );
     }
     #[test]

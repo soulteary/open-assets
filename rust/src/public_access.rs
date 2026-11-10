@@ -62,7 +62,8 @@ pub struct Policy {
     pub gzip_min_bytes: u64,
     pub gzip_max_bytes: u64,
     /// Legacy per-IP ceiling; new deployments configure rate_limits.
-    pub qps: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qps: Option<u32>,
     pub rate_limits: RateLimits,
     pub hotlink_enabled: bool,
     pub allow_empty_referer: bool,
@@ -74,7 +75,7 @@ impl Default for Policy {
             gzip_enabled: true,
             gzip_min_bytes: 256,
             gzip_max_bytes: 2_097_152,
-            qps: 100,
+            qps: None,
             rate_limits: RateLimits::default(),
             hotlink_enabled: false,
             allow_empty_referer: true,
@@ -109,15 +110,20 @@ impl Policy {
     }
     pub fn effective_limits(&self) -> RateLimits {
         let mut r = self.rate_limits.clone();
-        for b in [&mut r.images_per_ip, &mut r.oss_per_ip] {
-            b.average = b.average.min(self.qps);
-            b.burst = b.burst.min(self.qps);
+        if let Some(qps) = self.qps {
+            for b in [&mut r.images_per_ip, &mut r.oss_per_ip] {
+                b.average = b.average.min(qps);
+                b.burst = b.burst.min(qps);
+            }
         }
         r
     }
     fn validate(&self) -> Result<()> {
         self.rate_limits.validate()?;
-        ensure!((1..=100_000).contains(&self.qps), "public QPS out of range");
+        ensure!(
+            self.qps.is_none_or(|qps| (1..=100_000).contains(&qps)),
+            "public QPS out of range"
+        );
         ensure!(
             self.gzip_min_bytes >= 256
                 && self.gzip_min_bytes <= self.gzip_max_bytes
@@ -217,6 +223,24 @@ mod tests {
         );
         assert_eq!(r.global, RateLimits::default().global);
         assert_eq!(r.oss_global, RateLimits::default().oss_global);
+    }
+    #[test]
+    fn absent_legacy_qps_cannot_cap_explicit_new_limits_after_render_roundtrip() {
+        let p = Policy::from_config(
+            &json!({"public_access":{"rate_limits":{"images_per_ip":{"average":500,"burst":500}}}}),
+        )
+        .unwrap();
+        assert_eq!(p.effective_limits().images_per_ip.average, 500);
+        let encoded = serde_json::to_value(&p).unwrap();
+        assert!(encoded.get("qps").is_none());
+        assert_eq!(
+            Policy::from_config(&json!({"public_access":encoded}))
+                .unwrap()
+                .effective_limits()
+                .images_per_ip
+                .average,
+            500
+        );
     }
     #[test]
     fn strict_configuration_and_optional_file() {
