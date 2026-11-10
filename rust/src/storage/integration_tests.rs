@@ -549,3 +549,30 @@ fn retention_tree_stats_rejects_linked_roots_files_and_directories_and_expired_d
             .contains("maintenance timeout")
     );
 }
+
+#[test]
+fn parallel_retention_scan_failure_never_claims_or_deletes_another_version() {
+    let (_tmp, c) = fixture();
+    let old = "a".repeat(40);
+    let current = "c".repeat(40);
+    version(&c, &old);
+    version(&c, &current);
+    let base = maintenance::image_base(&c, "images").unwrap();
+    std::os::unix::fs::symlink(format!("releases/{current}/images"), base.join("current")).unwrap();
+    std::os::unix::fs::symlink(
+        "/etc/passwd",
+        base.join("releases").join(&current).join("images/unsafe"),
+    )
+    .unwrap();
+    assert!(maintenance::run("retention", &["--apply".into()], &c).is_err());
+    assert!(base
+        .join("releases")
+        .join(old)
+        .join("images/a.png")
+        .is_file());
+    assert!(!base.join(".retention-trash").exists());
+    assert!(!maintenance::state(&c)
+        .unwrap()
+        .join("retention-last.json")
+        .exists());
+}

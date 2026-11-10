@@ -242,7 +242,7 @@ pub fn pins(v: &Value) -> Vec<String> {
 }
 pub fn tree_stats(root: &Path, deadline: Instant) -> Result<(u64, f64)> {
     real_dir(root)?;
-    let mut size = 0;
+    let mut size = 0u64;
     let mut newest = mtime(root)?;
     let mut count = 0;
     let mut stack = vec![root.to_owned()];
@@ -250,6 +250,7 @@ pub fn tree_stats(root: &Path, deadline: Instant) -> Result<(u64, f64)> {
         ensure!(Instant::now() < deadline, "maintenance timeout");
         for e in fs::read_dir(dir)? {
             count += 1;
+            ensure!(Instant::now() < deadline, "maintenance timeout");
             ensure!(count <= 1000000, "tree entry budget");
             let entry = e?;
             let m = entry.metadata()?;
@@ -262,7 +263,9 @@ pub fn tree_stats(root: &Path, deadline: Instant) -> Result<(u64, f64)> {
                 stack.push(entry.path());
             } else {
                 ensure!(m.is_file(), "unsafe maintenance tree entry");
-                size += m.len();
+                size = size
+                    .checked_add(m.len())
+                    .ok_or_else(|| anyhow!("tree size overflow"))?;
             }
         }
     }
