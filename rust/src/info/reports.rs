@@ -1353,6 +1353,7 @@ pub fn clean_doctor(value: &Value) -> Result<Value> {
         "webhook",
         "info",
         "object-reader",
+        "public-limiter",
         "gitea",
         "nginx",
         "traefik",

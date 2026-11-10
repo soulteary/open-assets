@@ -3,7 +3,7 @@ use open_assets::{common, info, ops, publisher, storage};
 use serde_json::{json, Value};
 use std::path::Path;
 
-const HELP: &str = "Open Assets — Rust implementation\n\nUsage: open-assets [--config FILE] COMMAND [ARGS]\n\nPublication: validate render serve worker once publish status retry rollback-images\nStorage: object-reader object-retention retention compact-objects deduplicate-local\n         materialize-image-views restore-objects check-restore close-restore\n         restore-audit-list restore-audit-archive restore-audit-verify\nMonitoring: info info-refresh telemetry host-history storage-scan object-info\n            resource-info audit-info doctor-info health repair benchmark\nAdministration: operator initialize-services prepare-private deployment-config\n                configure-edge certs-maker internal-certs bootstrap-guard verify-backup\n\nOPEN_ASSETS_CONFIG defaults to /config/repositories.yaml.\nProduction state formats and public URLs remain compatible with the Python version.\n";
+const HELP: &str = "Open Assets — Rust implementation\n\nUsage: open-assets [--config FILE] COMMAND [ARGS]\n\nPublication: validate render serve worker once publish status retry rollback-images\nStorage: public-limiter object-reader object-retention retention compact-objects deduplicate-local\n         materialize-image-views restore-objects check-restore close-restore\n         restore-audit-list restore-audit-archive restore-audit-verify\nMonitoring: info info-refresh telemetry host-history storage-scan object-info\n            resource-info audit-info doctor-info health repair benchmark\nAdministration: operator initialize-services prepare-private deployment-config\n                configure-edge certs-maker internal-certs bootstrap-guard verify-backup\n\nOPEN_ASSETS_CONFIG defaults to /config/repositories.yaml.\nProduction state formats and public URLs remain compatible with the Python version.\n";
 
 fn render(c: &Value, args: &[String]) -> Result<()> {
     let mut config = c.clone();
@@ -73,6 +73,10 @@ fn execute(command: &str, args: &[String], config: Option<&Path>) -> Result<()> 
     }
     if admin.contains(&command) {
         return ops::run(command, args, &Value::Null);
+    }
+    if command == "public-limiter" {
+        ensure!(args.is_empty(), "public-limiter takes no arguments");
+        return open_assets::public_limiter::serve();
     }
     let c = if command == "object-reader" {
         Value::Null

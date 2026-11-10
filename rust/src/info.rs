@@ -468,6 +468,7 @@ pub fn health(role: &str, c: &Value) -> Result<()> {
             "webhook" => 9000,
             "info" => 8082,
             "object-reader" => 8083,
+            "public-limiter" => 8088,
             _ => bail!("unknown probe role"),
         };
         let client = reqwest::blocking::Client::builder()

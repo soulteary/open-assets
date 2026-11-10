@@ -6,7 +6,7 @@ use std::{
     os::unix::process::CommandExt,
     process::{Command, Stdio},
 };
-const SERVICES: [&str; 10] = [
+const SERVICES: [&str; 11] = [
     "gitea",
     "nginx",
     "oc",
@@ -16,6 +16,7 @@ const SERVICES: [&str; 10] = [
     "webhook",
     "info",
     "object-reader",
+    "public-limiter",
     "traefik",
 ];
 pub fn environment(root: &Path) -> Result<BTreeMap<String, String>> {

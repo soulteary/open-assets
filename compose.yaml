@@ -83,6 +83,28 @@ services:
     cpus: 0.25
     pids_limit: 64
     networks: [edge]
+  public-limiter:
+    image: open-assets:local
+    user: '20010:20010'
+    restart: unless-stopped
+    logging: *logging
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    entrypoint: [open-assets, public-limiter]
+    environment:
+      PUBLIC_ACCESS_CONFIG: /config/public-access.json
+    healthcheck:
+      <<: *health
+      test: [CMD, open-assets, health, public-limiter]
+    volumes: ['./private/generated/public-access.json:/config/public-access.json:ro']
+    tmpfs: ['/tmp:size=8m']
+    mem_limit: 64m
+    cpus: 0.25
+    pids_limit: 32
+    deploy:
+      replicas: 1
+    networks: [edge]
   object-reader:
     image: open-assets:local
     user: '20010:20010'
