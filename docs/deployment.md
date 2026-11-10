@@ -203,3 +203,7 @@ Traefik 到 OC 和 OtterIO 使用内部 HTTPS，校验私有 CA 和主机名。S
 ## 在隔离环境验证文档
 
 需要复查首次部署时，使用独立 Docker daemon，不复制原有 private 或数据。仓库提供 [从零部署脚本](../tests/e2e/README.md)，会执行初始化、两次 CLI 接入及真实 Push 发布。脚本拒绝已有配置、数据或容器，默认不执行；它不是现有服务器的重装命令。实测环境和未覆盖范围见 [隔离部署记录](fresh-install.md)。
+
+## 公开资源策略
+
+压缩、防盗链、HTTP 302、HSTS 和默认 100 QPS 的配置见[公开静态资源入口](public-access.md)。实际白名单仅放入受保护配置，开源示例使用占位域名。

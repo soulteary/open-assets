@@ -6,56 +6,40 @@ use std::path::Path;
 const HELP: &str = "Open Assets — Rust implementation\n\nUsage: open-assets [--config FILE] COMMAND [ARGS]\n\nPublication: validate render serve worker once publish status retry rollback-images\nStorage: object-reader object-retention retention compact-objects deduplicate-local\n         materialize-image-views restore-objects check-restore close-restore\n         restore-audit-list restore-audit-archive restore-audit-verify\nMonitoring: info info-refresh telemetry host-history storage-scan object-info\n            resource-info audit-info doctor-info health repair benchmark\nAdministration: operator initialize-services prepare-private deployment-config\n                configure-edge certs-maker internal-certs bootstrap-guard verify-backup\n\nOPEN_ASSETS_CONFIG defaults to /config/repositories.yaml.\nProduction state formats and public URLs remain compatible with the Python version.\n";
 
 fn render(c: &Value, args: &[String]) -> Result<()> {
-    ensure!(args.len() == 1, "render requires a destination directory");
-    let mut lines = vec![
-        "include /etc/nginx/mime.types;".to_owned(),
-        "default_type application/octet-stream;".to_owned(),
-        "server { listen 8080; server_tokens off; autoindex off; open_file_cache off;".to_owned(),
-        "add_header X-Content-Type-Options nosniff always;".to_owned(),
-        format!(
-            "add_header Content-Security-Policy \"{}\" always;",
-            storage::CSP
-        ),
-        "add_header Cache-Control \"public, max-age=300, must-revalidate\";".to_owned(),
-        "location ~ (^|/)\\. { deny all; }".to_owned(),
-    ];
-    let repositories = c["repositories"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("invalid repositories"))?;
-    for r in repositories {
-        if r.get("serve").and_then(Value::as_bool) == Some(false) {
-            continue;
+    let mut config = c.clone();
+    let mut destination = None;
+    let mut policy_path = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--public-access-config" => {
+                ensure!(
+                    policy_path.is_none(),
+                    "duplicate public access configuration"
+                );
+                i += 1;
+                policy_path = Some(
+                    args.get(i)
+                        .ok_or_else(|| anyhow::anyhow!("missing public access configuration"))?,
+                );
+            }
+            value => {
+                ensure!(
+                    !value.starts_with('-') && destination.is_none(),
+                    "render requires one destination"
+                );
+                destination = Some(value);
+            }
         }
-        let key = r["key"].as_str().unwrap_or("");
-        let mount = r["mount_path"].as_str().unwrap_or("");
-        let root = format!("/srv/images/repos/{key}/current/");
-        if mount == "/" {
-            lines.push(format!("location / {{ root {root}; limit_except GET HEAD {{ deny all; }} try_files $uri =404; }}"));
-        } else {
-            lines.push(format!(
-                "location {mount} {{ alias {root}; limit_except GET HEAD {{ deny all; }} }}"
-            ));
-        }
+        i += 1;
     }
-    if !repositories
-        .iter()
-        .any(|r| r["mount_path"] == "/" && r.get("serve").and_then(Value::as_bool) != Some(false))
-    {
-        lines.push("location / { return 404; }".into());
+    if let Some(path) = policy_path {
+        config["public_access"] = common::read_json(Path::new(path), 65_536)?;
     }
-    lines.push("}".into());
-    let parent = Path::new(&args[0]);
-    std::fs::create_dir_all(parent)?;
-    use std::io::Write;
-    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
-    use std::os::unix::fs::PermissionsExt;
-    tmp.as_file()
-        .set_permissions(std::fs::Permissions::from_mode(0o644))?;
-    tmp.write_all((lines.join("\n") + "\n").as_bytes())?;
-    tmp.as_file().sync_all()?;
-    tmp.persist(parent.join("images.conf"))
-        .map_err(|e| e.error)?;
-    common::sync_directory(parent)
+    publisher::render(
+        &config,
+        Path::new(destination.ok_or_else(|| anyhow::anyhow!("render destination required"))?),
+    )
 }
 
 fn execute(command: &str, args: &[String], config: Option<&Path>) -> Result<()> {

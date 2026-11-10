@@ -21,6 +21,7 @@ use std::{
     time::Duration,
 };
 pub mod maintenance;
+mod public_proxy;
 pub mod reader;
 pub const CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
 pub const CSP: &str = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";

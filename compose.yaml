@@ -95,10 +95,11 @@ services:
     environment:
       OBJECT_ENDPOINT: https://storage.internal:9000
       OBJECT_BUCKET: attachments
+      PUBLIC_ACCESS_CONFIG: /config/public-access.json
     healthcheck:
       <<: *health
       test: [CMD, open-assets, health, object-reader]
-    volumes: ['${DATA_ROOT}/publisher/manifests:/manifests:ro','${DATA_ROOT}/publisher/object-retention:/receipts:ro','./private/publisher/ca.crt:/tls/ca.crt:ro']
+    volumes: ['${DATA_ROOT}/publisher/manifests:/manifests:ro','${DATA_ROOT}/publisher/object-retention:/receipts:ro','./private/publisher/ca.crt:/tls/ca.crt:ro','./private/generated/public-access.json:/config/public-access.json:ro']
     tmpfs: ['/tmp:size=16m']
     mem_limit: 256m
     cpus: 0.5

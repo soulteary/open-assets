@@ -302,6 +302,13 @@ pub fn configure_edge(args: &[String]) -> Result<()> {
             "invalid configured hostname"
         );
     }
+    let public_policy = if let Some(path) = flag(args, "--public-access-config") {
+        crate::public_access::Policy::from_config(
+            &json!({"public_access":common::read_json(Path::new(path),65_536)?}),
+        )?
+    } else {
+        crate::public_access::Policy::default()
+    };
     let mut services = json!({});
     for (name, url) in [
         ("images", "http://nginx:8080"),
@@ -314,11 +321,11 @@ pub fn configure_edge(args: &[String]) -> Result<()> {
     ] {
         services[name] = json!({"loadBalancer":{"servers":[{"url":url}]}});
     }
-    let refs = args.iter().any(|a| a == "--reference-releases");
-    if refs {
-        services["release-objects"] =
-            json!({"loadBalancer":{"servers":[{"url":"http://object-reader:8083"}]}});
-    }
+    let _references = args.iter().any(|a| a == "--reference-releases");
+    // Both legacy and reference manifests are resolved by the guarded Reader;
+    // Nginx rejects forbidden methods and referers before reaching it.
+    services["release-objects"] = json!({"loadBalancer":{"servers":[{"url":"http://nginx:8084"}]}});
+    services["public-redirect"] = json!({"loadBalancer":{"servers":[{"url":"http://nginx:8087"}]}});
     services["storage"]["loadBalancer"]["serversTransport"] = json!("console-tls");
     services["objects"]["loadBalancer"]["serversTransport"] = json!("storage-tls");
     let mut routers = json!({});
@@ -333,19 +340,18 @@ pub fn configure_edge(args: &[String]) -> Result<()> {
     ] {
         let mut rule = format!("Host(`{}`)", domains[key].as_str().context("domain")?);
         if key == "oss" {
-            rule.push_str(
-                " && PathPrefix(`/attachments/repositories/`) && (Method(`GET`) || Method(`HEAD`))",
-            );
+            rule.push_str(" && PathPrefix(`/attachments/repositories/`)");
         }
-        let mut r = json!({"rule":rule,"entryPoints":["websecure"],"service":if key=="oss"&&refs{"release-objects"}else{service},"tls":{"certResolver":"le"}});
-        if key == "oss" {
-            r["middlewares"] = json!(["public-assets"]);
+        let mut r = json!({"rule":rule,"entryPoints":["websecure"],"service":if key=="oss"{"release-objects"}else{service},"tls":{"certResolver":"le"}});
+        if matches!(key, "img" | "oss") {
+            r["middlewares"] = json!(["public-assets", "public-qps"]);
         }
         if ["git", "storage", "traefik", "info"].contains(&key) {
             r["middlewares"] = json!(["console-auth", "console-gzip"]);
         }
         routers[key] = r;
     }
+    routers["public-http"] = json!({"rule":format!("Host(`{}`) || Host(`{}`)",domains["img"].as_str().unwrap(),domains["oss"].as_str().unwrap()),"entryPoints":["web"],"service":"public-redirect","priority":100,"middlewares":["public-http-headers","public-qps"]});
     let management = ["git", "storage", "traefik", "info"]
         .map(|k| format!("Host(`{}`)", domains[k].as_str().unwrap_or("")))
         .join(" || ");
@@ -365,7 +371,16 @@ pub fn configure_edge(args: &[String]) -> Result<()> {
         }
         routers[key] = r;
     }
-    let config = json!({"http":{"routers":routers,"services":services,"middlewares":{"public-assets":{"headers":{"customResponseHeaders":{"Content-Security-Policy":crate::storage::CSP,"X-Content-Type-Options":"nosniff"}}},"console-gzip":{"compress":{"encodings":["gzip"],"minResponseBodyBytes":1024,"includedContentTypes":["text/html","text/plain","text/css","text/javascript","application/javascript","application/json","application/xml","text/xml","image/svg+xml"]}},"console-auth":{"forwardAuth":{"address":"http://172.29.19.3:8080/_auth","trustForwardHeader":false,"maxResponseBodySize":1048576}}},"serversTransports":{"console-tls":{"serverName":domains["storage"],"rootCAs":[ca]},"storage-tls":{"serverName":"storage.internal","rootCAs":[ca]}}}});
+    let mut config = json!({"http":{"routers":routers,"services":services,"middlewares":{"public-assets":{"headers":{"customResponseHeaders":{"Content-Security-Policy":crate::storage::CSP,"X-Content-Type-Options":"nosniff"}}},"console-gzip":{"compress":{"encodings":["gzip"],"minResponseBodyBytes":1024,"includedContentTypes":["text/html","text/plain","text/css","text/javascript","application/javascript","application/json","application/xml","text/xml","image/svg+xml"]}},"console-auth":{"forwardAuth":{"address":"http://172.29.19.3:8080/_auth","trustForwardHeader":false,"maxResponseBodySize":1048576}}},"serversTransports":{"console-tls":{"serverName":domains["storage"],"rootCAs":[ca]},"storage-tls":{"serverName":"storage.internal","rootCAs":[ca]}}}});
+    config["http"]["middlewares"]["public-assets"]["headers"]["customResponseHeaders"]
+        ["Strict-Transport-Security"] = json!("");
+    config["http"]["middlewares"]["public-assets"]["headers"]["customResponseHeaders"]
+        ["Set-Cookie"] = json!("");
+    config["http"]["middlewares"]["public-assets"]["headers"]["stsSeconds"] = json!(0);
+    config["http"]["middlewares"]["public-http-headers"] = json!({"headers":{"customResponseHeaders":{"Strict-Transport-Security":"","Set-Cookie":""},"customRequestHeaders":{"Authorization":"","Cookie":""}}});
+    // Default source criterion is the authenticated socket peer, not client XFF.
+    config["http"]["middlewares"]["public-qps"] =
+        json!({"rateLimit":{"average":public_policy.qps,"period":"1s","burst":public_policy.qps}});
     let old = fs::symlink_metadata(output).ok();
     if let Some(m) = &old {
         ensure!(m.is_file(), "route output must be a regular file");
@@ -803,6 +818,74 @@ mod tests {
         ] {
             assert!(build_domains(node, base).is_err());
         }
+    }
+    #[test]
+    fn public_edge_policy_is_scoped_and_uses_safe_peer_rate_limit() {
+        let d = tempfile::tempdir().unwrap();
+        let domains = d.path().join("domains.json");
+        let ca = d.path().join("ca.crt");
+        let policy = d.path().join("public-access.json");
+        let output = d.path().join("routes.yaml");
+        fs::write(
+            &domains,
+            serde_json::to_vec(&build_domains("demo", "example.com").unwrap()).unwrap(),
+        )
+        .unwrap();
+        fs::write(&ca, "fixture CA path").unwrap();
+        fs::write(
+            &policy,
+            br#"{"qps":7,"hotlink_enabled":true,"allowed_referers":["example.com"]}"#,
+        )
+        .unwrap();
+        let args = vec![
+            "--domains".into(),
+            domains.to_str().unwrap().into(),
+            "--ca".into(),
+            ca.to_str().unwrap().into(),
+            "--output".into(),
+            output.to_str().unwrap().into(),
+            "--public-access-config".into(),
+            policy.to_str().unwrap().into(),
+        ];
+        configure_edge(&args).unwrap();
+        let v: Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+        let http = &v["http"];
+        assert_eq!(
+            http["routers"]["public-http"]["entryPoints"],
+            json!(["web"])
+        );
+        assert_eq!(http["routers"]["public-http"]["service"], "public-redirect");
+        assert_eq!(
+            http["services"]["public-redirect"]["loadBalancer"]["servers"][0]["url"],
+            "http://nginx:8087"
+        );
+        assert_eq!(
+            http["services"]["release-objects"]["loadBalancer"]["servers"][0]["url"],
+            "http://nginx:8084"
+        );
+        assert_eq!(
+            http["middlewares"]["public-qps"]["rateLimit"],
+            json!({"average":7,"period":"1s","burst":7})
+        );
+        for role in ["img", "oss"] {
+            assert_eq!(
+                http["routers"][role]["middlewares"],
+                json!(["public-assets", "public-qps"])
+            );
+        }
+        assert_eq!(
+            http["middlewares"]["public-assets"]["headers"]["customResponseHeaders"]
+                ["Strict-Transport-Security"],
+            ""
+        );
+        assert_eq!(
+            http["routers"]["info"]["middlewares"],
+            json!(["console-auth", "console-gzip"])
+        );
+        fs::write(&policy, br#"{"qps":0}"#).unwrap();
+        let before = fs::read(&output).unwrap();
+        assert!(configure_edge(&args).is_err());
+        assert_eq!(fs::read(&output).unwrap(), before);
     }
     #[test]
     fn failed_initialization_never_reinitializes() {

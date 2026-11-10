@@ -270,6 +270,47 @@ fn storage_fixture_client() -> Result<Client> {
     }
     Ok(builder.build()?)
 }
+fn check_public_http_early_redirect(host: &str) -> Result<()> {
+    use std::io::Read;
+    use std::net::TcpStream;
+    // Stargate already owns host port 18080 in this isolated stack.
+    let address = "127.0.0.1:18084".parse()?;
+    for method in ["GET", "HEAD", "POST", "PUT", "OPTIONS"] {
+        let mut socket = TcpStream::connect_timeout(&address, Duration::from_secs(3))?;
+        socket.set_write_timeout(Some(Duration::from_secs(3)))?;
+        socket.set_read_timeout(Some(Duration::from_secs(3)))?;
+        write!(
+            socket,
+            "{method} /2026/10/10/image.svg?early=1 HTTP/1.1\r\nHost: {host}\r\nContent-Length: 999999999\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n"
+        )?;
+        socket.flush()?;
+        // Deliberately send no body and do not half-close the socket: the first
+        // response must be the final redirect, not 100 Continue or a body wait.
+        let start = Instant::now();
+        let mut line = Vec::new();
+        loop {
+            let remaining = Duration::from_secs(3)
+                .checked_sub(start.elapsed())
+                .context("public HTTP redirect waited for unsent request body")?;
+            ensure!(!remaining.is_zero(), "public HTTP redirect deadline");
+            socket.set_read_timeout(Some(remaining))?;
+            ensure!(line.len() < 1024, "public HTTP status line too long");
+            let mut byte = [0];
+            socket.read_exact(&mut byte)?;
+            line.push(byte[0]);
+            if byte[0] == b'\n' {
+                break;
+            }
+        }
+        let status = std::str::from_utf8(&line).context("public HTTP status encoding")?;
+        let mut fields = status.split_ascii_whitespace();
+        ensure!(
+            matches!(fields.next(), Some("HTTP/1.0" | "HTTP/1.1")) && fields.next() == Some("302"),
+            "public HTTP {method} first response was not 302"
+        );
+    }
+    Ok(())
+}
 fn edge_fixture(client: &Client) -> Result<(Client, Value)> {
     let p = PathBuf::from(format!("{ROOT}/private/e2e/edge"));
     fs::create_dir_all(p.join("dynamic"))?;
@@ -343,7 +384,12 @@ fn edge_fixture(client: &Client) -> Result<(Client, Value)> {
         .context("routers")?
         .values_mut()
     {
-        router["tls"] = json!({});
+        if router["entryPoints"]
+            .as_array()
+            .is_some_and(|points| points.iter().any(|point| point == "websecure"))
+        {
+            router["tls"] = json!({});
+        }
     }
     fs::write(p.join("dynamic/routes.yaml"), serde_json::to_vec(&routes)?)?;
     fs::write(
@@ -355,7 +401,7 @@ fn edge_fixture(client: &Client) -> Result<(Client, Value)> {
     fs::write(
         p.join("static.yaml"),
         serde_json::to_vec(
-            &json!({"entryPoints":{"websecure":{"address":":8443"}},"providers":{"file":{"directory":"/etc/traefik/dynamic"}},"api":{"dashboard":true},"global":{"checkNewVersion":false,"sendAnonymousUsage":false},"log":{"level":"ERROR"}}),
+            &json!({"entryPoints":{"web":{"address":":8080"},"websecure":{"address":":8443"}},"providers":{"file":{"directory":"/etc/traefik/dynamic"}},"api":{"dashboard":true},"global":{"checkNewVersion":false,"sendAnonymousUsage":false},"log":{"level":"ERROR"}}),
         )?,
     )?;
     for file in [
@@ -368,7 +414,7 @@ fn edge_fixture(client: &Client) -> Result<(Client, Value)> {
     }
     let env = open_assets::info::environment(Path::new(ROOT))?;
     let image = env.get("TRAEFIK_IMAGE").context("gateway image")?;
-    let config = json!({"name":"open-assets-rust-e2e-edge","services":{"gateway":{"image":image,"user":"20003:20003","read_only":true,"cap_drop":["ALL"],"command":["--configFile=/etc/traefik/static.yaml"],"ports":["127.0.0.1:443:8443"],"volumes":[format!("{}:/etc/traefik:ro",p.display())],"networks":{"edge":{},"auth":{"ipv4_address":"172.29.19.2"}}}},"networks":{"edge":{"external":true,"name":"open-assets-edge"},"auth":{"external":true,"name":"open-assets-auth"}}});
+    let config = json!({"name":"open-assets-rust-e2e-edge","services":{"gateway":{"image":image,"user":"20003:20003","read_only":true,"cap_drop":["ALL"],"command":["--configFile=/etc/traefik/static.yaml"],"ports":["127.0.0.1:443:8443","127.0.0.1:18084:8080"],"volumes":[format!("{}:/etc/traefik:ro",p.display())],"networks":{"edge":{},"auth":{"ipv4_address":"172.29.19.2"}}}},"networks":{"edge":{"external":true,"name":"open-assets-edge"},"auth":{"external":true,"name":"open-assets-auth"}}});
     fs::write(p.join("compose.yaml"), serde_json::to_vec(&config)?)?;
     command("docker", &["compose", "-f", &x("compose.yaml"), "up", "-d"])?;
     let mut hosts = fs::OpenOptions::new().append(true).open("/etc/hosts")?;
@@ -406,6 +452,7 @@ fn edge_fixture(client: &Client) -> Result<(Client, Value)> {
         },
         45,
     )?;
+    check_public_http_early_redirect(domains["img"].as_str().context("public image domain")?)?;
     for role in ["git", "info", "storage", "traefik"] {
         let response = secured
             .get(format!(

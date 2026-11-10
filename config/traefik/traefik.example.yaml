@@ -10,6 +10,8 @@ entryPoints:
         entryPoint:
           to: ':443'
           scheme: https
+          # Let the public-only HTTP router return 302 for every method.
+          priority: 1
   websecure:
     address: ':8443'
   ping:

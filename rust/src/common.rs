@@ -383,6 +383,7 @@ fn retention(c: &Value, r: &Value, objects: bool) -> Result<()> {
 }
 
 pub fn validate(c: &Value) -> Result<()> {
+    crate::public_access::Policy::from_config(c)?;
     ensure!(
         c["schema_version"].as_u64() == Some(1),
         "unsupported schema"
