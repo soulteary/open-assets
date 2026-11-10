@@ -15,6 +15,7 @@ use std::{
 };
 use tiny_http::{Header, Response, Server, StatusCode};
 mod benchmark;
+mod publication;
 mod repair;
 pub mod reports;
 mod telemetry;

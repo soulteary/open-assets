@@ -65,18 +65,62 @@ pub fn run(c: &Value, key: Option<&str>, apply: bool) -> Result<Value> {
         let mut versions = BTreeMap::<String, Value>::new();
         if present(&releases)? {
             real_dir(&releases)?;
+            let mut trees = Vec::new();
             for e in fs::read_dir(&releases)? {
+                ensure!(trees.len() < 20000, "release directory budget");
                 let p = e?.path();
                 let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
                 let sha = name.strip_prefix("images-").unwrap_or(name);
-                if !valid_sha(sha) {
-                    continue;
+                if valid_sha(sha) {
+                    trees.push((sha.to_owned(), p));
                 }
-                let (size, newest) = tree_stats(&p, deadline)?;
+            }
+            // Two readers overlap metadata latency; every entry is still checked.
+            // Both readers must finish before planning can authorize any deletion.
+            let scanned = std::thread::scope(|scope| -> Result<Vec<(String, u64, f64)>> {
+                let handles: Vec<_> = (0..2)
+                    .map(|worker| {
+                        let trees = &trees;
+                        scope.spawn(move || -> Result<Vec<(String, u64, f64)>> {
+                            trees
+                                .iter()
+                                .skip(worker)
+                                .step_by(2)
+                                .map(|(sha, path)| {
+                                    let (size, newest) = tree_stats(path, deadline)?;
+                                    Ok((sha.clone(), size, newest))
+                                })
+                                .collect()
+                        })
+                    })
+                    .collect();
+                let mut out = Vec::new();
+                let mut failure = None;
+                for handle in handles {
+                    match handle.join() {
+                        Ok(Ok(rows)) => out.extend(rows),
+                        Ok(Err(e)) => {
+                            failure.get_or_insert(e);
+                        }
+                        Err(_) => {
+                            failure.get_or_insert(anyhow!("retention scanner failed"));
+                        }
+                    }
+                }
+                if let Some(e) = failure {
+                    return Err(e);
+                }
+                Ok(out)
+            })?;
+            for (sha, size, newest) in scanned {
                 let v = versions
-                    .entry(sha.to_owned())
+                    .entry(sha.clone())
                     .or_insert_with(|| json!({"sha":sha,"bytes":0,"newest":0.}));
-                v["bytes"] = json!(v["bytes"].as_u64().unwrap() + size);
+                v["bytes"] = json!(v["bytes"]
+                    .as_u64()
+                    .unwrap()
+                    .checked_add(size)
+                    .ok_or_else(|| anyhow!("tree size overflow"))?);
                 v["newest"] = json!(v["newest"].as_f64().unwrap().max(newest));
             }
         }

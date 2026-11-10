@@ -571,9 +571,9 @@ fn connection(c: &Value) -> Result<crate::storage::Client> {
     *cached = Some((identity, Instant::now(), client.clone()));
     Ok(client)
 }
-struct SourceCheck(Option<thread::JoinHandle<Result<Value>>>);
+struct SourceCheck(Option<thread::JoinHandle<Result<(Value, f64)>>>);
 impl SourceCheck {
-    fn finish(&mut self) -> Result<Value> {
+    fn finish(&mut self) -> Result<(Value, f64)> {
         self.0
             .take()
             .context("source verification unavailable")?
@@ -694,6 +694,7 @@ pub fn publish(c: &Value, j: &mut Value) -> Result<()> {
     let start = Instant::now();
     let mut last = Instant::now();
     j["timings"] = json!({});
+    j["timing_details"] = json!({});
     let key = j["key"].as_str().context("job key")?.to_string();
     let sha = j["sha"].as_str().context("job SHA")?.to_string();
     let r = repo(c, &key)?;
@@ -707,6 +708,7 @@ pub fn publish(c: &Value, j: &mut Value) -> Result<()> {
         git::git(c, &g, &["merge-base", "--is-ancestor", &sha, &head])?;
     }
     stage(j, "fetch", &mut last);
+    let planning = Instant::now();
     let base = base(c, &key)?;
     fs::create_dir_all(base.join("releases"))?;
     ensure!(
@@ -731,7 +733,9 @@ pub fn publish(c: &Value, j: &mut Value) -> Result<()> {
     } else {
         BTreeMap::new()
     };
+    j["timing_details"]["planning"] = planning.elapsed().as_secs_f64().into();
     let client = connection(c)?;
+    let verification = Instant::now();
     let mut checking = if planned.is_empty() {
         SourceCheck(None)
     } else {
@@ -739,18 +743,27 @@ pub fn publish(c: &Value, j: &mut Value) -> Result<()> {
         let config = c.clone();
         let transport = client.clone();
         SourceCheck(Some(thread::spawn(move || {
+            let started = Instant::now();
             crate::storage::verify_sources(&config, &transport, &records)
+                .map(|checked| (checked, started.elapsed().as_secs_f64()))
         })))
     };
+    let exporting = Instant::now();
     let claim = prepared::claim(c, r, &sha, staging.path(), &blobs, &mut sources)?;
     let mut exported = export_plan(c, &g, &blobs, staging.path(), &mut sources, claim)?;
+    j["timing_details"]["export_validate"] = exporting.elapsed().as_secs_f64().into();
+    let checking_wait = Instant::now();
     let checked = if planned.is_empty() {
         None
     } else {
         let actual=exported.reused.iter().map(|(name,s)|(name.clone(),json!({"key":s.object["key"],"etag":s.etag,"modified":s.modified,"item":s.item}))).collect::<BTreeMap<_,_>>();
         ensure!(actual == planned, "source verification plan changed");
-        Some(checking.finish()?)
+        let (checked, seconds) = checking.finish()?;
+        j["timing_details"]["source_check"] = seconds.into();
+        Some(checked)
     };
+    j["timing_details"]["source_check_wait"] = checking_wait.elapsed().as_secs_f64().into();
+    j["timing_details"]["export_check_window"] = verification.elapsed().as_secs_f64().into();
     stage(j, "export", &mut last);
     let prefix = format!("repositories/{key}/releases/{sha}/");
     let (etags, object_sources, stats) =
@@ -813,6 +826,7 @@ pub fn publish(c: &Value, j: &mut Value) -> Result<()> {
         p["fingerprint"] = snapshot::fingerprint(&final_path.join(name))?;
     }
     stage(j, "snapshot", &mut last);
+    let checking_head = Instant::now();
     let head = if refs(c) && j["kind"] == "auto" {
         git::remote_head(c, r, &g)?
     } else {
@@ -822,6 +836,8 @@ pub fn publish(c: &Value, j: &mut Value) -> Result<()> {
         j["status"] = "superseded".into();
         return Ok(());
     }
+    j["timing_details"]["remote_head"] = checking_head.elapsed().as_secs_f64().into();
+    let switching = Instant::now();
     let previous = fs::read_link(base.join("current"))
         .ok()
         .map(|p| p.to_string_lossy().into_owned());
@@ -844,6 +860,7 @@ pub fn publish(c: &Value, j: &mut Value) -> Result<()> {
     snapshot::activate(&base, &target, &images, Some(&image_proofs))?;
     j["status"] = "published".into();
     j["finished"] = now().into();
+    j["timing_details"]["switch"] = switching.elapsed().as_secs_f64().into();
     stage(j, "activation", &mut last);
     j["timings"]["total"] = start.elapsed().as_secs_f64().into();
     atomic(&state(c)?.join("published").join(&key), &manifest)?;
@@ -1036,7 +1053,13 @@ fn work_once_heartbeat(c: &Value, heartbeat: Option<&Arc<Mutex<Value>>>) -> Resu
     });
     let idle = ready.is_empty();
     for (path, mut j) in ready {
+        j["started"] = now().into();
+        j["queue_seconds"] = (j["started"].as_f64().unwrap()
+            - j["created"].as_f64().unwrap_or(now()))
+        .max(0.0)
+        .into();
         j["status"] = "running".into();
+        let attempt = Instant::now();
         if atomic(&path, &j).is_err() {
             continue;
         }
@@ -1070,6 +1093,12 @@ fn work_once_heartbeat(c: &Value, heartbeat: Option<&Arc<Mutex<Value>>>) -> Resu
                 j["resource_limit"] = code.into();
             }
         }
+        j["finished"] = now().into();
+        j["timings"]["total"] = attempt.elapsed().as_secs_f64().into();
+        j["observed_seconds"] = (j["finished"].as_f64().unwrap()
+            - j["created"].as_f64().unwrap_or(now()))
+        .max(0.0)
+        .into();
         if atomic(&path, &j).is_err() {
             eprintln!("{{\"event\":\"job-state-write-failed\",\"error\":\"IOError\"}}");
         }

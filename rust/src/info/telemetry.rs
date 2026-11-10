@@ -1039,6 +1039,7 @@ pub fn collect(root: &Path, refresh_storage: bool) -> Result<Value> {
         &env,
         image,
     );
+    result["publication"] = super::publication::collect(&data);
     super::reports::augment(&mut result, root, &data)?;
     let repairs =
         read_json_bounded(&data.join("repair/state.json"), 1024 * 1024).unwrap_or(json!({}));

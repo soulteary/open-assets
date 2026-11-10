@@ -367,3 +367,9 @@ test('changing history range after a fetch failure cannot mark old samples fresh
   ui.context.render(data);ui.context.fetch=async()=>{throw new Error('offline');};await ui.context.update();
   ui.get('history-range').fire('change',{target:{value:'86400'}});assert.match(ui.get('history-notice').textContent,/已过期/);
 });
+test('publication stages show successful-sample percentiles, parallel details and stale state as text', () => {
+  const ui=setup(),data=fixture();data.publication={status:'ok',measured_at:data.collected_at,sample_count:1,summary:{total:{count:1,p50:1.2,p95:1.2}},jobs:[{key:'<img onerror=alert(1)>',sha:'a'.repeat(40),status:'published',finished:data.collected_at,timings:{total:1.2,queue:0.1},details:{source_check:0.4,source_check_wait:0.01}}]};ui.context.render(data);
+  assert.match(ui.get('publication-summary').textContent,/1.200 \/ 1.200/);assert.match(ui.get('publication-jobs').textContent,/对象核对（并行） 0.400/);assert.match(ui.get('publication-jobs').textContent,/<img onerror/);
+  data.stale=true;ui.context.render(data);assert.match(ui.get('publication-notice').textContent,/过期/);
+  delete data.publication;ui.context.render(data);assert.match(ui.get('publication-notice').textContent,/不可用/);assert.equal(ui.get('publication-jobs').children.length,0);
+});

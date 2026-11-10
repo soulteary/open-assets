@@ -62,6 +62,7 @@
   <p class="action-note">先检查 sudo systemctl status open-assets-doctor.timer open-assets-doctor.service --no-pager；需要即时诊断时在服务器运行 sudo ./scripts/open-assets doctor。维护期间先确认维护状态，不直接启动清理或自动修复。</p></section>
   </div>
   <div id="panel-operations" role="tabpanel" aria-labelledby="tab-operations" tabindex="0">
+    <section><h2>发布阶段耗时</h2><p id="publication-notice" class="muted" role="status"></p><p class="muted">统计最近最多 100 条活动任务记录中的成功发布；排队从入队开始，不能代表 Git 推送前的网络耗时。导出包含与其并行的对象核对等待，细项不可直接相加。</p><div id="publication-summary" class="cards"></div><div class="table-wrap"><table><thead><tr><th>仓库 / 提交 / 结果</th><th>完成时间</th><th>阶段耗时（秒）</th><th>并行细项（秒）</th></tr></thead><tbody id="publication-jobs"></tbody></table></div></section>
     <p id="operations-empty" class="muted">尚无健康恢复或限量压测记录。</p>
   <section id="repair-section" hidden><h2>最近的健康恢复操作</h2><p class="muted">仅记录受限重启尝试；是否恢复以组件当前健康状态为准。</p><div id="repairs"></div></section>
   <section id="performance-section" hidden><h2>最近一次限量压测</h2><p id="performance-details" class="muted">固定并发、固定时长的读取测试；不是服务器容量上限。</p><div class="table-wrap"><table><thead><tr><th>场景</th><th>并发</th><th>请求数 / 错误</th><th>吞吐 req/s</th><th>p50 / p95 / p99 ms</th></tr></thead><tbody id="performance"></tbody></table></div></section>

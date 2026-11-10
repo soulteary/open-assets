@@ -29,6 +29,20 @@ function svgElement(tag, attributes={}, text) {
   for(const [k,v] of Object.entries(attributes))n.setAttribute(k,String(v));
   if(text!==undefined)n.textContent=text;return n;
 }
+const publicationLabels = {queue:'排队',fetch:'Git 拉取',export:'导出与核对',objects:'对象上传',snapshot:'快照落盘',activation:'远端确认与切换',evidence:'证据保存',total:'执行合计',observed:'入队至完成'};
+const detailLabels = {planning:'规划',export_validate:'导出与安全校验',source_check:'对象核对（并行）',source_check_wait:'等待核对',export_check_window:'导出核对窗口',remote_head:'远端确认',switch:'原子切换'};
+function renderPublication(data) {
+  const source=data.publication, summary=byId('publication-summary'), body=byId('publication-jobs'), notice=byId('publication-notice');summary.replaceChildren();body.replaceChildren();
+  if(!source || !['ok','partial'].includes(source.status)){notice.className='warning';notice.textContent='发布耗时暂不可用；不代表没有发布任务。';return;}
+  notice.className=data.stale||source.status==='partial'?'warning':'muted';notice.textContent='采样于 '+date(source.measured_at)+' · '+source.sample_count+' 条记录'+(source.status==='partial'?' · 部分记录不可用':'')+(data.stale?' · 数据已过期':'');
+  const format=n=>metricNumber(n,1e12)?n.toFixed(3):'—';
+  for(const [key,label] of Object.entries(publicationLabels)){const x=source.summary?.[key];if(x && metricNumber(x.p50,1e12) && metricNumber(x.p95,1e12))summary.append(item(label+' · '+x.count+' 次','p50 / p95 秒',format(x.p50)+' / '+format(x.p95)));}
+  for(const row of (Array.isArray(source.jobs)?source.jobs:[]).slice(0,100)){
+    const tr=el('tr');tr.append(el('td',row.key+' / '+String(row.sha||'').slice(0,12)+' / '+({published:'已发布',failed:'失败',superseded:'已被替代',pending:'排队',running:'运行中',images_prepared:'待切换'}[row.status]||'未知')),el('td',date(row.finished)));
+    for(const [labels,values] of [[publicationLabels,row.timings],[detailLabels,row.details]]){const cell=el('td');for(const [k,label] of Object.entries(labels))if(metricNumber(values?.[k],1e12))cell.append(el('p',label+' '+format(values[k])));tr.append(cell);}
+    body.append(tr);
+  }
+}
 function renderHostHistory(data) {
   historySnapshot=data;
   const points=historyPoints(data), target=byId('history-charts'), notice=byId('history-notice');target.replaceChildren();
@@ -168,7 +182,7 @@ function renderStorage(data) {
     if (objectOld || objects.objects == null) objectCell.className = 'warning';
     tr.append(objectCell);
     const policy = row.policy;
-    tr.append(!policy || row.policy_status === 'unavailable' ? storageCell('策略不可用') : storageCell(policy.enabled ? '自动清理已启用' : '实际清理未启用', ['最近 ' + policy.keep_last + ' 版、' + policy.keep_days + ' 天（取并集）', '回滚 ' + policy.rollback_versions + ' 版 · 固定 ' + policy.pinned_count + ' 版 · 最少 ' + policy.min_age_hours + ' 小时', '每轮上限 ' + policy.max_delete_versions + ' 版 / ' + bytes(policy.max_delete_bytes) + '（逻辑）', '任务 ' + policy.archive_jobs_after_days + ' 天后归档，上限 ' + policy.max_archive_jobs + ' 份']));
+    tr.append(!policy || row.policy_status === 'unavailable' ? storageCell('策略不可用') : storageCell(policy.enabled ? '策略允许实际清理' : '实际清理未启用', ['最近 ' + policy.keep_last + ' 版、' + policy.keep_days + ' 天（取并集）', '回滚 ' + policy.rollback_versions + ' 版 · 固定 ' + policy.pinned_count + ' 版 · 最少 ' + policy.min_age_hours + ' 小时', '每轮上限 ' + policy.max_delete_versions + ' 版 / ' + bytes(policy.max_delete_bytes) + '（逻辑）', '任务 ' + policy.archive_jobs_after_days + ' 天后归档，上限 ' + policy.max_archive_jobs + ' 份']));
     const cleanup = row.cleanup || {};
     const labels = {complete: '完整执行于 ' + date(cleanup.completed_at), disabled: '上次执行时未启用', never: '尚无执行记录', 'not-in-last-run': '最近一次未包含该仓库', unavailable: '结果不可用'};
     const details = cleanup.status === 'complete' ? ['移入清理暂存 ' + cleanup.claimed_versions + ' 版', '删除暂存目录 ' + cleanup.removed_directories + ' 个 · 归档任务 ' + cleanup.archived_jobs + ' 份'] : [];
@@ -428,6 +442,7 @@ function render(data) {
   renderAuditStorage(data);
   renderDetailAttention(data);
   renderHostHistory(data);
+  renderPublication(data);
   const h = data.host, overview = byId('overview'); overview.replaceChildren();
   for (const [label, value, detail] of [
     ['CPU', pct(h.cpu_percent), h.cpu_count + ' 个逻辑核 · 采集窗口总利用率'],
@@ -473,7 +488,7 @@ async function update(force = false) {
   if(manualRefreshing && !force)return;
   const generation = ++statusGeneration;
   try { const r = await fetch('/api/status', {cache: 'no-store'}); if (!r.ok || r.redirected) throw new Error(); const data=await r.json(); if(generation!==statusGeneration)return; historyUnavailable=false; render(data); byId('error').hidden = true; }
-  catch { if(generation!==statusGeneration)return;historyUnavailable=true;byId('history-notice').className='warning';byId('history-notice').textContent='历史用量无法刷新，下方保留旧样本。'; byId('doctor-notice').textContent='诊断结果无法刷新，下方可能是旧数据，不能作为当前健康结论。';byId('doctor-notice').className='warning';byId('tab-diagnostics').textContent='部署诊断 · 提示';byId('tab-diagnostics').className='tab-attention'; byId('resource-notice').textContent='资源数据无法刷新，下方可能是旧数据。';byId('resource-notice').className='warning'; byId('audit-notice').textContent = '审计容量与归档结果无法刷新，下表可能是旧数据。'; byId('audit-notice').className = 'warning'; byId('restore-close-notice').textContent = '结案结果无法刷新，下表可能是旧数据。'; byId('restore-close-notice').className = 'warning'; byId('restore-check-notice').textContent = '核对结果无法刷新，下表可能是旧数据。'; byId('restore-check-notice').className = 'warning'; byId('restore-notice').textContent = '恢复报告无法刷新，下表可能是旧结果，请复核采样时间。'; byId('restore-notice').className = 'warning'; byId('object-retention-notice').textContent = '对象保留数据无法刷新，下表保留旧结果，请复核采样时间。'; byId('object-retention-notice').className = 'warning'; byId('error').hidden = false; byId('error').textContent = '无法读取最新状态，请检查登录会话与采集定时器。下方可能是上次成功读取的数据。'; const notice = byId('capacity-notice'); notice.className = 'capacity-notice capacity-unknown'; notice.replaceChildren(el('strong', '容量状态待确认'), el('p', '无法取得最新状态，下方保留上次采样，不能作为实时容量依据。')); }
+  catch { if(generation!==statusGeneration)return;historyUnavailable=true;byId('publication-notice').className='warning';byId('publication-notice').textContent='发布耗时无法刷新，下方保留旧结果。';byId('history-notice').className='warning';byId('history-notice').textContent='历史用量无法刷新，下方保留旧样本。'; byId('doctor-notice').textContent='诊断结果无法刷新，下方可能是旧数据，不能作为当前健康结论。';byId('doctor-notice').className='warning';byId('tab-diagnostics').textContent='部署诊断 · 提示';byId('tab-diagnostics').className='tab-attention'; byId('resource-notice').textContent='资源数据无法刷新，下方可能是旧数据。';byId('resource-notice').className='warning'; byId('audit-notice').textContent = '审计容量与归档结果无法刷新，下表可能是旧数据。'; byId('audit-notice').className = 'warning'; byId('restore-close-notice').textContent = '结案结果无法刷新，下表可能是旧数据。'; byId('restore-close-notice').className = 'warning'; byId('restore-check-notice').textContent = '核对结果无法刷新，下表可能是旧数据。'; byId('restore-check-notice').className = 'warning'; byId('restore-notice').textContent = '恢复报告无法刷新，下表可能是旧结果，请复核采样时间。'; byId('restore-notice').className = 'warning'; byId('object-retention-notice').textContent = '对象保留数据无法刷新，下表保留旧结果，请复核采样时间。'; byId('object-retention-notice').className = 'warning'; byId('error').hidden = false; byId('error').textContent = '无法读取最新状态，请检查登录会话与采集定时器。下方可能是上次成功读取的数据。'; const notice = byId('capacity-notice'); notice.className = 'capacity-notice capacity-unknown'; notice.replaceChildren(el('strong', '容量状态待确认'), el('p', '无法取得最新状态，下方保留上次采样，不能作为实时容量依据。')); }
 }
 async function refreshData() {
   if(manualRefreshing)return;
