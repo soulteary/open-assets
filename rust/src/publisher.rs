@@ -1260,7 +1260,7 @@ pub fn render(c: &Value, directory: &Path) -> Result<()> {
         }
         lines.push("}".into());
     }
-    lines.push("server { listen 8087; server_tokens off; keepalive_timeout 0; lingering_close off; return 302 https://$host$request_uri; }".into());
+    lines.push("server { listen 8087; server_tokens off; keepalive_timeout 0; lingering_close off; error_page 418 =302 @oa_https_redirect; return 418; location @oa_https_redirect { keepalive_timeout 0; lingering_close off; return 302 https://$host$request_uri; } }".into());
     fs::create_dir_all(directory)?;
     let outputs = [
         ("images.conf", (lines.join("\n") + "\n").into_bytes()),
