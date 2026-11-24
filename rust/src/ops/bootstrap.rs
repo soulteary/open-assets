@@ -1,6 +1,6 @@
 use super::*;
 use flate2::read::GzDecoder;
-use rand::RngCore;
+use rand::Rng;
 use std::io::Cursor;
 const ROLES: [&str; 7] = ["oss", "img", "storage", "git", "auth", "traefik", "info"];
 fn dns_label(s: &str, max: usize) -> bool {
@@ -453,7 +453,7 @@ pub fn ensure_certs_maker(
         common::read_regular(path, 32 * 1024 * 1024)?
     } else {
         let url=format!("https://github.com/soulteary/certs-maker/releases/download/v{version}/certs-maker_{version}_linux_{architecture}.tar.gz");
-        let mut response = reqwest::blocking::Client::builder()
+        let mut response = crate::common::http_client_builder()?
             .timeout(Duration::from_secs(60))
             .build()?
             .get(url)
@@ -667,7 +667,7 @@ fn secret(private: &Path, name: &str, value: Option<&str>) -> Result<String> {
     if !exists(&path) {
         let value = value.map(str::to_owned).unwrap_or_else(|| {
             let mut bytes = [0; 24];
-            rand::thread_rng().fill_bytes(&mut bytes);
+            rand::rng().fill_bytes(&mut bytes);
             hex::encode(bytes)
         });
         private_write(&path, value.as_bytes(), None)?;

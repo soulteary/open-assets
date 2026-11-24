@@ -1,7 +1,7 @@
 //! Credential-separated, bounded S3 transport and immutable release maintenance.
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use chrono::{DateTime, Utc};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use reqwest::blocking::{Body, Client as HttpClient, Response};
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
@@ -651,7 +651,7 @@ impl Client {
             status: Option<String>,
         }
         let raw = bounded_response(r, 65536)?;
-        xml_root(&raw, b"VersioningConfiguration")?;
+        xml_root(&raw, "VersioningConfiguration")?;
         let v: Version = quick_xml::de::from_reader(raw.as_slice())?;
         Ok(v.status.filter(|s| !s.is_empty()))
     }
@@ -760,13 +760,13 @@ pub fn read_guard(path: &Path, exclusive: bool, required: bool) -> Result<Option
 }
 
 pub fn http_client(ca: Option<&str>, seconds: u64) -> Result<HttpClient> {
-    let mut b = HttpClient::builder()
+    let mut b = crate::common::http_client_builder()?
         .timeout(Duration::from_secs(seconds))
         .connect_timeout(Duration::from_secs(2))
         .redirect(reqwest::redirect::Policy::none());
     if let Some(path) = ca {
         let raw = fs::read(path)?;
-        b = b.add_root_certificate(reqwest::Certificate::from_pem(&raw)?);
+        b = b.tls_certs_merge([reqwest::Certificate::from_pem(&raw)?]);
     }
     Ok(b.build()?)
 }
@@ -856,7 +856,7 @@ struct ListItem {
     #[serde(rename = "LastModified")]
     modified: String,
 }
-fn xml_root(raw: &[u8], expected: &[u8]) -> Result<()> {
+fn xml_root(raw: &[u8], expected: &str) -> Result<()> {
     let mut reader = quick_xml::Reader::from_reader(raw);
     loop {
         match reader.read_event()? {
@@ -868,14 +868,14 @@ fn xml_root(raw: &[u8], expected: &[u8]) -> Result<()> {
                 return Ok(());
             }
             quick_xml::events::Event::Decl(_) | quick_xml::events::Event::Comment(_) => {}
-            quick_xml::events::Event::Text(e) if e.as_ref().iter().all(u8::is_ascii_whitespace) => {
-            }
+            quick_xml::events::Event::Text(e)
+                if e.as_bytes().iter().all(u8::is_ascii_whitespace) => {}
             _ => bail!("invalid S3 XML document"),
         }
     }
 }
 fn verify_delete_result(raw: &[u8], keys: &[String]) -> Result<()> {
-    xml_root(raw, b"DeleteResult")?;
+    xml_root(raw, "DeleteResult")?;
     #[derive(Deserialize)]
     struct Deleted {
         #[serde(rename = "Key")]
@@ -919,7 +919,7 @@ fn verify_delete_result(raw: &[u8], keys: &[String]) -> Result<()> {
 
 pub fn parse_listing(raw: &[u8], prefix: &str, limit: usize) -> Result<Value> {
     ensure!(raw.len() as u64 <= MAX_METADATA, "listing byte limit");
-    xml_root(raw, b"ListBucketResult")?;
+    xml_root(raw, "ListBucketResult")?;
     let p: ListResult = quick_xml::de::from_reader(raw)?;
     ensure!(p.contents.len() <= limit, "listing entry limit");
     let mut contents = Vec::new();

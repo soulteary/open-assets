@@ -174,7 +174,7 @@ fn scenario(
         .collect::<Vec<_>>()
         .join("/");
     let url = format!("https://{host}{encoded}");
-    let client = reqwest::blocking::Client::builder()
+    let client = crate::common::http_client_builder()?
         .no_proxy()
         .timeout(Duration::from_secs(3))
         .redirect(reqwest::redirect::Policy::none())

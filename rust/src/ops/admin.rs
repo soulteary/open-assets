@@ -1,5 +1,5 @@
 use super::*;
-use rand::RngCore;
+use rand::Rng;
 use std::os::unix::fs::MetadataExt;
 struct Manager {
     root: PathBuf,
@@ -23,7 +23,7 @@ impl Manager {
             env: info::environment(&root)?,
             root,
             private,
-            client: reqwest::blocking::Client::builder()
+            client: crate::common::http_client_builder()?
                 .no_proxy()
                 .timeout(Duration::from_secs(30))
                 .redirect(reqwest::redirect::Policy::none())
@@ -653,7 +653,7 @@ pub fn objects_setup(root: &Path, compaction: bool) -> Result<()> {
             "unrecognized cleaner directory"
         );
         let mut bytes = [0; 32];
-        rand::thread_rng().fill_bytes(&mut bytes);
+        rand::rng().fill_bytes(&mut bytes);
         let user = format!("oa-cleaner-{}", hex::encode(&bytes[..12]));
         private_write(&identity, &serde_json::to_vec(&json!({"user":user}))?, None)?;
         private_write(
@@ -661,7 +661,7 @@ pub fn objects_setup(root: &Path, compaction: bool) -> Result<()> {
             user.as_bytes(),
             Some(20010),
         )?;
-        rand::thread_rng().fill_bytes(&mut bytes);
+        rand::rng().fill_bytes(&mut bytes);
         private_write(
             &directory.join("cleaner_secret"),
             hex::encode(bytes).as_bytes(),

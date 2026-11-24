@@ -1123,7 +1123,7 @@ pub fn admit_event(
     delivery: &str,
     secret: &[u8],
 ) -> Result<String> {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     ensure!(
         !body.is_empty() && body.len() <= 1048576 && hex_string(signature, 64),
         "invalid signed event"
@@ -1735,7 +1735,7 @@ mod parallel_link_tests {
 #[cfg(test)]
 mod webhook_regression {
     use super::*;
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     fn signed(body: &[u8]) -> String {
         let mut m = Hmac::<Sha256>::new_from_slice(b"secret").unwrap();
         m.update(body);

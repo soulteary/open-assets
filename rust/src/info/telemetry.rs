@@ -218,13 +218,13 @@ fn probe(
     let started = Instant::now();
     let host = hostname.unwrap_or(address);
     let scheme = if hostname.is_some() { "https" } else { "http" };
-    let mut builder = reqwest::blocking::Client::builder()
+    let mut builder = crate::common::http_client_builder()?
         .no_proxy()
         .timeout(Duration::from_secs(2))
         .redirect(reqwest::redirect::Policy::none());
     if let Some(ca) = ca {
         for cert in reqwest::Certificate::from_pem_bundle(&fs::read(ca)?)? {
-            builder = builder.add_root_certificate(cert);
+            builder = builder.tls_certs_merge([cert]);
         }
     }
     if hostname.is_some() {

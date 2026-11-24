@@ -1,5 +1,5 @@
 FROM docker.io/library/rust:1.100.0-slim-bookworm@sha256:bb875b0f8ce726053e259034848c471840e96bfe591fd52556178ae9a05e6126 AS builder
-RUN apt-get update && apt-get install -y --no-install-recommends pkg-config ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config cmake ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 ARG CARGO_BUILD_JOBS=1
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}

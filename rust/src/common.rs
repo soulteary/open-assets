@@ -2,6 +2,17 @@ use anyhow::{ensure, Context, Result};
 use regex::Regex;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+/// Keep the bundled Mozilla trust store used by reqwest 0.12 rustls-tls.
+/// reqwest 0.13 otherwise defaults to platform roots. Callers may merge their
+/// configured private CA without broadening trust to other host-local roots.
+pub(crate) fn http_client_builder() -> Result<reqwest::blocking::ClientBuilder> {
+    let roots = webpki_root_certs::TLS_SERVER_ROOT_CERTS
+        .iter()
+        .map(|cert| reqwest::Certificate::from_der(cert.as_ref()))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(reqwest::blocking::Client::builder().tls_certs_only(roots))
+}
+
 #[cfg(test)]
 use std::fs;
 use std::fs::{File, OpenOptions};

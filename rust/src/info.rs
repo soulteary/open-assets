@@ -472,7 +472,7 @@ pub fn health(role: &str, c: &Value) -> Result<()> {
             "public-limiter" => 8088,
             _ => bail!("unknown probe role"),
         };
-        let client = reqwest::blocking::Client::builder()
+        let client = crate::common::http_client_builder()?
             .no_proxy()
             .timeout(Duration::from_secs(3))
             .build()?;
