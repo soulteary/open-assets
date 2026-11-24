@@ -517,6 +517,7 @@ pub fn validate_svg(path: &Path) -> Result<()> {
     reader.config_mut().check_end_names = true;
     let (mut count, mut depth) = (0u64, 0u64);
     let mut root = false;
+    let mut xml_version = quick_xml::XmlVersion::Implicit1_0;
     loop {
         let (ns, event) = reader.read_resolved_event()?;
         let empty = matches!(&event, Event::Empty(_));
@@ -530,14 +531,13 @@ pub fn validate_svg(path: &Path) -> Result<()> {
                     "SVG complexity limit exceeded"
                 );
                 ensure!(
-                    matches!(ns,ResolveResult::Bound(n) if n.as_ref()==b"http://www.w3.org/2000/svg"),
+                    matches!(ns,ResolveResult::Bound(n) if n.as_ref()=="http://www.w3.org/2000/svg"),
                     "non-SVG elements unsupported"
                 );
-                let local =
-                    String::from_utf8(e.local_name().as_ref().to_vec())?.to_ascii_lowercase();
+                let local = e.local_name().as_ref().to_ascii_lowercase();
                 if !root {
                     ensure!(
-                        e.local_name().as_ref() == b"svg",
+                        e.local_name().as_ref() == "svg",
                         "SVG root namespace required"
                     );
                     root = true;
@@ -557,9 +557,8 @@ pub fn validate_svg(path: &Path) -> Result<()> {
                 );
                 for a in e.attributes() {
                     let a = a?;
-                    let name = String::from_utf8(a.key.local_name().as_ref().to_vec())?
-                        .to_ascii_lowercase();
-                    let value = a.decode_and_unescape_value(reader.decoder())?;
+                    let name = a.key.local_name().as_ref().to_ascii_lowercase();
+                    let value = a.normalized_value(xml_version)?;
                     ensure!(!name.starts_with("on"), "SVG event handlers unsupported");
                     if name == "href" {
                         ensure!(
@@ -583,11 +582,14 @@ pub fn validate_svg(path: &Path) -> Result<()> {
                 depth -= 1
             }
             Event::PI(_) | Event::DocType(_) => bail!("SVG processing instructions unsupported"),
-            Event::Decl(_) => ensure!(!root, "misplaced XML declaration"),
+            Event::Decl(e) => {
+                ensure!(!root, "misplaced XML declaration");
+                xml_version = e.xml_version()?;
+            }
             Event::GeneralRef(e) => {
-                let n = e.decode()?;
+                let n = e.as_ref();
                 ensure!(
-                    ["amp", "lt", "gt", "quot", "apos"].contains(&n.as_ref())
+                    ["amp", "lt", "gt", "quot", "apos"].contains(&n)
                         || n.strip_prefix("#x")
                             .is_some_and(|s| u32::from_str_radix(s, 16).is_ok())
                         || n.strip_prefix('#')
@@ -596,7 +598,7 @@ pub fn validate_svg(path: &Path) -> Result<()> {
                 )
             }
             Event::Text(e) if depth == 0 => {
-                ensure!(e.decode()?.trim().is_empty(), "text outside SVG root")
+                ensure!(e.trim().is_empty(), "text outside SVG root")
             }
             Event::Eof => break,
             _ => {}

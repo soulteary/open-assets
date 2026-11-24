@@ -1,5 +1,5 @@
-FROM docker.io/library/rust:1.99.1-slim-bookworm@sha256:f2c004e3d2d8b547e8cf7ffbc29205385f4e71d23e53e4e383065db5e9f822cd AS builder
-RUN apt-get update && apt-get install -y --no-install-recommends pkg-config ca-certificates && rm -rf /var/lib/apt/lists/*
+FROM docker.io/library/rust:1.100.0-slim-bookworm@sha256:bb875b0f8ce726053e259034848c471840e96bfe591fd52556178ae9a05e6126 AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config cmake ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 ARG CARGO_BUILD_JOBS=1
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
@@ -16,7 +16,7 @@ RUN cargo clean --release --package open-assets \
     && cargo build --locked --release --bin open-assets \
     && /src/target/release/open-assets --version | grep '^open-assets [0-9]'
 
-FROM docker.io/library/debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
+FROM docker.io/library/debian:bookworm-slim@sha256:e67eeead736ff7bbe258ef088bff683635c561b1fcfefad0806c1df4ab49ce0e
 RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client ca-certificates openssl && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 20010 --create-home --shell /bin/sh publisher
 COPY --from=builder /src/target/release/open-assets /usr/local/bin/open-assets
