@@ -72,3 +72,7 @@ Git 管理的版本目录应交由发布程序维护，避免在网页后台直�
 恢复操作见[恢复内容](docs/object-restore.md)，权限与已知限制见[安全说明](SECURITY.md)和[风险控制](docs/risks.md)。
 
 项目采用 [Apache-2.0](LICENSE)。参与开发见[贡献指南](CONTRIBUTING.md)和[开发测试](docs/development.md)，已验证范围见[验证记录](docs/acceptance.md)。
+
+## v0.10.1 组件升级
+
+本次固定已通过官方产物配对验收的 OtterIO/OC、新版 Stargate 及证书工具；现有部署请比较私有配置后逐项更新，不要重新初始化。详见[发行与回退说明](docs/releases/v0.10.1.md)。
